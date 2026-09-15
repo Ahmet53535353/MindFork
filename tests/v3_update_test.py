@@ -53,6 +53,27 @@ class OfflineUpdateTest(unittest.TestCase):
     def version(self):
         return (self.vault / '.beyin-version').read_text(encoding='utf-8').strip()
 
+    def test_retry_interrupted_rollback_finishes_original_rollback(self):
+        core = self.vault / '.claude/scripts/beyin_v3.py'
+        original = core.read_bytes()
+        self.module.update(self.vault, self.state, self.package)
+        user_note = self.vault / 'after-update.md'
+        user_note.write_text('Synthetic note survives rollback retry.')
+        def crash(phase, index=None):
+            if phase == 'after_replace' and index == 0:
+                raise OSError('Synthetic rollback interruption')
+        with patch.object(self.module, 'transaction_hook', crash):
+            with self.assertRaises(OSError):
+                self.module.rollback(self.vault, self.state)
+        self.assertEqual(json.loads((self.state / 'update-journal.json').read_text())['direction'], 'rollback')
+        result = self.module.rollback(self.vault, self.state)
+        self.assertEqual(result['status'], 'rolled_back')
+        self.assertEqual(self.version(), '3.0.0')
+        self.assertEqual(core.read_bytes(), original)
+        self.assertEqual(user_note.read_text(), 'Synthetic note survives rollback retry.')
+        self.assertFalse((self.state / 'update-journal.json').exists())
+        self.assertFalse((self.state / 'last-update.json').exists())
+
     def test_check_is_read_only_with_available_version(self):
         before_vault, before_state = snapshot(self.vault), snapshot(self.state)
         report = self.module.update(self.vault, self.state, self.package, check=True)

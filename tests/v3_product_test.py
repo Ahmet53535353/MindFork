@@ -48,6 +48,65 @@ class ProductInstallationTest(unittest.TestCase):
         self.assertTrue(all('\\' not in name for name in plan['planned']))
         self.assertEqual(set(plan['planned']), set(plan['manifest']['files']))
 
+    def test_installer_retry_recovers_before_root_entrypoint_exists(self):
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('product_interrupted_install', ROOT / 'scripts/install_v3.py')
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        original_exec = SourceFileLoader.exec_module
+        def crash(phase, index=None):
+            if phase == 'after_replace' and index == 0:
+                raise OSError('Synthetic first install interruption')
+        def load_with_fault(loader, module):
+            original_exec(loader, module)
+            if module.__name__ == 'beyin_install_transaction':
+                module.transaction_hook = crash
+        with patch.object(SourceFileLoader, 'exec_module', load_with_fault):
+            with self.assertRaises(OSError):
+                installer.install(self.vault, self.state)
+        self.assertFalse((self.vault / 'beyin.py').exists())
+        self.assertTrue((self.state / 'update-journal.json').exists())
+        note = self.vault / 'user-after-interruption.md'
+        note.write_text('Synthetic note created while installation was interrupted.')
+        installer.install(self.vault, self.state)
+        self.assertEqual((self.vault / '.beyin-version').read_text().strip(), '3.0.0')
+        self.assertTrue((self.vault / 'beyin.py').is_file())
+        self.assertFalse((self.state / 'update-journal.json').exists())
+        self.assertEqual(note.read_text(), 'Synthetic note created while installation was interrupted.')
+
+    def test_extracted_release_installer_uses_manifest_version(self):
+        import zipfile
+        from v3_package_helpers import build_package
+        package = build_package(self.base / 'release.zip', '3.0.1', self.env)
+        extracted = self.base / 'extracted'
+        with zipfile.ZipFile(package) as archive:
+            archive.extractall(extracted)
+        result = run_python(extracted / 'scripts/install_v3.py',
+                            ['--vault', self.vault, '--state', self.state], extracted, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        self.assertEqual((self.vault / '.beyin-version').read_text().strip(), '3.0.1')
+
+    def test_extracted_release_installer_retires_stock_legacy_workers(self):
+        import zipfile
+        from v3_package_helpers import build_package
+        old_scripts = self.vault / '.claude/scripts'
+        old_scripts.mkdir(parents=True)
+        for name in ('flush.py', 'compile.py'):
+            (old_scripts / name).write_bytes((ROOT / 'template/.claude/scripts' / name).read_bytes())
+        (self.vault / '.beyin-version').write_text('2.3.0')
+        package = build_package(self.base / 'release.zip', '3.0.0', self.env)
+        extracted = self.base / 'extracted'
+        with zipfile.ZipFile(package) as archive:
+            archive.extractall(extracted)
+        result = run_python(extracted / 'scripts/install_v3.py',
+                            ['--vault', self.vault, '--state', self.state], extracted, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        for name in ('flush.py', 'compile.py'):
+            self.assertIn(b'BEYIN_V3_LEGACY_RETIRED', (old_scripts / name).read_bytes())
+        self.assertEqual((self.vault / '.beyin-version').read_text().strip(), '3.0.0')
+
     def test_clean_install_entrypoint_version_skills_and_doctor(self):
         self.installed()
         self.assertTrue((self.vault / 'beyin.py').is_file())

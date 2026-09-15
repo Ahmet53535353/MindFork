@@ -1,5 +1,12 @@
 # V3 source, lifecycle and platform contracts
 
+## Release candidate repair verification, 16 September 2026
+
+After the extracted-ZIP installation and interrupted-rollback repairs, independent macOS Python 3.14.2 and network-disabled Linux Python 3.13.15 runs each passed **47/47 legacy + 111/111 V3 tests**. Development 10/10 and holdout 6/6 remain unchanged. The 12 product and 17 updater cases include tests-first failures for manifest-derived package version, stock V2 writer retirement from an extracted release, retry before the root entrypoint exists, and retry of an already-started rollback. All now pass. [Frozen source hashes and run evidence](evidence/product-release-fixes-final.json).
+
+The prior six-job native CI success at `ea215a8` covered 107 tests. It does not cover these latest installer/rollback changes; a new native run is required. Earlier sections below are historical source snapshots.
+
+
 ## Productization offline acceptance, 16 September 2026
 
 The current productization source passed **47/47 legacy regressions + 106/106 V3 tests** independently on **macOS Python 3.14.2** and **Linux container Python 3.13.15**. Linux ran with network disabled, a read-only repository/root filesystem and temporary writable state. The 24 product/update acceptance cases cover package validation and preflight, initial V2 rollback, interrupted-update recovery, user-edit conflicts and bundled skill copy rollback. The full suite also covers structured task creation and quarantine of ambiguous double frontmatter.

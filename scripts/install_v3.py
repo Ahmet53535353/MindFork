@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -266,10 +268,55 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             'skills':{'synced':['beyin','beyin-doktor','beyin-guncelle'],'conflicts':[], 'mode':'managed'}}
 
 
-def install(vault, state, uninstall=False, plan_only=False, version="3.0.0", legacy_hashes=None):
+def package_defaults():
+    """Validate an extracted release before trusting its version or legacy list."""
+    manifest_path = ROOT / 'manifest.json'
+    if not manifest_path.exists(): return None
+    raw = manifest_path.read_bytes()
+    manifest = json.loads(raw)
+    files = manifest.get('files') if isinstance(manifest, dict) else None
+    if not isinstance(files, dict): raise ValueError('Invalid extracted package manifest')
+    updater_name = 'template/.claude/scripts/beyin_v3_update.py'
+    updater_path = ROOT / updater_name
+    if digest(updater_path.read_bytes()) != files.get(updater_name):
+        raise ValueError('Extracted updater checksum mismatch')
+    spec = importlib.util.spec_from_file_location('beyin_extract_validator', updater_path)
+    updater = importlib.util.module_from_spec(spec); spec.loader.exec_module(updater)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('manifest.json', raw)
+        for name in files:
+            if not updater.allowed(name): raise ValueError('Extracted package path outside allowlist')
+            path = ROOT / name
+            if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+                raise ValueError('Extracted package path escapes root')
+            output.writestr(name, path.read_bytes())
+    for path in (ROOT / 'template/.claude/scripts').glob('beyin_v3*.py'):
+        if path.relative_to(ROOT).as_posix() not in files:
+            raise ValueError('Unlisted extracted runtime module')
+    archive.seek(0)
+    return updater.validate_package(archive)[0]
+
+
+def install(vault, state, uninstall=False, plan_only=False, version=None, legacy_hashes=None):
+    package = package_defaults()
+    if package is not None:
+        if version is not None and version != package['version']:
+            raise ValueError('Requested version differs from extracted release')
+        version = package['version']
+        if legacy_hashes is not None and legacy_hashes != package.get('legacy_hashes', {}):
+            raise ValueError('Legacy hashes differ from extracted release')
+        legacy_hashes = package.get('legacy_hashes', {})
+    else:
+        version = version or '3.0.0'
     if plan_only or uninstall:
         return _install(vault, state, uninstall, plan_only, version, legacy_hashes)
     directory = ROOT / 'template/.claude/scripts'
+    if (Path(state).resolve() / 'update-journal.json').exists():
+        spec = importlib.util.spec_from_file_location('beyin_install_recovery', directory / 'beyin_v3_update.py')
+        updater = importlib.util.module_from_spec(spec); spec.loader.exec_module(updater)
+        result = updater.recover(vault, state)
+        return dict(result, install_resumed=True)
     sys.path.insert(0, str(directory))
     try:
         spec = importlib.util.spec_from_file_location('beyin_install_migration', directory / 'beyin_v3_migrate.py')

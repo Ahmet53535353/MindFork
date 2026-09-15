@@ -357,6 +357,11 @@ def rollback(vault, state):
         if not backup.exists(): raise ValueError('no update backup available')
         original = json.loads(backup.read_text(encoding='utf-8'))
         if original.get('vault') != str(vault): raise ValueError('backup belongs to another vault')
+        # A pending rollback already contains the intended restore direction.
+        # Reversing it again would restore the upgrade instead of finishing rollback.
+        if pending.exists() and original.get('direction') == 'rollback':
+            _apply(vault, state, original)
+            return {'status': 'rolled_back' if (vault/'.beyin-version').exists() else 'uninstalled', 'version': current_version(vault) if (vault/'.beyin-version').exists() else None}
         operations = []
         for item in original['operations']:
             path = _destination(vault, state, item)
