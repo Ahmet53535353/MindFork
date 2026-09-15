@@ -1,0 +1,104 @@
+{
+  "date": "2026-09-16",
+  "operating_system": "macOS",
+  "fixture": "Synthetic Atlas and Aster projects only",
+  "raw_logs": "Private local captures, not committed",
+  "results": [
+    {
+      "harness": "claude",
+      "model": "sonnet",
+      "entry": "real CLI",
+      "process": {
+        "exit_code": 0
+      },
+      "task": {
+        "kind": "task",
+        "revision": 1,
+        "status": "active",
+        "owner": "Synthetic Mira"
+      },
+      "task_fields_correct": true,
+      "source_linked_csv_note": true,
+      "receipt_count": 1,
+      "three_starter_skills": [
+        "beyin",
+        "beyin-doktor",
+        "beyin-guncelle"
+      ],
+      "private_canary_in_client_output": false,
+      "original_sources_unchanged": true,
+      "installed_runtime_sha256": {
+        "beyin_v3_cli.py": "5d080e3c7340a0d163375d81c0aa0967b1318c73d4cf63a31aefb17f8342641f",
+        "beyin_v3_sync.py": "384edbebddd0dcc53a7f615a8a98313f567b4354049f42cf66b263948723567f",
+        "beyin_v3.py": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+        "beyin_v3_projections.py": "773abc82ad7a4346dc6684e412325470646b9e4302f318b67b201976e14fd129",
+        "beyin_v3_hook.py": "6e9a28e9be8a4915ce07f906db8a44c4b8fcef5864f5d2241ec98d02d2714213",
+        "beyin_v3_launchers.py": "a1b16846ab64f9b0b656c3b4e546be85bec23aa65c759a42bacc21d2d05b88ca",
+        "beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e",
+        "beyin_v3_update.py": "96732e04d23540cf9609831ec1eac229057c6c323e6710c4d04c1a3e42f7ffdf",
+        "beyin_v3_migrate.py": "8544e0b9b4d191a6827f5f975caae1c6a451cbe0b4ef8f4e3f2b842b3ae46469"
+      }
+    },
+    {
+      "harness": "codex",
+      "model": "gpt-5.6-sol",
+      "entry": "real CLI",
+      "process": {
+        "exit_code": 0
+      },
+      "task": {
+        "kind": "task",
+        "revision": 1,
+        "status": "active",
+        "owner": "Synthetic Mira"
+      },
+      "task_fields_correct": true,
+      "source_linked_csv_note": true,
+      "receipt_count": 1,
+      "three_starter_skills": [
+        "beyin",
+        "beyin-doktor",
+        "beyin-guncelle"
+      ],
+      "private_canary_in_client_output": false,
+      "original_sources_unchanged": true,
+      "installed_runtime_sha256": {
+        "beyin_v3_cli.py": "5d080e3c7340a0d163375d81c0aa0967b1318c73d4cf63a31aefb17f8342641f",
+        "beyin_v3_sync.py": "384edbebddd0dcc53a7f615a8a98313f567b4354049f42cf66b263948723567f",
+        "beyin_v3.py": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+        "beyin_v3_projections.py": "773abc82ad7a4346dc6684e412325470646b9e4302f318b67b201976e14fd129",
+        "beyin_v3_hook.py": "6e9a28e9be8a4915ce07f906db8a44c4b8fcef5864f5d2241ec98d02d2714213",
+        "beyin_v3_launchers.py": "a1b16846ab64f9b0b656c3b4e546be85bec23aa65c759a42bacc21d2d05b88ca",
+        "beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e",
+        "beyin_v3_update.py": "96732e04d23540cf9609831ec1eac229057c6c323e6710c4d04c1a3e42f7ffdf",
+        "beyin_v3_migrate.py": "8544e0b9b4d191a6827f5f975caae1c6a451cbe0b4ef8f4e3f2b842b3ae46469"
+      }
+    },
+    {
+      "harness": "antigravity",
+      "model": "claude-sonnet-4-6",
+      "entry": "interactive CLI, accept-edits with normal per-command permission review",
+      "task_fields_correct": true,
+      "source_linked_csv_note": true,
+      "receipt_count": 1,
+      "scope": "Creation and indexed readback completed interactively; receipt verified in a follow-up session after the first interactive time bound. Initial headless run returned SUCCESS with denied_actions and no writes; not counted as a pass. Narrative included extra inferred scope; the gate checks explicit requested fields, not general semantic accuracy.",
+      "installed_runtime_sha256": {
+        "beyin_v3_cli.py": "718eeacc0fbb1ab6780ddfe2ff1ca3b7a44156c8d9ea7b695ceeea15f7ade9c8",
+        "beyin_v3_sync.py": "67ee3a8c549ed293ca5db99b26b1122131f3e26b6faca88de7ef0fab14a7b117",
+        "beyin_v3.py": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+        "beyin_v3_projections.py": "773abc82ad7a4346dc6684e412325470646b9e4302f318b67b201976e14fd129",
+        "beyin_v3_hook.py": "6e9a28e9be8a4915ce07f906db8a44c4b8fcef5864f5d2241ec98d02d2714213",
+        "beyin_v3_launchers.py": "a1b16846ab64f9b0b656c3b4e546be85bec23aa65c759a42bacc21d2d05b88ca",
+        "beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e",
+        "beyin_v3_update.py": "33ed0446c213136497aeac6e44fbb9be21c63151d48b2e5de6405dedb5448ad0",
+        "beyin_v3_migrate.py": "a533291f19854781945c137a254e0f29bd734d9d50bed93c3aca3f5900acdbf5"
+      }
+    }
+  ],
+  "failure_driven_changes": [
+    "Claude initially put task frontmatter inside note-create text. Added task-create validation, six regression cases and exact starter skill schema; fresh Claude and Codex trials passed.",
+    "Headless Antigravity denied writes despite process success. Retained failure and completed through interactive permission prompts.",
+    "Codex Desktop app-host dispatch did not deliver injected hook context even after project trust review. Direct context fallback now refreshes Markdown without a hook and refuses conflict/degraded results. Desktop workflow evidence recorded separately."
+  ],
+  "scope": "Installed module hashes identify actual live test code; later installer/rollback repairs and context fallback have separate offline/native CI evidence. No claim that later unexercised bytes ran in these older client trials."
+}

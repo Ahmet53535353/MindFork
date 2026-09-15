@@ -1,5 +1,14 @@
 # V3 source, lifecycle and platform contracts
 
+## Final V3.0.0 native verification
+
+**Windows, macOS and Ubuntu × Python 3.11/3.13: all six jobs passed, each with 114 V3 tests, development 10/10 and holdout 6/6.** [Final run](https://github.com/avenoxai/avenoxbeyin/actions/runs/35029453887), source `5b99e4bb96729c663eae76f1383b9675c6e7419c`. [Machine evidence](evidence/product-native-ci.json).
+
+This final run includes direct ZIP/V2 installation, interrupted install and rollback retries, Windows manifest and launcher paths, and direct context refresh without hooks. Earlier local Mac/Linux runs also passed the 47 legacy regressions. The exact release ZIP was installed, its extracted directory removed, then its CLI used to verify source freshness and same-version update checks. [Asset evidence](evidence/release-asset.json). Live model and Desktop app-host workflows are [separate](LIVE-CLIENTS.md).
+
+Everything below is a historical source snapshot; its pending statements are superseded by the final native result above.
+
+
 ## Release candidate repair verification, 16 September 2026
 
 After the extracted-ZIP installation and interrupted-rollback repairs, independent macOS Python 3.14.2 and network-disabled Linux Python 3.13.15 runs each passed **47/47 legacy + 111/111 V3 tests**. Development 10/10 and holdout 6/6 remain unchanged. The 12 product and 17 updater cases include tests-first failures for manifest-derived package version, stock V2 writer retirement from an extracted release, retry before the root entrypoint exists, and retry of an already-started rollback. All now pass. [Frozen source hashes and run evidence](evidence/product-release-fixes-final.json).

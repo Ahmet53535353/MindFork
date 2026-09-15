@@ -13,7 +13,7 @@
 - Yeni kaynak bağlantılı sonuçlar için deterministic daily/knowledge bağlantı görünümleri; otomatik model derleyicisinin yerine aktif ajan skill akışı.
 - Yerel işletim sistemine uygun tıklanabilir güncelleme başlatıcıları aynı updater'a bağlı.
 
-Son platform CI, paket yayını ve stable release varlığı bu uygulama listesiyle kanıtlanmış sayılmaz. Yayın, final CI ve release işlemi tamamlandıktan sonra doğrulanır. Bu belge güncellenirken `v3.0.0` yayını henüz doğrulanmamıştı. Kullanıcı akışı [README](../../README.md), komut sözleşmesi [UPDATE.md](UPDATE.md), güncel kanıt [PLATFORM-TESTS.md](PLATFORM-TESTS.md).
+Son platform turunda Windows/macOS/Ubuntu × Python 3.11/3.13: 6/6 iş ve her birinde 114 test geçti. Sürüm paketi V3.0.0 olarak dağıtılır. Kullanıcı akışı [README](../../README.md), komut sözleşmesi [UPDATE.md](UPDATE.md), güncel kanıt [PLATFORM-TESTS.md](PLATFORM-TESTS.md) ve [istemci kapsamı](LIVE-CLIENTS.md).
 
 ## İlk tasarım kaydı
 

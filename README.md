@@ -4,11 +4,11 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **Yayın durumu:** V3 kullanıcı paketi ve updater uygulandı. Bu belge hazırlanırken `v3.0.0` stable yayını henüz doğrulanmış değildi. Aşağıdaki sürüm sayfasında ZIP dosyası görünmeden yayını hazır kabul etme. Güncel doğrulama [platform raporunda](docs/v3/PLATFORM-TESTS.md).
+> **V3.0.0:** Üç işletim sistemi ve iki Python sürümünde 114 test geçti. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
 
 ## İlk kurulum
 
-1. [V3.0.0 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) aç. Yayınlandığında **[beyin-v3-3.0.0.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip)** dosyasını indir ve aç. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
+1. [V3.0.0 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) aç. **[beyin-v3-3.0.0.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip)** dosyasını indir ve aç. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
 2. Obsidian'da bir vault oluştur veya mevcut vault klasörünü seç. Notlarını başka yere taşıman gerekmez.
 3. Açtığın paket klasöründe terminal aç ve vault yolunu kendi klasörünle değiştir:
 

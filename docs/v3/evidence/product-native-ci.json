@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-16",
+  "tested_commit": "5b99e4bb96729c663eae76f1383b9675c6e7419c",
+  "run_url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35029453887",
+  "conclusion": "success",
+  "v3_tests_per_job": 114,
+  "semantic_development": "10/10",
+  "semantic_holdout": "6/6",
+  "jobs": [
+    {
+      "name": "windows-latest / Python 3.11",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "macos-latest / Python 3.11",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "ubuntu-latest / Python 3.13",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "ubuntu-latest / Python 3.11",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "windows-latest / Python 3.13",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "macos-latest / Python 3.13",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "scope": "Native Windows, macOS and Ubuntu Python3.11/3.13. Offline contracts, not paid model sessions. Earlier failed runs retained below.",
+  "prior_runs": [
+    {
+      "run": 35028468425,
+      "result": "Windows failed; manifest backslash paths; regression added"
+    },
+    {
+      "run": 35028783482,
+      "result": "all6 passed107tests"
+    },
+    {
+      "run": 35029260748,
+      "result": "all6 passed111tests"
+    }
+  ]
+}

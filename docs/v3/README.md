@@ -8,7 +8,7 @@ V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity ise ay
 
 Kurucu ortak motoru, `beyin`, `beyin-doktor`, `beyin-guncelle` skill'lerini, kurulu `beyin.py` girişini ve işletim sistemine uygun güncelleme kısayolunu dağıtır. Paket ZIP olarak açılıp kullanılabilir; Git gerekmez. Kurulu vault kaynak repo klasöründen bağımsız çalışır.
 
-[Hedef v3.0.0 release](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) ve `beyin-v3-3.0.0.zip` paketi stable dağıtım noktasıdır. **Bu belge güncellenirken yayın henüz doğrulanmadı.** Kodun hazır olması paketin yayımlandığı anlamına gelmez.
+[V3.0.0 release](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) ve `beyin-v3-3.0.0.zip` paketi stable dağıtım noktasıdır. Son platform turunda altı işin her birinde 114 test geçti.
 
 ## Davranış
 

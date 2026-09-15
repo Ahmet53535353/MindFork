@@ -4,7 +4,7 @@ Vault içindeki `beyin.py` tek giriş noktasıdır. Komutları vault klasöründ
 
 ## Git kullanmadan ilk kurulum
 
-[V3.0.0 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) `beyin-v3-3.0.0.zip` indirip aç. **Bu rehber yazılırken stable yayın henüz doğrulanmadı; dosyanın release sayfasında bulunduğunu kontrol et.** GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
+[V3.0.0 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) `beyin-v3-3.0.0.zip` indirip aç. Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
 
 Bir vault klasörü seç veya oluştur. Açılan paketin içinde:
 
