@@ -6,5 +6,19 @@
   "three_starter_skills": true,
   "hookless_edit_freshness": true,
   "same_version_package_check": "noop",
-  "state_outside_vault": true
+  "state_outside_vault": true,
+  "official_latest_network_check": {
+    "status": "noop",
+    "current_version": "3.0.0",
+    "version": "3.0.0"
+  },
+  "official_latest_network_update": {
+    "status": "noop",
+    "version": "3.0.0"
+  },
+  "release_url": "https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0",
+  "github_asset_digest": "sha256:53dd67190411bda77daead95c3730f82bff48135e87e5a97faf95ab05d257e56",
+  "github_asset_size": 44597,
+  "release_commit": "a6e693e6fe444d5f1e3c49c0e53c59e44a83df7e",
+  "stable_published": true
 }
