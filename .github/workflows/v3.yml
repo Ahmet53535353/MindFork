@@ -9,7 +9,7 @@ on:
       - 'tests/fixtures/v3/**'
       - '.github/workflows/v3.yml'
   push:
-    branches: [main]
+    branches: [main, 'codex/v3-foundation']
     paths:
       - 'template/.claude/scripts/beyin_v3*.py'
       - 'scripts/*v3*.py'
