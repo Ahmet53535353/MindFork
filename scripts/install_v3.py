@@ -119,7 +119,7 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         path = (vault / name).resolve()
         if path != vault and vault not in path.parents:
             raise ValueError("Managed destination escapes vault")
-        planned[str(path.relative_to(vault))] = content
+        planned[path.relative_to(vault).as_posix()] = content
 
     for name, expected in legacy_hashes.items():
         if name not in tuple(LEGACY) + ('.claude/scripts/flush.py', '.claude/scripts/compile.py'):

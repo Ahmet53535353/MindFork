@@ -1,5 +1,16 @@
 # V3 source, lifecycle and platform contracts
 
+## Productization offline acceptance, 16 September 2026
+
+The current productization source passed **47/47 legacy regressions + 106/106 V3 tests** independently on **macOS Python 3.14.2** and **Linux container Python 3.13.15**. Linux ran with network disabled, a read-only repository/root filesystem and temporary writable state. The 24 product/update acceptance cases cover package validation and preflight, initial V2 rollback, interrupted-update recovery, user-edit conflicts and bundled skill copy rollback. The full suite also covers structured task creation and quarantine of ambiguous double frontmatter.
+
+The frozen semantic evaluation passed development **10/10** and holdout **6/6** on both platforms. Recall, abstention and fact retention are 1.0; forbidden results and privacy leaks are zero. Diagnostic precision is 0.95 development and 1.0 holdout. No holdout expectations changed. [Exact source/test hashes and sanitized run evidence](evidence/product-offline-final.json) and [tests-first product contract](evidence/product-acceptance-contract.json) are recorded separately from earlier measurements.
+
+The legacy README regression initially failed after the intentional V3 root README rewrite. Its input now points to the archived `docs/V2-README.md`; all five original assertions remain intact and passed on both platforms. Only that affected subset was rerun after the test-path correction.
+
+**Native Windows productization CI has not been run by this lane.** The six-job native CI result below belongs to the earlier 62-test source snapshot and must not be read as verification of the new updater/migration package. Actual client sessions and public release status are separate from these synthetic offline checks.
+
+
 ## Latest native CI result, 16 September 2026
 
 **All six hosted jobs passed** on Windows, macOS and Ubuntu, each with Python 3.11 and 3.13. Every job ran **62 V3 tests** and the frozen development/holdout evaluation. This is real Windows runner execution, including the installed encoded PowerShell hook command under a minimal PATH.

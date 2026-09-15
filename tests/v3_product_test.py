@@ -29,6 +29,25 @@ class ProductInstallationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
         return json.loads(result.stdout)
 
+    def test_plan_manifest_uses_portable_paths_under_windows_path_semantics(self):
+        import importlib.util
+        from pathlib import PureWindowsPath
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('product_windows_plan', ROOT / 'scripts/install_v3.py')
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        original_relative = Path.relative_to
+        def windows_relative(path, *args, **kwargs):
+            return PureWindowsPath(*original_relative(path, *args, **kwargs).parts)
+        # Keep actual filesystem operations native; emulate Windows serialization
+        # only at relative-path boundaries, which feed the portable manifest.
+        with patch.object(Path, 'relative_to', windows_relative):
+            plan = installer.install(self.vault, self.state, plan_only=True)
+        self.assertIn('.claude/settings.local.json', plan['planned'])
+        self.assertIn('.codex/hooks.json', plan['manifest']['files'])
+        self.assertTrue(all('\\' not in name for name in plan['planned']))
+        self.assertEqual(set(plan['planned']), set(plan['manifest']['files']))
+
     def test_clean_install_entrypoint_version_skills_and_doctor(self):
         self.installed()
         self.assertTrue((self.vault / 'beyin.py').is_file())
