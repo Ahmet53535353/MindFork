@@ -106,7 +106,7 @@ def main(argv=None):
             raise ValueError("--state must be outside the vault")
         engine = load_engine()
         store = engine.MemoryStore(state, vault)
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create") else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context") else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -150,8 +150,11 @@ def main(argv=None):
                 params.update(supplied)
             if not isinstance(params["query"], str) or not params["query"].strip():
                 raise ValueError("context requires a nonempty query")
+            refreshed = sync.sync()
+            if refreshed.get('status') != 'succeeded':
+                raise RuntimeError('Context blocked: source sync '+str(refreshed.get('status', 'failed'))+'. Run sync with the same vault/state to inspect and reconcile source issues, then retry context.')
             # Harness selection deliberately does not change retrieval semantics.
-            result = store.context_for(args.harness, **params)
+            result = sync.store.context_for(args.harness, **params)
         elif args.command == "receipt":
             payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],
