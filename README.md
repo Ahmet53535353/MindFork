@@ -1,268 +1,92 @@
-# 🧠 avenoxbeyin v2.3: hatırlamayı unutmayan ikinci beyin
+# 🧠 avenoxbeyin V3
 
-> **V3 kurulumu üzerinde çalışılıyor.** Mevcut Codex, Claude Code veya Antigravity ajanına
-> “Bu repodaki [SETUP-V3.md](SETUP-V3.md) dosyasını takip ederek vault'umu kur” diyebilirsin.
-> Python dışında ek paket, servis veya Mem0 hesabı gerekmez. Platform doğrulama durumu
-> [burada](docs/v3/PLATFORM-TESTS.md) açıkça listelenir.
+Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci beyin. Notların Markdown dosyalarında kalır; bir istemcide kaydettiğin kaynak ve iş sonucu diğerinde de bulunabilir. Obsidian ile açabilir, normal bir metin editörüyle düzenleyebilirsin.
 
+Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-[Obsidian](https://obsidian.md) + Claude Code, Codex veya Google Antigravity üstünde çalışan,
-açık kaynak bir **ikinci beyin**. Yerel bir Markdown vault, kalıcı hafıza, sıfır bağımlılık,
-sıfır ekstra ücret. Dosya yönetmezsin, konuşursun.
+> **Yayın durumu:** V3 kullanıcı paketi ve updater uygulandı. Bu belge hazırlanırken `v3.0.0` stable yayını henüz doğrulanmış değildi. Aşağıdaki sürüm sayfasında ZIP dosyası görünmeden yayını hazır kabul etme. Güncel doğrulama [platform raporunda](docs/v3/PLATFORM-TESTS.md).
 
-**v1'in tezi devamlılıktı: oturum açılınca geçen oturum bağlama giriyordu.** İşe yarıyordu ama tek
-bir kırılgan varsayıma dayanıyordu: modelin oturum biterken hafıza dosyalarını güncellemeyi
-hatırlaması. Hatırlamadığı her seferde o gün kayboluyordu. **v2'nin tezi şu: hafıza rica değil,
-mekanizmadır.** Artık oturum kapanışını bir kanca yakalıyor, konuşmayı arka planda özetleyip
-`daily/` altına günlük log olarak yazıyor, akşamları günde bir kez bir derleyici o logları
-`knowledge/` altında birbirine bağlanan makalelere dönüştürüyor. Ertesi sabah bu bilgi tabanının
-indeksi kendiliğinden bağlama giriyor. Kimsenin bir şey yazmayı hatırlaması gerekmiyor.
+## İlk kurulum
 
-Video izlemene gerek yok, kurulum videosu da yok. Aşağıdaki tek satırı yapıştır, kurulumu Claude
-Code'un kendisi yapar.
+1. [V3.0.0 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) aç. Yayınlandığında **[beyin-v3-3.0.0.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip)** dosyasını indir ve aç. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
+2. Obsidian'da bir vault oluştur veya mevcut vault klasörünü seç. Notlarını başka yere taşıman gerekmez.
+3. Açtığın paket klasöründe terminal aç ve vault yolunu kendi klasörünle değiştir:
 
----
+macOS / Linux:
 
-## Hızlı başlangıç
-
-Terminalde `claude` çalıştır ve şunu yapıştır:
-
-```
-Read https://avenox.lol/beyin.md and follow it exactly to build my second brain.
+```sh
+python3 scripts/install_v3.py --vault "/tam/yol/Beynim"
 ```
 
-Bu tek satırlık giriş önce platformu ayırır: macOS/Linux mevcut `SETUP.md` yolunda kalır, yerel
-Windows `SETUP-WINDOWS.md` + PowerShell kurucusuna geçer, WSL ise tamamen aynı Linux dağıtımı
-içinde kalan POSIX yolunu kullanır. Böylece Windows'ta Bash/macOS komutları çalıştırılmaz.
-
-Ya da macOS, Linux veya WSL'de repoyu doğrudan klonla, üç komut:
-
-```bash
-git clone https://github.com/avenoxai/avenoxbeyin.git
-cd avenoxbeyin
-claude "Read SETUP.md and follow it exactly to set up my second brain from this template."
-```
-
-Claude birkaç soru sorar (adın, ne iş yaptığın, AI ortağının adı), vault'u kurar, kancaları bağlar,
-masaüstüne 🧠 ikonlu bir kısayol koyar.
-
-Codex kullanıyorsan bu POSIX yolda aynı repoda `codex` açıp `SETUP.md` dosyasını
-uygulatabilirsin. Kurulum
-`AGENTS.md`, `.agents/skills` ve mutlak yollu `.codex/hooks.json` üretir. İlk açılışta Codex'in
-`/hooks` ekranından proje kancalarını onaylaman gerekir; güven hash'leri kullanıcı adına
-değiştirilmez. Claude Code ve Codex aynı router, skill ve kanca kodunu okur; iki ayrı kopya yoktur.
-
-Google Antigravity kullanıyorsan:
-
-```bash
-git clone https://github.com/avenoxai/avenoxbeyin.git
-cd avenoxbeyin
-agy -p "Read SETUP-ANTIGRAVITY.md and follow it exactly to set up my second brain."
-```
-
-Antigravity adaptörü de aynı `.claude/scripts` motorunu kullanır; `flush.py`, `compile.py` veya
-skill'lerin ikinci kopyasını oluşturmaz. Doğrudan Gemini API anahtarı istemez.
-
-### Yerel Windows (WSL değil)
-
-Yerel Windows için ayrı bir kurulum yolu vardır:
+Windows:
 
 ```powershell
-git clone https://github.com/avenoxai/avenoxbeyin.git
-cd avenoxbeyin
-claude "Read SETUP-WINDOWS.md and follow it exactly to set up my second brain."
+py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim"
 ```
 
-Gereksinimler kurulumdan önce **çalıştırılarak** denetlenir (PowerShell 7,
-Python 3, Git, Claude Code) ve biri bile eksikse **diske hiçbir şey yazılmaz**.
+Kurulum üç istemci için proje bağlantılarını, ortak motoru, üç başlangıç skill'ini ve güncelleme kısayolunu kurar. Bundan sonra paket klasörünü açık tutman gerekmez.
 
-Ne yapıldığı, hangi Windows tuzaklarının ölçüldüğü ve nelerin iddia edilmediği:
-[`docs/WINDOWS-PORT.md`](docs/WINDOWS-PORT.md).
+Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başlat**. Codex'te `/hooks` ekranında yeni hook tanımlarını inceleyip güven; diğer istemcilerde workspace güvenini tamamla. İstemci güvenini kurucu senin adına uydurmaz. Agent ile kurulum yapmak istersen [SETUP-V3.md](SETUP-V3.md) rehberini takip etmesini iste.
 
-Kapsam dışı: v1 → v2 yükseltme, WSL'den taşınma, PowerShell 5.1 ile çalıştırma.
-macOS ve Linux yolları değişmedi.
+## İlk konuşma
 
-### Zaten v1, v2.0, v2.1 veya v2.2 beynin varsa
+Ajanına şunu söyle:
 
-Aynı komut yeter. `SETUP.md` önce mevcut bir beyin arar, bulursa yükseltme moduna geçer ve işi
-tek bir script'e devreder: `scripts/upgrade.sh`. Yükseltme **sadece ekler**: mevcut hafıza
-dosyalarına, Dashboard'a, notlarına dokunulmaz. `daily/`, `knowledge/`, scriptler ve skill'ler
-eklenir, dört kanca dosyası yenisiyle değiştirilir, `settings.json` kanca kaydı tekrar tekrar
-çalıştırılabilecek şekilde birleştirilir.
+> Beyin skill'ini kullan. Beni tanımak için kısa sorular sor; cevapları kaynak notlara kaydet. Sonra birlikte bir görev oluşturup tekrar okuyalım.
 
-Üç şeyi peşinen bilmen iyi olur:
+Kurulu üç skill:
 
-- **Hafıza klasörünün adı `🔮 850-Companion` olmak zorunda.** Kancalar ve scriptler bu sabit yolu
-  okuyor. Klasörün adı ortağının adıysa (`🔮 850-Echo` gibi) script bunu `git mv` ile değiştirmeyi
-  teklif eder. İçerik hiç değişmez, sadece klasör adı değişir. Hayır dersen yükseltme hiç
-  başlamaz ve vault'a v2 damgası vurulmaz; yarım kurulmuş bir v2'den dürüst bir v1 iyidir.
-- **İlk iş git anlık görüntüsü.** Alınamazsa yükseltme durur, devam etmez. Geri dönüş her zaman
-  açık.
-- **Sürüm damgası en sona yazılır.** Kancalar, scriptler, placeholder'lar, kanca sayısı ve
-  `.gitignore` koruması tek tek doğrulandıktan sonra. Bir kapı bile geçilmezse `.beyin-version`
-  yazılmaz.
+| Skill | Ne zaman kullanılır? |
+| --- | --- |
+| **beyin** | Not bulmak, bilgi kaydetmek, görev değiştirmek, iş sonucu ve ders çıkarmak |
+| **beyin-doktor** | Bir not bulunamıyorsa, bağlantı veya kayıt sorunu varsa |
+| **beyin-guncelle** | Kurulu sistemi kontrol etmek, güncellemek veya geri almak |
 
----
+Bunlar `.agents/skills` altında bulunur; istemciler aynı kaynakları kullanır. Eklemek istediğin kişisel skill'leri ayrıca içe alabilirsin. Aynı adlı farklı içerik sessizce ezilmez.
 
-## v1/v2.0/v2.1/v2.2 → v2.3
+## Günlük kullanım
 
-| | v1 | v2 |
-| --- | --- | --- |
-| Günlük hafıza | model hatırlarsa yazar | oturum kapanışında **otomatik** yazılır |
-| Kanca sayısı | 3 | 4 (`PreCompact` eklendi) |
-| Compaction | konuşma sıkıştırılınca kaybolur | sıkıştırma öncesi yakalanır |
-| Bilgi tabanı | yok | `knowledge/` altında derlenmiş, birbirine bağlı makaleler |
-| Oturum başı bağlam | son oturum + threadler | + kurallar, son journal, bilgi indeksi, bugünün logu |
-| Kalıcı kurallar | yok | `Kurallar.md`, "bunu böyle yapma" dediğinde oraya yazılır |
-| Sağlık kontrolü | yok | `beyin doktor` skill'i, tek tabloda tanı |
-| Eski geçmiş | yok | `geçmiş import`: ChatGPT, Claude, Gemini dışa aktarımları |
-| Yükseltme | yok | yerinde, ekleme yapan, tekrar çalıştırılabilir |
-| Bağımlılık | bash | bash + python3 (ikisi de sistemde var) |
+Notu yaz, ajana ne istediğini söyle. Kaynaklar oturum açılışı ve konuşmanın uygun noktalarında yeniden indekslenir. İstemciler kapalıyken sürekli tarayan bir servis yoktur. Önemli iş sonuçları kısa, kaynak bağlantılı kayıtlarla tutulur; tüm sohbetin kendiliğinden doğru bilgiye dönüştüğü iddia edilmez.
 
----
+Bir şey ters giderse ajana **“beyin-doktor ile kontrol et”** de. Terminalden, vault klasöründe:
 
-## Mimari
-
-```
-   oturum biter                    konuşma sıkışmak üzere
-   (SessionEnd)                         (PreCompact)
-        |                                    |
-        v                                    v
-  session-end.sh                       pre-compact.sh
-        |                                    |
-        +------------------+-----------------+
-                           v
-                       flush.py           (claude -p veya agy -p)
-                  transkripti okur, Türkçe özet çıkarır
-                           v
-                 daily/YYYY-MM-DD.md      <-- makine yazar, sen değil
-                           |
-        (saat 18'den sonra, günde bir kez, değişen log varsa)
-                           v
-                      compile.py          (claude -p veya agy -p)
-                           v
-   knowledge/concepts/*.md + knowledge/connections/*.md + knowledge/index.md
-                           |
-                           v
-                   session-start.sh
-        indeksi + bugünün logunu + hafızayı bir sonraki oturuma enjekte eder
+```sh
+python3 beyin.py doctor
 ```
 
-Yazma tarafı makineye ait, ilişki katmanı sana ait: ortağın hâlâ `Last-Session.md` ve `Threads.md`
-dosyalarını kendi eliyle günceller. Makine katmanı onun yerine geçmez, altını doldurur.
+Windows'ta aynı komutun başında `py -3` kullan. Kurulumda özel runtime yolu seçtiysen kurulu `beyin.py` bunu zaten bilir.
 
-## Ne alıyorsun
+## Güncelleme
 
-```
-{Ad}OS/
-├── 📥 000-Inbox/Dump/        # ham yakalama
-├── 🎯 100-Command-Center/    # Dashboard
-├── 🏰 300-Projects/          # proje başına bir klasör
-├── 🧠 500-Knowledge/         # insanın yazdığı notlar
-├── 🛠️ 600-Arsenal/           # araçlar, kişiler, kaynaklar
-├── 🔮 850-Companion/         # ortağın kalıcı hafızası (+ Kurallar.md)
-├── daily/                    # makine yazar: günlük loglar
-├── knowledge/                # makine derler: makaleler + bağlantılar + indeks
-├── 📦 900-Archive/
-├── 📋 Templates/
-└── .claude/                  # kancalar, scriptler, skill'ler (süreklilik motoru)
+Ajanına **“beynimi güncelle”** diyebilir veya vault içindeki kısayolu açabilirsin:
+
+- macOS: `Beyni Güncelle.command`
+- Windows: `Beyni Guncelle.cmd`
+- Linux: `Beyni Güncelle.desktop` veya `Beyni Güncelle.sh`
+
+Kısayol aynı updater'ı çalıştırır. Terminalde önce kontrol etmek istersen:
+
+```sh
+python3 beyin.py update --check
+python3 beyin.py update
 ```
 
-- **İsmini sen koyduğun bir AI ortağı.** Varsayılan dili Türkçe.
-- **Süreklilik motoru.** Dört sıfır bağımlılıklı kanca, her açılışta hafızayı bağlama koyar, her
-  kapanışta oturumu diske yazar.
-- **Dosya tabanlı hafıza.** API anahtarı yok, ücretli servis yok, her şey senin diskinde.
-- **Yerel hafıza varsayılandır.** Mem0 hesabı veya API anahtarı gerekmez. Üçüncü parti
-  hafıza servisleri yalnız açık tercihle eklenir; temel sistem bunlara bağlı değildir.
-- **Tek tık başlatıcı.** macOS'ta masaüstünde 🧠 ikonlu bir uygulama vault'u anında açar. Linux'ta
-  yerine bir `.desktop` kısayolu yazılır (test edilmedi).
+Varsayılan kaynak yalnız resmi GitHub **stable release** paketidir; geliştirme dalından kendiliğinden kod çekmez. Paket yayınlanmamışsa veya erişilemiyorsa hata bildirir, güncellenmiş gibi davranmaz. İndirilmiş ZIP ile çevrimdışı güncelleme ve geri alma için [güncelleme rehberi](docs/v3/UPDATE.md).
 
-## Maliyet, dürüst hâliyle
+## V2'den geliyorsan
 
-Ekstra API faturası yok; arka plan özetleyici ve derleyici kullandığın Claude Code veya
-Antigravity hesabının mevcut kotasından küçük bir pay kullanır.
+Aynı kurucuyu mevcut vault üzerinde çalıştır. Notlar, Companion dosyaları, eski `daily/` ve `knowledge/` içerikleri korunur. Tanınan eski writer'lar geri alınabilir biçimde devreden çıkarılır; özelleştirilmiş sistem dosyası veya çalışan eski worker varsa işlem durur ve açıklama verir.
 
-## Gereksinimler
+V2'nin arka planda model çağıran günlük özetleyici/derleyici akışı V3'te çalışmaz. Bunun yerine aktif ajan bilinçli olarak iş sonucu ve bilgi notu yazar. Yeni sonuç bağlantıları `daily/v3/` ve `knowledge/v3/outcomes.md` altında oluşturulur. Eski günlükler yeniden özetlenmez. [Geçiş ve sınırları](docs/v3/MIGRATION.md) · [Tarihsel V2 rehberi](docs/V2-README.md).
 
-Zorunlu, her platformda: [Claude Code](https://claude.com/claude-code) **veya** Google
-Antigravity CLI, [Obsidian](https://obsidian.md) ve Python 3 (macOS/Linux'ta `python3`; yerel Windows'ta çalışan
-`python` veya `python3`). Python opsiyonel değil: günlük log da gece derlemesi de onun üstünde
-çalışır.
+## Ne korunur, ne ölçülür?
 
-| Platform | Durum | Ne çalışır, ne çalışmaz |
-| --- | --- | --- |
-| macOS | **test edildi** | hepsi: kancalar, `daily/`, `knowledge/`, 🧠 masaüstü kısayolu |
-| Linux | **test edilmedi** | kurulum `uname` ile dallanır: Homebrew, Obsidian cask ve macOS `.app` adımları atlanır, yerine XDG `.desktop` kısayolu yazılır. Vault, kancalar ve scriptler taşınabilir yazıldı ama gerçek bir Linux masaüstünde doğrulanmadı. Denersen sorun aç. |
-| Windows | WSL, **veya** yerel Windows | Tek satırlık `beyin.md` girişi iki yolu ayırır. Yerel Windows için [`SETUP-WINDOWS.md`](SETUP-WINDOWS.md). WSL'de motor ve vault aynı Linux dağıtımında, Linux dosya sisteminde kalır; Windows Obsidian ile karma çalışma doğrulanmış sayılmaz. Bkz. [`docs/WINDOWS-PORT.md`](docs/WINDOWS-PORT.md). |
+Kullanıcı notları updater'ın değiştireceği sistem dosyaları değildir. Yönetilen dosyada farklı bir değişiklik görülürse conflict bildirilir; ilgisiz desteklenen ayar değişiklikleri birleştirilir. Yedek ve journal vault dışında yereldir. Bir kesinti sonrası `recover` veya `rollback` kullanılabilir.
 
-Masaüstü kısayolu macOS'ta `osacompile` ve AppKit kullanır, ikisi de Linux'ta yoktur. Vault'un
-kendisi düz Markdown, yani her yerde açılır; kurulum akışının tamamı için doğrulanmış tek platform
-şu an macOS.
+Arama yerel kelime eşleştirmesi kullanır; genel doğal dil anlama veya her soruda doğru hatırlama sözü vermez. Motor kendisi model çağırmaz; ajana yaptırdığın işler istemcinin normal kullanımına girer. Otomatik doğrulamalar ve gerçek istemci kontrolleri [ayrı raporlanır](docs/v3/README.md).
 
-Kod reposu, video dosyaları ve `🏰 300-Projects/` arasındaki sınır için
-[`docs/PROJECT-WORKFLOW.md`](docs/PROJECT-WORKFLOW.md) rehberine bak. OpenCode'un mevcut destek
-sınırı da orada açıkça yazıyor.
+## Geliştiriciler
 
-## Bir şey ters giderse
+[Kaynak formatı](docs/v3/MARKDOWN.md) · [Runtime](docs/v3/RUNTIME.md) · [Semantik test sözleşmesi](docs/v3/SEMANTIC-TEST-CONTRACT.md) · [Sürüm paketi ve updater](docs/v3/UPDATE.md).
 
-Vault klasöründe kullandığın agent'ı açıp `beyin doktor` yaz. Kancalar, scriptler, python3, model CLI,
-günlük log tazeliği, son derleme durumu, iCloud çakışma dosyaları ve git durumu tek tabloda gelir,
-her kırmızı satırın altında düzeltme komutu yazar.
-
----
-
-## Credits
-
-Bilgi derleme mimarisi Andrej Karpathy'nin LLM bilgi tabanı desenine dayanır:
-https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
-
-Geri kalanı [Avenox](https://avenox.lol) günlük kullandığı sistemden, kişisel veriden arındırılıp
-herkes için genelleştirilerek çıkarıldı.
-
-## Lisans
-
-MIT, [LICENSE](LICENSE) dosyasına bak. PR'lar açık.
-
----
-
-## In English (short version)
-
-**avenoxbeyin** is an open-source AI second brain: an Obsidian vault driven by Claude Code,
-Codex, or Google Antigravity, with
-memory that survives across sessions. v1 gave you continuity but depended on the model remembering
-to write its memory files. v2's thesis is that **memory must be a mechanism, not a discipline**: a
-`SessionEnd` and a `PreCompact` hook flush every conversation into `daily/` logs automatically via
-a small background Haiku call, and once a day a Sonnet compile pass turns those logs into linked
-articles under `knowledge/`. The next session starts with that knowledge index already in context.
-
-On macOS, Linux, or WSL, install with `git clone https://github.com/avenoxai/avenoxbeyin.git && cd
-avenoxbeyin && claude "Read SETUP.md and follow it exactly to set up my second brain from this
-template."` Codex can follow the same `SETUP.md`; its project hooks are rendered with absolute
-paths and require one-time approval in `/hooks`. On native Windows, use the same clone but ask
-Claude Code to read `SETUP-WINDOWS.md`; do not run the Bash installer. Already running v1 or v2.0?
-The same command detects it and hands the work to one committed script, `scripts/upgrade.sh`:
-additive only, your memory files are never touched, the settings merge is idempotent, and it takes
-a **verified** git snapshot before it changes anything. Two things it will ask you about, and stop
-for if you say no: renaming the memory folder to the fixed `🔮 850-Companion` path (a `git mv`, the
-contents never move), and removing v1 hook wiring left behind in `settings.local.json` so hooks
-stop firing twice. The `.beyin-version` stamp is the last write of all, only after every gate
-passes.
-
-Platform honesty: macOS is the tested POSIX path. The installer branches on `uname` and writes an
-XDG `.desktop` launcher instead of a macOS app on Linux, but that path has not been verified on a
-real Linux desktop. Native Windows has its own PowerShell installer and CI suite; the generated
-Codex wiring is regression-tested, but a live native-Windows Codex session has not yet been
-claimed as verified.
-
-No extra API bill: the engine uses your existing Claude Code or Antigravity login through
-`claude -p` or `agy -p`. No direct model API keys are required. Knowledge-compilation architecture credit:
-Andrej Karpathy's LLM knowledge base pattern,
-https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f. MIT licensed.
-
-## V3 foundation preview
-
-V3 geliştirme temeli [docs/v3/QUICKSTART.md](docs/v3/QUICKSTART.md) altında ayrı ve isteğe bağlıdır.
-Yerel SQLite ile kaynak referanslı arama, görev revizyonları ve sonuç kayıtları sunar;
-Mem0 veya model çağrısı gerekmez. Bu önizleme mevcut V2 hook/installer akışını otomatik
-olarak değiştirmez. Doğruluk senaryoları ve ölçüm sınırları:
-[SEMANTIC-TEST-CONTRACT.md](docs/v3/SEMANTIC-TEST-CONTRACT.md).
+Açık kaynak, [MIT lisansı](LICENSE). Avenox tarafından günlük ikinci beyin iş akışlarından geliştirildi. V2 bilgi derleme fikri için [Karpathy'nin bilgi tabanı desenine](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) teşekkürler.

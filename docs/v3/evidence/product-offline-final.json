@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-09-15T21:57:13.058087+00:00",
+  "scope": "Independent productization offline acceptance using synthetic temp vaults; no models or actual user state.",
+  "source_hashes_sha256": {
+    ".github/workflows/v3.yml": "f35cb31c6e9b35c3c3b2ac8ac0530990a5c27c617d6b54a3a1a87d39bf94ac28",
+    "scripts/beyin_entry.py": "af9d035eda3350358b50f9898514227089290757fb7a8626859cebfc64d43aa9",
+    "scripts/beyin_v3.py": "5d080e3c7340a0d163375d81c0aa0967b1318c73d4cf63a31aefb17f8342641f",
+    "scripts/build_v3_release.py": "932b2dc44f89ea2c0d53e5643defb766c6a9d279d977791e5aef4baf749dd35c",
+    "scripts/evaluate_v3.py": "d88805a44161d36b70dc656840a69ca374726d1e2f9ad58b1b919e935349668d",
+    "scripts/install_v3.py": "46dd98a0d43592eee9fd1669d38359d06b2ae5394a1d6cc5519758e6480d365f",
+    "template/.agents/skills/beyin/SKILL.md": "91bfb90440ea4b727e6b579fe0d6bb156124343b9704f1180cd4659da4ebe59f",
+    "template/.agents/skills/beyin-doktor/SKILL.md": "53ce40e622c22d0869fcd064f5bd9cfc75d8de0b666b992ab31f5722b611117b",
+    "template/.agents/skills/beyin-guncelle/SKILL.md": "21f6e3f0427fcca81e0f114009b805133731d79f4ffc6bd793ab555a8823b0e3",
+    "template/.claude/scripts/beyin_v3.py": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+    "template/.claude/scripts/beyin_v3_hook.py": "6e9a28e9be8a4915ce07f906db8a44c4b8fcef5864f5d2241ec98d02d2714213",
+    "template/.claude/scripts/beyin_v3_launchers.py": "a1b16846ab64f9b0b656c3b4e546be85bec23aa65c759a42bacc21d2d05b88ca",
+    "template/.claude/scripts/beyin_v3_migrate.py": "8544e0b9b4d191a6827f5f975caae1c6a451cbe0b4ef8f4e3f2b842b3ae46469",
+    "template/.claude/scripts/beyin_v3_projections.py": "773abc82ad7a4346dc6684e412325470646b9e4302f318b67b201976e14fd129",
+    "template/.claude/scripts/beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e",
+    "template/.claude/scripts/beyin_v3_sync.py": "384edbebddd0dcc53a7f615a8a98313f567b4354049f42cf66b263948723567f",
+    "template/.claude/scripts/beyin_v3_update.py": "96732e04d23540cf9609831ec1eac229057c6c323e6710c4d04c1a3e42f7ffdf",
+    "tests/fixtures/v3/semantic_scenarios.json": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+    "tests/v3_entry_test.py": "7db78816e7e4ebb1b810ed5819bc7f39970ceb44698cfd51cf941305d3813383",
+    "tests/v3_hook_test.py": "abe40877a39e675fb7432bf2305517c00132d000350fce80016547e92aca8781",
+    "tests/v3_launchers_test.py": "bae065e1665252c4188184f631373cdc055eb0ca994d5fa4a2cd5f27b15cc68e",
+    "tests/v3_migration_test.py": "b62dcc52e7d478386d76b967d0bea472796c8668fecd9dbc842dbc972392fb02",
+    "tests/v3_package_helpers.py": "7d63e5c77403889212596d76953262838736e056feb2cbd5ad6bef9ffaa2a12e",
+    "tests/v3_product_test.py": "91d52ef31634868dd354b9c5271f6da68899dc8f3972cde01b2336d6af5f965b",
+    "tests/v3_runtime_test.py": "3466904ada3be5476eae8c56abbd0f34f7808435d3b7fc7d71250f7ba7cd97b1",
+    "tests/v3_semantic_test.py": "08352839f612b705102941bff6a2428ec77096343f6656dfe25132c09e6897e3",
+    "tests/v3_skills_test.py": "6fd9b9c0801c5bfcbfb87f3eeb3bf288b97cee4dfb73732dfcc57d4f5657dd37",
+    "tests/v3_sync_test.py": "94ce33f8e507d71bfea4dd7bf200094e46a6726ca45195c95f0aabd2f743d369",
+    "tests/v3_task_create_test.py": "10234ab5bdedce5ce1977daef55d6ff0aa5baf8c2b3f54eedc2d82af9a3a1160",
+    "tests/v3_update_test.py": "e0dfa7cf23ea040770d61f8a81fd6d3c9633dbf8cf65df85a425779a104fb191",
+    "tests/scripts_test.py": "ef762a7fb88994d20eaa2cbed61f0ebefc1836921c98255d6073b0c70b2dc069",
+    "tests/entrypoint_test.py": "ba0ababa5a208308916e6c49c4850fee8caaede17ede20aa2cb361a8b831f976",
+    "tests/antigravity_test.py": "1cb6122949e5dcdc02d06efefa879730e09c4fa216ffd0f835f0a4db795e4673",
+    "docs/V2-README.md": "5e88d8e30b873f5fb0a9c9f515c45eec6ec41f1b9217512c48c6d2f7c4f1e9a7"
+  },
+  "source_drift_during_run": false,
+  "platform_runs": [
+    {
+      "platform": "Darwin",
+      "python": "3.14.2",
+      "checks": [
+        {
+          "suite": "legacy-scripts",
+          "command": "python tests/scripts_test.py",
+          "exit_code": 0,
+          "tests": 36,
+          "output_sha256": "409fcb9e011eed29feba292f3745e2a30545c60822da66eb5ca0346a8aabccab",
+          "duration_seconds": 11.0
+        },
+        {
+          "suite": "legacy-entrypoint",
+          "command": "python tests/entrypoint_test.py",
+          "exit_code": 0,
+          "tests": 5,
+          "output_sha256": "7a8d01603d417b6adaebe9b2499b33399bea619fd15772390e2dbfea7ee1ed2c",
+          "duration_seconds": 0.04
+        },
+        {
+          "suite": "legacy-antigravity",
+          "command": "python tests/antigravity_test.py",
+          "exit_code": 0,
+          "tests": 6,
+          "output_sha256": "8639db68b747d9f47e4338a3cca211899fd645fc5fce7fe05f6db9e2ffdc3625",
+          "duration_seconds": 0.119
+        },
+        {
+          "suite": "v3-all",
+          "command": "python -m unittest discover -s tests -p v3_*test.py",
+          "exit_code": 0,
+          "tests": 106,
+          "output_sha256": "964ab5dec925defb9f709880e22e9bf2aa23384b3abd1c276422b00416b703a0",
+          "duration_seconds": 12.28
+        }
+      ],
+      "evaluation_exit_code": 0,
+      "evaluation": {
+        "benchmark_version": 1,
+        "fixture_sha256": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+        "scope": "Synthetic offline retrieval and persistence only; no generalization claim.",
+        "precision_definition": "Relevant returned IDs / returned IDs among first 5; empty correct abstention = 1.",
+        "status": "evaluated",
+        "runtime_sha256": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+        "development": {
+          "cases": 10,
+          "passed_cases": 10,
+          "recall_at_5": 1.0,
+          "precision_at_5_diagnostic": 0.95,
+          "forbidden_count": 0,
+          "abstention_accuracy": 1.0,
+          "structured_fact_retention": 1.0,
+          "privacy_canary_leaks": 0,
+          "harness_equivalence": true,
+          "passed": true
+        },
+        "holdout": {
+          "cases": 6,
+          "passed_cases": 6,
+          "recall_at_5": 1.0,
+          "precision_at_5_diagnostic": 1.0,
+          "forbidden_count": 0,
+          "abstention_accuracy": 1.0,
+          "structured_fact_retention": 1.0,
+          "privacy_canary_leaks": 0,
+          "harness_equivalence": true,
+          "passed": true
+        },
+        "passed": true
+      },
+      "corrected_legacy_readme_input": {
+        "previous_exit_code": 1,
+        "previous_output_sha256": "240a681c16b13a8060757ba0d6be184a7f0357d13b1d87f694f8522feb8a82cb",
+        "reason": "Legacy V2 README moved to docs/V2-README.md; same assertions retained."
+      }
+    },
+    {
+      "platform": "Linux container",
+      "python": "3.13.15",
+      "network": "none",
+      "rootfs": "read-only",
+      "checks": [
+        {
+          "suite": "legacy-scripts",
+          "command": "python tests/scripts_test.py",
+          "exit_code": 0,
+          "tests": 36,
+          "output_sha256": "df996a19372494e307f1ab9e7aea26a5cd757045e3f81bfd0f65b26a6d42d0e9",
+          "duration_seconds": 10.123
+        },
+        {
+          "suite": "legacy-entrypoint",
+          "command": "python tests/entrypoint_test.py",
+          "exit_code": 0,
+          "tests": 5,
+          "output_sha256": "7a8d01603d417b6adaebe9b2499b33399bea619fd15772390e2dbfea7ee1ed2c",
+          "duration_seconds": 0.361
+        },
+        {
+          "suite": "legacy-antigravity",
+          "command": "python tests/antigravity_test.py",
+          "exit_code": 0,
+          "tests": 6,
+          "output_sha256": "f254ec5869951e76f0d629d1cb49685cfb2d0442196c1a3bd27b53fb402a1488",
+          "duration_seconds": 0.276
+        },
+        {
+          "suite": "v3-all",
+          "command": "python -m unittest discover -s tests -p v3_*test.py",
+          "exit_code": 0,
+          "tests": 106,
+          "output_sha256": "f89941333f82bbdea8024e6ede519525a0ac13b08f4ae530b4a03e07d20463e1",
+          "duration_seconds": 18.99
+        }
+      ],
+      "evaluation_exit_code": 0,
+      "evaluation": {
+        "benchmark_version": 1,
+        "fixture_sha256": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+        "scope": "Synthetic offline retrieval and persistence only; no generalization claim.",
+        "precision_definition": "Relevant returned IDs / returned IDs among first 5; empty correct abstention = 1.",
+        "status": "evaluated",
+        "runtime_sha256": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+        "development": {
+          "cases": 10,
+          "passed_cases": 10,
+          "recall_at_5": 1.0,
+          "precision_at_5_diagnostic": 0.95,
+          "forbidden_count": 0,
+          "abstention_accuracy": 1.0,
+          "structured_fact_retention": 1.0,
+          "privacy_canary_leaks": 0,
+          "harness_equivalence": true,
+          "passed": true
+        },
+        "holdout": {
+          "cases": 6,
+          "passed_cases": 6,
+          "recall_at_5": 1.0,
+          "precision_at_5_diagnostic": 1.0,
+          "forbidden_count": 0,
+          "abstention_accuracy": 1.0,
+          "structured_fact_retention": 1.0,
+          "privacy_canary_leaks": 0,
+          "harness_equivalence": true,
+          "passed": true
+        },
+        "passed": true
+      },
+      "corrected_legacy_readme_input": {
+        "previous_exit_code": 1,
+        "previous_output_sha256": "e5fb9c943b8479c80f5ecd0e6b7003b95a38876cba18b1cc40103935a2c44a69",
+        "reason": "Legacy V2 README moved to docs/V2-README.md; same assertions retained."
+      }
+    }
+  ],
+  "linux_image": {
+    "name": "python:3.13-slim",
+    "id": "sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285",
+    "network": "none",
+    "rootfs": "read-only",
+    "repository_mount": "read-only",
+    "tempfs": "/tmp"
+  },
+  "native_windows": {
+    "status": "not_run_in_this_productization_lane",
+    "note": "Current productization CI is a separate verification obligation. Windows launcher branches and permission-denied copy tests are present; macOS simulation is not native Windows proof."
+  },
+  "acceptance": {
+    "legacy_tests_per_platform": 47,
+    "v3_tests_per_platform": 106,
+    "development_cases": 10,
+    "holdout_cases": 6,
+    "fixture_unchanged": true,
+    "product_and_update_cases": 24
+  },
+  "limitations": [
+    "Synthetic retrieval benchmark does not establish general natural-language recall.",
+    "Local truncated ZIP rejection is not HTTP retry testing.",
+    "Source is tested before publication; no release or CI triggered by this lane."
+  ],
+  "privacy": {
+    "synthetic_fixtures_only": true,
+    "real_vault_access": false,
+    "raw_logs_in_artifact": false,
+    "model_calls": 0,
+    "provider_calls": 0
+  }
+}

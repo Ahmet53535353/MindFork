@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "frozen_at_utc": "2026-09-15T21:38:12.161209+00:00",
+  "scope": "Offline product packaging and updater acceptance; synthetic temp vaults only; semantic fixture unchanged.",
+  "tests": [
+    "tests/v3_product_test.py",
+    "tests/v3_update_test.py"
+  ],
+  "helpers": "tests/v3_package_helpers.py",
+  "initial_red": {
+    "product": {
+      "tests": 5,
+      "failures": 5,
+      "reason": "Missing product entrypoint/version/core skills, name-conflict handling and reinstall merge"
+    },
+    "update_initial": {
+      "tests": 3,
+      "failures": 3,
+      "reason": "Missing versioned updater"
+    },
+    "update_expanded": {
+      "tests": 11,
+      "failures": 11,
+      "reason": "Missing versioned updater"
+    },
+    "subsequent_entrypoint_wiring_case": "Added after expanded red; no claim of separate preimplementation execution"
+  },
+  "package_contract": {
+    "schema": 1,
+    "manifest": "manifest.json",
+    "fields": [
+      "version",
+      "min_python",
+      "files",
+      "migrations"
+    ],
+    "files": "explicit allowed paths mapped to SHA256"
+  },
+  "api_contract": {
+    "module": "beyin_v3_update.py",
+    "functions": [
+      "update(vault,state,package=None,check=False)",
+      "rollback(vault,state)",
+      "recover(vault,state)"
+    ],
+    "test_fault": "transaction_hook(phase=\"after_replace\",index=0) raises OSError"
+  },
+  "guards": [
+    "Check leaves vault and state unchanged",
+    "Only system allowlist paths may change",
+    "Corrupt and traversal packages rejected",
+    "Managed user edits conflict",
+    "Source notes and unrelated user settings survive rollback",
+    "Version stamp written last",
+    "Recovery preserves intervening manual edits",
+    "Concurrent updates serialize",
+    "Semver comparisons are numeric",
+    "Installed root entrypoint works without --vault"
+  ],
+  "network_calls": 0,
+  "model_calls": 0,
+  "real_user_data": false,
+  "acceptance_case_counts": {
+    "product": 8,
+    "update": 16
+  },
+  "partial_download_scope": "Truncated local ZIP rejection simulates an unusable downloaded artifact; not HTTP transport retry proof.",
+  "latest_focused_result": {
+    "product": {
+      "tests": 8,
+      "exit_code": 0
+    },
+    "update": {
+      "tests": 16,
+      "exit_code": 0
+    }
+  },
+  "later_gates": [
+    "Checksum-valid broken Python and import crash rejected before target writes",
+    "Initial V2 install rolls back through installed root entrypoint to original system files/version",
+    "Fresh install rollback reports uninstalled without invented prior version",
+    "Cached known stock legacy worker paths are inert after cutover",
+    "Recovery restores permissions after replace-before-chmod failure",
+    "Bundled canonical/mirror copies roll back after mirror state advances"
+  ],
+  "mode_test_note": "Initial fault selector missed macOS /var versus /private/var alias; corrected selector resolves both paths. No production failure claim is derived from that harness error.",
+  "focused_source_sha256": {
+    "scripts/install_v3.py": "46dd98a0d43592eee9fd1669d38359d06b2ae5394a1d6cc5519758e6480d365f",
+    "template/.claude/scripts/beyin_v3_update.py": "96732e04d23540cf9609831ec1eac229057c6c323e6710c4d04c1a3e42f7ffdf",
+    "scripts/build_v3_release.py": "932b2dc44f89ea2c0d53e5643defb766c6a9d279d977791e5aef4baf749dd35c"
+  }
+}

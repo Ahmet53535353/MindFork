@@ -1,37 +1,38 @@
 # İkinci Beyin V3
 
-V3, mevcut vault içine isteğe bağlı kurulan ortak yerel motordur. Markdown kaynak, SQLite yeniden oluşturulabilir yerel indeks, Codex/Claude Code/Antigravity ise aynı motora bağlanan istemcilerdir. Mem0, API anahtarı, sunucu ve ek Python paketi gerekmez. Python 3.11+ kullanılır.
+V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity ise aynı motora bağlanan istemcilerdir. Python 3.11+ dışında ek Python paketi gerekmez. Mem0, API anahtarı, daemon veya ayrı sunucu kurulmaz.
 
-[Kısa kurulum](../../SETUP-V3.md) · [Komut rehberi](QUICKSTART.md) · [Kaynak şeması](MARKDOWN.md) · [Runtime](RUNTIME.md)
+[Yeni kullanıcı başlangıcı](../../README.md) · [Ajanla kurulum](../../SETUP-V3.md) · [Güncelleme/geri alma](UPDATE.md) · [Kaynak şeması](MARKDOWN.md) · [Runtime](RUNTIME.md)
 
-## Uygulananlar
+## Kullanıcı paketi
 
-- Markdown ekleme, düzenleme, silme ve yeniden adlandırma senkronizasyonu. Görev güncellemesi revision kontrolüyle kaynak dosyasına yazılır; kullanıcı gövdesi korunur.
-- Kısa lifecycle hook, kalıcı metadata kuyruğu ve gerektiğinde başlayan yerel worker. Sistem servisi kurulmaz; istemciler kapalıyken sürekli tarama yapılmaz.
-- Kaynak bağlantılı receipt, tekrar denemede aynı sonuç, işlem geçmişi ve kesinti sonrası kurtarma. Ham özel sohbetlerden otomatik doğrulanmış bilgi üretilmez.
-- Ortak skill deposu `.agents/skills`, Claude erişimi `.claude/skills`. POSIX symlink, Windows hash takibiyle kopya; eşzamanlı değişiklikler ezilmez. Seçilen kullanıcı skill'i içe alınabilir.
-- Yedekli, tekrar çalıştırılabilir kurulum ve değişiklik korumalı geri alma. Kurulu vault, bu repo klasörü olmadan da çalışır.
-- macOS/Linux/Windows yolları ve Windows'un yerleşik PowerShell başlatıcısı. Gerçek platform kanıtları aşağıdaki raporda ayrı gösterilir.
+Kurucu ortak motoru, `beyin`, `beyin-doktor`, `beyin-guncelle` skill'lerini, kurulu `beyin.py` girişini ve işletim sistemine uygun güncelleme kısayolunu dağıtır. Paket ZIP olarak açılıp kullanılabilir; Git gerekmez. Kurulu vault kaynak repo klasöründen bağımsız çalışır.
 
-## Doğrulama
+[Hedef v3.0.0 release](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) ve `beyin-v3-3.0.0.zip` paketi stable dağıtım noktasıdır. **Bu belge güncellenirken yayın henüz doğrulanmadı.** Kodun hazır olması paketin yayımlandığı anlamına gelmez.
 
-[Platform testleri](PLATFORM-TESTS.md) ve [gerçek istemci oturumları](LIVE-CLIENTS.md) güncel kanıtlardır. Daha eski araştırma ve temel koşuları aşağıda tarihsel kayıt olarak korunur.
+## Davranış
 
-[Önceden sabitlenen semantik sözleşme](SEMANTIC-TEST-CONTRACT.md) üzerinde development **10/10**, holdout **6/6**. Gerekli kayıt recall ve abstention doğruluğu %100; diagnostic precision development %95, holdout %100; yasak kayıt/sentetik gizlilik canary ihlali 0. [Başlangıç karşılaştırması](BASELINE.md).
+- Markdown ekleme, düzenleme, silme ve yeniden adlandırma indeksle birleşir. Task metadata güncellemesi effective revision ve kaynak hash kontrolü kullanır; gövde korunur.
+- Kısa lifecycle hook'ları kalıcı metadata kuyruğuna yazar. İş gerektiğinde başlar; istemciler kapalıyken sürekli çalışan servis yoktur.
+- Kaynak bağlantılı receipt tekrar denemede aynı sonucu verir. Önceki sonuç sonraki oturumda tarihsel iddia olarak bulunur; ham sohbet doğrulanmış bilgiye çevrilmez.
+- Yeni sonuçlar `daily/v3/` ve `knowledge/v3/outcomes.md` altında receipt bağlantılarıyla görünür. Eski günlük ve bilgi metinleri yeniden yazılmaz.
+- Ortak skill kaynakları `.agents/skills` içindedir. Claude tarafı platforma göre aynı kaynağa veya kontrol edilen karşılığa erişir; kişisel skill çakışmaları gizlenmez.
+- Updater yalnız resmi stable release veya açıkça verilen yerel paketi kullanır. Yönetilen dosya yedekleri, kesinti journal'ı, checksum ve runtime ön kontrolleri uygulanır; başarılı sürüm kaydı en son yazılır.
 
-Bu küçük küme kaynak bulma, durum, revizyon ve yapılandırılmış bilgiyi ölçer. Motor kelime tabanlı yerel arama kullanır; embedding veya genel doğal dil anlama başarısı iddia edilmez. Holdout ilk koşuda da geçmişti. Gerçek istemci testleri sentetik örneklerle sınırlıdır.
+## V2 geçişi
 
-Native CI: Windows, macOS ve Ubuntu üzerinde Python 3.11/3.13 ile **6/6 koşu geçti**. Her koşuda 62 V3 testi ve development/holdout değerlendirmesi çalıştı. [GitHub koşusu](https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466) · [Makine kanıtı](evidence/native-ci.json).
+[V2 migration rehberi](MIGRATION.md) eski kaynakların korunmasını ve writer geçişini anlatır. Tanınan V2 özetleyici/derleyici devreden çıkarılır. Modelle bilgi damıtmayı artık aktif ajan, `beyin` skill'i üzerinden bilinçli olarak yapar; deterministic görünümler bunun yerine bilgi uydurmaz. Özelleştirilmiş veya harici eski işler ayrıca değerlendirilir.
 
-## Yayın öncesi kalanlar
+İlk kurulum/geçiş dahil son sistem işlemi `rollback` ile geri alınabilir; yeni kullanıcı notları kalır. Yarım işlemi `recover` tamamlar. [Komutlar ve sınırlar](UPDATE.md).
 
-- Codex Desktop için ayrıca soğuk oturum/arayüz doğrulaması. CLI kanıtı Desktop kanıtının yerine geçmez.
-- Eski V2 indeksinin otomatik migration'ı ve eski compiler akışının tam dönüşümü bu opt-in sürümün kapsamı dışındadır. Yeni indeks Markdown kaynaklardan kurulur; eski notlar taşınmaz.
+## Doğrulama sınırı
 
-Mem0 için opt-in factory arayüzü bulunur; hazır SDK/servis adaptörü bu sürümde yoktur. V3 kurulumu eski V2 kurulumundan ayrıdır. V3 değişiklikleri `codex/v3-foundation` dalına gönderildi. Ana dala birleştirme yapılmadı.
+[Platform testleri](PLATFORM-TESTS.md) ve [gerçek istemci oturumları](LIVE-CLIENTS.md) ayrı kanıtlardır. Runtime'ın daha önceki native CI başarısı yeni updater paketinin final CI veya release kanıtı yerine geçmez. Codex CLI kontrolü de Codex Desktop cold-session kontrolünün yerine geçmez.
 
-## Araştırma kaydı
+Önceden sabitlenen [semantik sözleşme](SEMANTIC-TEST-CONTRACT.md) küçük, sentetik bir kaynak bulma/durum testidir. Motor kelime tabanlı arama kullanır; embedding veya genel doğal dil anlama başarısı iddia edilmez. Fixture'a göre kodlama yapılmaz; development ve holdout sonuçları ayrı kaydedilir. [Temel karşılaştırma](BASELINE.md).
 
-İncelenen public taban `2e074cc` (15 Eylül 2026). Kişisel vault içeriği public ürüne taşınmadı.
+## Teknik ve tarihsel kayıt
 
-[Public mimari](public-architecture.md) · [Yerel mimari](local-runtime-architecture.md) · [Eşitlik/migration](parity-and-migration.md) · [Açık sorunlar](issue-validation.md) · [Serai desenleri](SERAI-PATTERNS.md)
+[Ürünleştirme durumu](PRODUCTIZATION-PLAN.md) · [Komut detayları](QUICKSTART.md) · [Serai desenleri](SERAI-PATTERNS.md).
+
+İlk incelenen public taban `2e074cc` idi. [Public mimari](public-architecture.md), [yerel mimari](local-runtime-architecture.md), [eşitlik/migration değerlendirmesi](parity-and-migration.md) ve [sorun incelemeleri](issue-validation.md) tasarım geçmişidir; mevcut uygulamanın yerine kullanılmaz.

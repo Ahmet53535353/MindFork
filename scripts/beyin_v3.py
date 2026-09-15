@@ -70,6 +70,10 @@ def parser():
     skill.add_argument("--name")
     ingest = sub.add_parser("ingest", help="Ingest one JSON record or a JSON list")
     ingest.add_argument("--file", default="-", help="JSON input path, or - for stdin")
+    note = sub.add_parser("note-create", help="Create a semantic Markdown source without overwriting")
+    note.add_argument("--file", default="-", help="JSON {source, text, metadata}")
+    task = sub.add_parser("task-create", help="Create and verify an explicit new task")
+    task.add_argument("--file", default="-", help="JSON {source: tasks/name.md, text, metadata: {id,status,owner}}")
     context = sub.add_parser("context", help="Retrieve source-backed shared context")
     context.add_argument("query", nargs="?", help="Query; alternatively use --file")
     context.add_argument("--file", help="JSON retrieval arguments, or - for stdin")
@@ -102,16 +106,25 @@ def main(argv=None):
             raise ValueError("--state must be outside the vault")
         engine = load_engine()
         store = engine.MemoryStore(state, vault)
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update") else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create") else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
         elif args.command == "doctor":
             result = {"pending_events": len(list((state / "hook-queue").glob("*.json"))),
                       "acknowledged_events": len(list((state / "hook-done").glob("*.json")))}
-            for filename in ("hook-health.json", "hook-error.json"):
+            for filename in ("hook-health.json", "hook-error.json", "receipt-gaps.json"):
                 path = state / filename
                 result[filename] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+            seen = {name: set() for name in ('codex', 'claude', 'antigravity')}
+            for path in (state/'hook-done').glob('*.json'):
+                event = json.loads(path.read_text(encoding='utf-8'))
+                if event.get('harness') in seen:
+                    seen[event['harness']].add(event.get('event', 'unknown'))
+            result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
+            result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
+            health = result['hook-health.json'] or {}
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook-error.json'] else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
@@ -121,6 +134,12 @@ def main(argv=None):
         elif args.command == "ingest":
             payload = read_json(args.file)
             result = [store.ingest(record) for record in payload] if isinstance(payload, list) else store.ingest(payload)
+        elif args.command == "note-create":
+            payload = read_json(args.file)
+            result = sync.note_create(payload['source'], payload['text'], payload.get('metadata'))
+        elif args.command == "task-create":
+            payload = read_json(args.file)
+            result = sync.task_create(payload['source'], payload['text'], payload['metadata'])
         elif args.command == "context":
             params = {"query": args.query, "project": args.project, "audience": args.audience,
                       "statuses": args.statuses, "limit": args.limit, "budget_chars": args.budget_chars}
@@ -136,7 +155,7 @@ def main(argv=None):
         elif args.command == "receipt":
             payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],
-                                          payload["refs"], args.harness)
+                                          payload["refs"], args.harness, session=payload.get('session'))
         elif args.command == "history":
             result = store.history(args.record_id)
         else:

@@ -5,7 +5,9 @@ on:
     paths:
       - 'template/.claude/scripts/beyin_v3*.py'
       - 'scripts/*v3*.py'
-      - 'tests/v3_*test.py'
+      - 'scripts/beyin_entry.py'
+      - 'template/.agents/skills/**'
+      - 'tests/v3_*.py'
       - 'tests/fixtures/v3/**'
       - '.github/workflows/v3.yml'
   push:
@@ -13,7 +15,9 @@ on:
     paths:
       - 'template/.claude/scripts/beyin_v3*.py'
       - 'scripts/*v3*.py'
-      - 'tests/v3_*test.py'
+      - 'scripts/beyin_entry.py'
+      - 'template/.agents/skills/**'
+      - 'tests/v3_*.py'
       - 'tests/fixtures/v3/**'
       - '.github/workflows/v3.yml'
 

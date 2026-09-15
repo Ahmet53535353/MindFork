@@ -8,8 +8,15 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import sys
+
+# Keep adjacent installed modules importable when this file is loaded by path.
+_MODULE_DIR = str(Path(__file__).resolve().parent)
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
 
 from beyin_v3 import MemoryStore, ReceiptConflict, RevisionConflict, _json
+from beyin_v3_projections import project_receipts
 
 
 def _hash(data):
@@ -86,6 +93,9 @@ EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
 
 
 class SyncEngine:
+    def projection_helpers(self):
+        return _hash, atomic, render
+
     def __init__(self, vault_root, state_dir):
         self.store = MemoryStore(state_dir, vault_root)
         self.root = self.store.vault_root
@@ -127,6 +137,8 @@ class SyncEngine:
                     self._path(relative, existing=True)
                     raw = path.read_bytes()
                     metadata, body = parse(raw.decode('utf-8'))
+                    if metadata.get('kind') == 'task' and body.lstrip().startswith('---'):
+                        raise ValueError('task has embedded frontmatter; reconcile metadata and body explicitly')
                     if metadata.get('kind') == 'receipt' or metadata.get('generated') is True:
                         continue
                     record = dict(metadata, source=relative, text=body)
@@ -207,6 +219,7 @@ class SyncEngine:
                     db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (id, payload))
                     db.execute('INSERT INTO events(event_type,record_id,revision,record) VALUES (?,?,?,?)', (event_type, id, record['revision'], payload))
                 db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
+            conflicts.extend(project_receipts(self, db))
         for entry in completed:
             entry.unlink(missing_ok=True)
         return {'status': 'conflict' if conflicts else 'degraded' if warnings else 'succeeded', 'indexed': len(records), 'deleted': deleted, 'warnings': warnings, 'conflicts': conflicts}
@@ -264,7 +277,76 @@ class SyncEngine:
             raise RevisionConflict('task source changed before projection readback')
         return result_record
 
-    def receipt(self, event_id, summary, refs, harness):
+    def note_create(self, source, text, metadata=None):
+        if not isinstance(text, str) or not text.strip() or (metadata is not None and not isinstance(metadata, dict)):
+            raise ValueError('note text and metadata required')
+        if text.lstrip().startswith('---'):
+            raise ValueError('text must be body only; put frontmatter fields in metadata')
+        if not source.startswith(('notes/', 'knowledge/')) or not source.endswith('.md'):
+            raise ValueError('new semantic notes belong under notes/ or knowledge/')
+        metadata = dict(metadata or {})
+        if metadata.get('kind') == 'task':
+            raise ValueError('use task-create for new tasks')
+        if metadata.get('generated') or metadata.get('kind') == 'receipt':
+            raise ValueError('managed note kinds require their dedicated command')
+        path = self._path(source)
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if path.exists():
+                raise ValueError('source exists; preserve and edit deliberately')
+            self._intent(source, None, render(metadata, text+'\n'), 'note')
+        result = self.sync()
+        if result['conflicts'] or result['warnings']:
+            raise RevisionConflict('note requires projection review')
+        return {'status': 'succeeded', 'source': source}
+
+    def task_create(self, source, text, metadata):
+        if not isinstance(source, str) or not source.startswith('tasks/') or not source.endswith('.md'):
+            raise ValueError('task-create source must be a tasks/ Markdown path')
+        if not isinstance(text, str) or not text.strip() or not isinstance(metadata, dict):
+            raise ValueError('task body and metadata required')
+        if text.lstrip().startswith('---'):
+            raise ValueError('text must be body only; put frontmatter fields in metadata')
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at'}
+        if set(metadata) - allowed:
+            raise ValueError('unsupported task metadata')
+        metadata = dict(metadata)
+        if not isinstance(metadata.get('id'), str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}', metadata['id']):
+            raise ValueError('stable task id required')
+        if not isinstance(metadata.get('owner'), str) or not metadata['owner'].strip():
+            raise ValueError('explicit task owner required')
+        if metadata.get('status') not in ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled'):
+            raise ValueError('valid explicit task status required')
+        if type(metadata.get('revision', 1)) is not int or metadata.get('revision', 1) != 1:
+            raise ValueError('new task revision must be 1')
+        if metadata.get('kind', 'task') != 'task':
+            raise ValueError('task kind required')
+        if not isinstance(metadata.get('facts', {}), dict) or metadata.get('visibility', 'internal') not in ('internal', 'public', 'private'):
+            raise ValueError('invalid task facts or visibility')
+        for field in ('title', 'project', 'next_action', 'updated_at'):
+            if field in metadata and not isinstance(metadata[field], str):
+                raise ValueError('task metadata text fields must be strings')
+        metadata.update(kind='task', revision=1)
+        path = self._path(source)
+        intended = render(metadata, text+'\n')
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if path.exists() or db.execute('SELECT 1 FROM records WHERE id=?', (metadata['id'],)).fetchone():
+                raise ValueError('task source or id exists; use task-update')
+            self._intent(source, None, intended, 'task')
+        result = self.sync()
+        if result['conflicts'] or result['warnings']:
+            raise RevisionConflict('task-create projection requires review')
+        with self.store._connect() as db:
+            row = db.execute('SELECT payload FROM records WHERE id=?', (metadata['id'],)).fetchone()
+        if not row:
+            raise RevisionConflict('created task missing from projection')
+        record = json.loads(row[0])
+        if any(record.get(key) != value for key, value in metadata.items()) or record['source_sha256'] != _hash(intended) or path.read_bytes() != intended.encode('utf-8'):
+            raise RevisionConflict('created task metadata or source readback mismatch')
+        return record
+
+    def receipt(self, event_id, summary, refs, harness, session=None):
         if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
             raise ValueError('event id and summary required')
         if harness not in ('codex', 'claude', 'antigravity', 'manual') or not isinstance(refs, list) or not refs:
@@ -272,6 +354,10 @@ class SyncEngine:
         refs = [self.store._source(ref) for ref in refs]
         source = 'receipts/' + _hash(event_id) + '.md'
         event = {'event_id': event_id, 'summary': summary, 'refs': refs, 'harness': harness, 'created_at': datetime.now(timezone.utc).isoformat()}
+        if session is not None:
+            if not isinstance(session, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', session):
+                raise ValueError('invalid receipt session')
+            event['session'] = session
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload FROM receipts WHERE id=?', (event_id,)).fetchone()
@@ -283,6 +369,8 @@ class SyncEngine:
             receipt_metadata = {'kind': 'receipt', 'event_id': event_id, 'harness': event['harness'], 'refs': refs, 'visibility': 'internal'}
             if event.get('created_at'):
                 receipt_metadata['created_at'] = event['created_at']
+            if event.get('session'):
+                receipt_metadata['session'] = event['session']
             content = render(receipt_metadata, summary + '\n')
             path = self._path(source)
             if path.exists():

@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Build a minimal checksum-listed portable release from this checkout."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import zipfile
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def build(output, version='3.0.0'):
+    if not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', version):
+        raise ValueError('stable version required')
+    paths = [ROOT / 'scripts' / name for name in ('install_v3.py', 'beyin_v3.py', 'beyin_entry.py')]
+    paths += sorted((ROOT / 'template/.claude/scripts').glob('beyin_v3*.py'))
+    paths += [ROOT / 'template/.agents/skills' / name / 'SKILL.md' for name in ('beyin', 'beyin-doktor', 'beyin-guncelle')]
+    files = {p.relative_to(ROOT).as_posix(): p.read_bytes() for p in paths}
+    manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
+    legacy = [ROOT/'template/.claude/scripts'/name for name in ('flush.py','compile.py')] + [ROOT/'template/.claude/hooks'/(name+suffix) for name in ('session-start','session-end','pre-compact','prompt-counter') for suffix in ('.sh','.ps1')]
+    manifest['legacy_hashes'] = {p.relative_to(ROOT/'template').as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy if p.exists()}
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('manifest.json', json.dumps(manifest, sort_keys=True, indent=2) + '\n')
+        for name, data in sorted(files.items()): archive.writestr(name, data)
+    return {'status': 'built', 'version': version, 'files': len(files), 'sha256': hashlib.sha256(output.read_bytes()).hexdigest()}
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--version', default='3.0.0')
+    args = parser.parse_args()
+    print(json.dumps(build(args.output, args.version)))
