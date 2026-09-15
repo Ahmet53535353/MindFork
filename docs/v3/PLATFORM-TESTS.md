@@ -1,0 +1,84 @@
+# V3 source, lifecycle and platform contracts
+
+All fixtures are synthetic, all state is in temporary directories outside the temporary vault, and hook/installer subprocesses receive a temporary HOME/USERPROFILE. No model call, remote provider, real user vault or package dependency is required. Existing semantic fixture and expected results remain frozen.
+
+## Source adapter API, frozen before implementation
+
+`beyin_v3_sync.SyncEngine(vault_root, state_dir)` exposes `.store`, `sync()`, `update_task(id, expected_revision, changes)`, and `receipt(event_id, summary, refs, harness)`.
+
+- `sync()` returns `{status, indexed, deleted, warnings, conflicts}`. Markdown is authoritative. JSON frontmatter is supported; plain Markdown retains its whole body. Duplicate explicit IDs produce conflicts and exclude ambiguous derived records. Rename updates citations without duplicating a record.
+- `update_task` changes canonical task metadata with an expected revision, preserving the exact Markdown body. A source CAS journal survives source-replace failure; restart recovers once. An intervening manual edit produces conflict and is not overwritten.
+- `receipt` creates a source Markdown receipt and stable `{id,event_id,status,source}` result. Same event/summary/refs is idempotent across harnesses. ID reuse with different data and manually altered receipt files are conflicts, not overwritten. Receipt files are excluded from ordinary source retrieval.
+
+## Lifecycle and installation contract
+
+`beyin_v3_hook.py --vault PATH --state PATH --harness codex|claude|antigravity` accepts JSON on stdin. Codex and Claude return a single `hookSpecificOutput.additionalContext` JSON response for startup context. Antigravity `PreInvocation` with `invocationNum: 0` returns `injectSteps[].ephemeralMessage`; later invocations do not reinject. Antigravity `Stop` queues only when `fullyIdle` is exactly true and returns `decision: stop`.
+
+`enqueue_event(vault,state,payload,harness)` returns a stable event ID, and `drain_queue(vault,state)` returns `{processed,failed,pending}`. Queue files contain metadata rather than transcript text. `--drain-queue` is a deterministic worker entry point. `BEYIN_V3_NO_SPAWN=1` disables detached workers while allowing already-synced context to be read. A failed worker leaves pending work; repeated delivery or competing workers must not acknowledge one event twice. A crash after source sync and before acknowledgement may retry idempotent source synchronization, with no duplicate revision/event.
+
+`install_v3.py --vault PATH --state PATH` installs managed adapter files, bounded instruction blocks and bindings for all three harnesses. Repeating it preserves identical output and unrelated configuration/trust data. Paths with spaces and Unicode are exercised by executing the generated installed command. Native Windows uses the built-in `powershell.exe` only as the quoted Python launcher; no separate PowerShell 7 or `pwsh` installation is required. `--uninstall` restores original owned files under the installer's conflict safeguards.
+
+## Tests-first evidence
+
+`tests/v3_sync_test.py` was written before SyncEngine existed: its initial run reported 10/10 failures for the absent module. `tests/v3_hook_test.py` initial run had three failures for the absent installer; the hook implementation arrived concurrently and passed the other six cases. Two additional queue crash/concurrency tests were then frozen: the real concurrent-drain test initially reported two acknowledgements for one event. These failures were not resolved by weakening expected results.
+
+Run from a public repository checkout:
+
+```sh
+python -m unittest discover -s tests -p 'v3_sync_test.py'
+python -m unittest discover -s tests -p 'v3_hook_test.py'
+python -m unittest discover -s tests -p 'v3_*test.py'
+python scripts/evaluate_v3.py
+```
+
+## Native platform evidence
+
+| Platform | Configured CI | Actual evidence in this work |
+|---|---|---|
+| Ubuntu | Python 3.11, 3.13 | Linux container Python 3.13.15: 47 legacy + 61 V3 passed with network disabled; distinct from hosted native CI |
+| macOS | Python 3.11, 3.13 | Local Python 3.14.2: 47 legacy + 61 V3 passed after final source freeze |
+| Windows | Python 3.11, 3.13 | Not run natively in this work; no native Windows success claim |
+
+`.github/workflows/v3.yml` contains the read-only native OS matrix with standard-library-only tests. Authoring the workflow does not run CI. No push or public CI trigger was performed by this test lane. Interpreter/OS simulation is not native Windows evidence. CLI/model sign-in and real companion continuity are outside these offline gates.
+
+## Additional source-integrity contracts
+
+Four source regressions were frozen before their fixes: a manual source edit without incrementing frontmatter revision must advance the effective revision once and invalidate a stale expected revision; unsupported metadata produces `degraded` status; Markdown receipts have immutable timezone-aware ISO `created_at`; no-query snapshots include only trusted active/waiting records allowed by the requested audience and remain within budget. A separate lifecycle regression requires a saved receipt to appear in restart context marked as historical evidence, rather than silently disappearing because receipts are excluded from ordinary source scanning.
+
+All five initial focused runs failed for the intended missing behavior. These cases extend source/lifecycle reliability and do not modify the frozen semantic scenario answers. Queue acknowledgement tests use explicit event IDs; without a caller-supplied stable delivery identity, transport-level exactly-once delivery is not established by this suite. Retry safety additionally depends on idempotent source synchronization.
+
+
+## Final independent macOS run
+
+On macOS with Python **3.14.2**, the frozen-source command `python3 -m unittest discover -s tests -p 'v3_*test.py'` passed **56/56 tests** in 1.026 seconds. This includes **14 source-sync** and **12 hook/installer** tests, alongside the runtime, semantic and parent-owned shared-skill suite. The complete stdout/stderr contained `OK`; no tests were skipped in this run.
+
+`python3 scripts/evaluate_v3.py` also passed: development **10/10**, holdout **6/6**; required recall, abstention accuracy and structured fact retention all **1.0**, forbidden results/privacy leaks **0**, harness equality **true**. Diagnostic precision remained **0.95** development and **1.0** holdout. No semantic fixture changes or holdout-directed tuning occurred during this source/lifecycle phase.
+
+Frozen production SHA256 values evaluated:
+
+| File | SHA256 |
+|---|---|
+| `template/.claude/scripts/beyin_v3.py` | `ab99584fea287ac58281a9c7601ce1b47af66a953439690be3e7778ffed22b87` |
+| `template/.claude/scripts/beyin_v3_sync.py` | `8444e9be6192224bef89acb7c3f9a1ceeff473b4f9e1b13c7f0cb31da892238a` |
+| `template/.claude/scripts/beyin_v3_hook.py` | `ad015719c62b8e5f98203011fcf5992d3d7a8aedbec3652b5b662b42bbd16df2` |
+| `scripts/install_v3.py` | `d28d21fa25ff2923b707469bb89674855faa8b01e2d8d82668bab6fd8560ff1c` |
+
+The generated installed command was executed locally with spaces and Unicode in its vault/state paths. Queue failure injection covered worker failure and the boundary after source synchronization but before acknowledgement; both recovered without duplicate source history. Competing drains acknowledged the single explicit-ID event once. These are synthetic executable behavior checks, not proof that a particular hosted CLI has trusted and dispatched its lifecycle hooks.
+
+
+## Ordinary note snapshot regression
+
+A real-host observation prompted an additional tests-first synthetic case: startup snapshots must include plain Markdown notes and ordinary `fact` records with no status field, while excluding completed tasks. The initial focused test failed because both statusless sources were omitted. This differs from task-status filtering: the absence of a workflow status does not make an ordinary note inactive. No frozen semantic fixture expectation changed.
+
+After the fix, an independent macOS rerun passed **57/57** complete V3 tests (including 15 sync tests), with development **10/10** and holdout **6/6** unchanged. Core SHA256 for this newer run: `657ce6f4866b5217bca4dd33a9cee58f3990b3b29c7f2d867f87644aa380c268`. Earlier hashes/counts above are retained as historical run evidence. Explicit statusless tasks remain unknown/excluded; statusless non-task notes/facts are eligible. General empty-query retrieval behavior was not changed.
+
+
+## Final offline audit, 2026-09-16
+
+The final independent run passed **47/47 existing regressions + 61/61 V3 tests** on both **macOS Python 3.14.2** and **Linux container Python 3.13.15**. Linux used `python:3.13-slim` with `--network none`, read-only root filesystem/repository, and temporary writable state. Both environments also passed development 10/10 and holdout 6/6. The exact synthetic Python smoke extracted from QUICKSTART passed locally.
+
+The final audit added regression coverage for native Windows launcher inspection, deterministic symlink-denial copy fallback, CLI Unicode JSON under cp1252, preservation of existing UTF-8 settings under a simulated cp1252 file default, and UTF-8 JSON stdin. CLI stdout and installer settings tests reproduced failures before fixes. The stdin fix arrived concurrently and passed its first test run; it is not described as a measured red-to-green result. Encoded launcher inspection decodes UTF-16LE before looking for the target module and still executes the installed command on the actual host.
+
+These encoding and fallback injections are portable simulations, **not native Windows execution**. Windows CI remains pending. No push, public CI trigger, real vault access or model/provider call was performed by this test lane.
+
+[Final machine evidence](evidence/offline-final.json) binds source/test hashes, per-suite exit codes and output hashes, image identity, aggregate semantic metrics and the documentation smoke. Earlier counts/hashes in this document are historical checkpoints. Actual hosted client delivery is recorded separately in the live-client report.

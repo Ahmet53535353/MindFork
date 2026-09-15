@@ -34,7 +34,7 @@ Placeholders you must resolve:
 | `{{COMPANION}}` | soru 3, AI ortağının adı | `Echo` |
 | `{{VAULT_PATH}}` | PHASE 0.3 | `~/Documents/AylinOS` |
 | `{{SCOPE}}` | soru 4, opsiyonel klasörler | `core+goals` |
-| `{{USE_MEM0}}` | soru 5 | `evet` |
+| `{{USE_MEM0}}` | açık kullanıcı tercihi | `hayır` |
 | `{{TODAY}}` | `date +%F` | `2026-08-22` |
 
 `{{SCOPE}}` ve `{{USE_MEM0}}` dosya içine yazılmaz, sadece hangi klasörlerin ve hangi opsiyonel
@@ -113,9 +113,9 @@ Ask (Turkish, conversational, not a form):
 3. **AI ortağına ne isim vermek istersin?** → `{{COMPANION}}`
 4. **Kapsam:** core (herkes) + opsiyonel `⚔️ 200-Goals`, `🔐 400-Vault`, `💪 700-Body`,
    `🧘 800-Mind` → `{{SCOPE}}`
-5. **Semantik hafıza (mem0)?** Temel sürümü **ücretsiz** (mem0.ai, kredi kartı yok). Dosya
-   tabanlı hafıza onsuz da tam çalışır, mem0 üstüne anlamsal arama katar. Önerilir. →
-   `{{USE_MEM0}}`
+5. `{{USE_MEM0}}` varsayılanı **hayır**. Mem0 hesabı, API anahtarı veya üçüncü parti hafıza
+   servisi istemeden devam et. Yalnız kullanıcı açıkça Mem0 entegrasyonu isterse
+   opsiyonel sağlayıcı olarak ele al; temel hafıza yerel dosyalarla çalışır.
 
 Pick the vault path → `{{VAULT_PATH}}`:
 
@@ -350,13 +350,17 @@ The launcher only works after the vault has been added to Obsidian once (PHASE 8
 in one Turkish line that this shortcut has not been tested on a real Linux desktop and that opening
 the folder in Obsidian by hand always works.
 
-## PHASE 6: mem0 semantic memory (optional, FREE, only if `{{USE_MEM0}}` is yes)
+## PHASE 6: Optional memory provider (disabled by default)
 
-1. `command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh`
-2. Free API key from https://mem0.ai, stored in `{{VAULT_PATH}}/.claude/settings.local.json`:
-   `{ "env": { "MEM0_API_KEY": "..." } }`. That file is already gitignored. Never commit it.
-3. Tell the user it is an upgrade layer. The file-based memory and the whole v2 pipeline work
-   without it, with no key at all.
+Skip this phase unless the user explicitly requests Mem0. No account, API key, SDK,
+plugin or network request is required for local memory. Do not install or initialize a
+provider as part of normal setup. Existing user-managed integrations may remain in place.
+
+If explicitly requested, consult that provider's current official integration instructions
+and explain which data would leave the device before enabling it. Do not put credentials
+in synced vault files or generated notes. An unavailable optional provider must not disable
+local memory. V3 foundation does not ship a native Mem0 adapter yet; do not claim an API key
+alone configures a working integration.
 
 ## PHASE 7: First doctor run
 

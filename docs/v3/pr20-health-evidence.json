@@ -1,0 +1,23 @@
+[
+  {
+    "writer": "flush",
+    "warning": false,
+    "exit": 0,
+    "stdout": "HATA | flush | synthetic-error | 0 saat once\nozet: son 48 saatte 1 hata, 0 uyari",
+    "attribute_error": false
+  },
+  {
+    "writer": "compile",
+    "warning": false,
+    "exit": 0,
+    "stdout": "ozet: son 48 saatte 0 hata, 0 uyari",
+    "attribute_error": false
+  },
+  {
+    "writer": "compile",
+    "warning": true,
+    "exit": 1,
+    "stdout": "",
+    "attribute_error": true
+  }
+]

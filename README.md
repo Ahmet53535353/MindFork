@@ -1,5 +1,11 @@
 # 🧠 avenoxbeyin v2.3: hatırlamayı unutmayan ikinci beyin
 
+> **V3 kurulumu üzerinde çalışılıyor.** Mevcut Codex, Claude Code veya Antigravity ajanına
+> “Bu repodaki [SETUP-V3.md](SETUP-V3.md) dosyasını takip ederek vault'umu kur” diyebilirsin.
+> Python dışında ek paket, servis veya Mem0 hesabı gerekmez. Platform doğrulama durumu
+> [burada](docs/v3/PLATFORM-TESTS.md) açıkça listelenir.
+
+
 [Obsidian](https://obsidian.md) + Claude Code, Codex veya Google Antigravity üstünde çalışan,
 açık kaynak bir **ikinci beyin**. Yerel bir Markdown vault, kalıcı hafıza, sıfır bağımlılık,
 sıfır ekstra ücret. Dosya yönetmezsin, konuşursun.
@@ -166,8 +172,8 @@ dosyalarını kendi eliyle günceller. Makine katmanı onun yerine geçmez, alt�
 - **Süreklilik motoru.** Dört sıfır bağımlılıklı kanca, her açılışta hafızayı bağlama koyar, her
   kapanışta oturumu diske yazar.
 - **Dosya tabanlı hafıza.** API anahtarı yok, ücretli servis yok, her şey senin diskinde.
-- **Opsiyonel semantik hafıza.** [mem0](https://mem0.ai) ücretsiz katmanı üstüne anlamsal arama
-  ekler, temel sürümü tamamen ücretsiz ve kredi kartı istemez. İstemezsen sistem eksiksiz çalışır.
+- **Yerel hafıza varsayılandır.** Mem0 hesabı veya API anahtarı gerekmez. Üçüncü parti
+  hafıza servisleri yalnız açık tercihle eklenir; temel sistem bunlara bağlı değildir.
 - **Tek tık başlatıcı.** macOS'ta masaüstünde 🧠 ikonlu bir uygulama vault'u anında açar. Linux'ta
   yerine bir `.desktop` kısayolu yazılır (test edilmedi).
 
@@ -252,3 +258,11 @@ No extra API bill: the engine uses your existing Claude Code or Antigravity logi
 `claude -p` or `agy -p`. No direct model API keys are required. Knowledge-compilation architecture credit:
 Andrej Karpathy's LLM knowledge base pattern,
 https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f. MIT licensed.
+
+## V3 foundation preview
+
+V3 geliştirme temeli [docs/v3/QUICKSTART.md](docs/v3/QUICKSTART.md) altında ayrı ve isteğe bağlıdır.
+Yerel SQLite ile kaynak referanslı arama, görev revizyonları ve sonuç kayıtları sunar;
+Mem0 veya model çağrısı gerekmez. Bu önizleme mevcut V2 hook/installer akışını otomatik
+olarak değiştirmez. Doğruluk senaryoları ve ölçüm sınırları:
+[SEMANTIC-TEST-CONTRACT.md](docs/v3/SEMANTIC-TEST-CONTRACT.md).

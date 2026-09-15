@@ -1,0 +1,53 @@
+{
+  "session": {
+    "L49": true,
+    "L50": false,
+    "LAST_SESSION_TAIL": false,
+    "T6": true,
+    "T7": false,
+    "BODY_OWNER_1": false,
+    "J9": true,
+    "J10": false,
+    "NEWEST_JOURNAL": false,
+    "R60": true,
+    "R61": false,
+    "RULE_TAIL": false,
+    "kırpıldı": false,
+    "SYNTHETIC_HEALTH_FAILURE": false
+  },
+  "legacy": {
+    "legacy_in_context": false,
+    "section_in_context": false,
+    "file_retained": true
+  },
+  "graph_cp1254": {
+    "exit": 1,
+    "unicode_error": true
+  },
+  "graph_cp1252": {
+    "exit": 1,
+    "unicode_error": true
+  },
+  "graph_utf-8": {
+    "exit": 0,
+    "unicode_error": false
+  },
+  "cli_resolution": {
+    "installed_exists": true,
+    "flush": [
+      null,
+      "claude-cli-missing"
+    ],
+    "compile": "claude-cli-missing"
+  },
+  "health_writer": {
+    "line_count": 8,
+    "component": "compile",
+    "error": "warn:synthetic-compile-warning",
+    "prior_error_retained": false
+  },
+  "doctor_windows_settings": {
+    "posix_command_only_matches": 0,
+    "ps1_join_args_matches": 1
+  }
+}
