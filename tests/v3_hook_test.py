@@ -226,6 +226,14 @@ class HookInstallerTest(unittest.TestCase):
                     yield from commands(item)
         self.assertTrue(any('beyin_v3_hook.py' in command for command in commands(agent_config)))
 
+    def test_repeat_install_preserves_literal_backslashes_in_instruction_paths(self):
+        self.vault = self.root / r'Vault\hooks'
+        self.vault.mkdir(parents=True)
+        self.install()
+        first = (self.vault / 'AGENTS.md').read_bytes()
+        self.install()
+        self.assertEqual((self.vault / 'AGENTS.md').read_bytes(), first)
+
     def test_installed_command_runs_with_spaces_and_unicode(self):
         self.install()
         self.seed()
@@ -241,7 +249,7 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('Synthetic Reviewer', json.loads(result.stdout)['hookSpecificOutput']['additionalContext'])
         self.assertNotIn('pwsh', str(command).lower())
         if os.name == 'nt':
-            self.assertTrue(str(command).lower().startswith('powershell.exe '), 'Native built-in launcher, no separate PowerShell 7 dependency')
+            self.assertTrue(str(command).lower().split(' -noprofile ')[0].strip(chr(34)).endswith('\\windowspowershell\\v1.0\\powershell.exe'), 'Absolute native launcher must work with the minimal test PATH')
             self.assertIn('beyin_v3_hook.py', decoded_command(command))
         else:
             self.assertNotIn('powershell', str(command).lower())

@@ -59,7 +59,11 @@ def commands(argv):
     script = "& " + " ".join("'" + str(value).replace("'", "''") + "'" for value in argv)
     script += "; exit $LASTEXITCODE"
     encoded = base64.b64encode(script.encode("utf-16le")).decode()
-    windows = "powershell.exe -NoProfile -NonInteractive -EncodedCommand " + encoded
+    launcher = "powershell.exe"
+    if os.name == "nt":
+        windows_root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR") or r"C:\Windows"
+        launcher = subprocess.list2cmdline([str(Path(windows_root) / "System32/WindowsPowerShell/v1.0/powershell.exe")])
+    windows = launcher + " -NoProfile -NonInteractive -EncodedCommand " + encoded
     return posix, windows
 
 
@@ -155,7 +159,7 @@ def install(vault, state, uninstall=False):
     for name in ("AGENTS.md", "CLAUDE.md"):
         path = vault / name
         text = path.read_text(encoding="utf-8") if path.exists() else ""
-        text = re.sub(re.escape(START) + r".*?" + re.escape(END), block, text, flags=re.S) if START in text else text.rstrip() + "\n\n" + block + "\n"
+        text = re.sub(re.escape(START) + r".*?" + re.escape(END), lambda _: block, text, flags=re.S) if START in text else text.rstrip() + "\n\n" + block + "\n"
         add(name, text.encode())
     for name in planned:
         item = manifest["files"].get(name)

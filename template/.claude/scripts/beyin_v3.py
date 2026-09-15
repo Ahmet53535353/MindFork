@@ -90,7 +90,7 @@ class MemoryStore:
         target = (self.vault_root / value).resolve()
         if not target.is_relative_to(self.vault_root) or not target.is_file():
             raise ValueError("source missing or outside vault")
-        return str(Path(value))
+        return Path(value).as_posix()
 
     def _validate(self, record):
         if not isinstance(record, dict):
