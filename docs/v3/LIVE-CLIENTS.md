@@ -35,7 +35,7 @@ For all CLI automation, close stdin explicitly and capture raw output privately.
 
 - Real Claude startup exposed a missing-context bug for ordinary facts without task status. A regression failed before the fix; startup snapshots now include eligible statusless notes/facts and still exclude completed tasks and unknown-status tasks.
 - Antigravity workspace attachment was corrected in the headless recipe; its adapter schema did not require a speculative change.
-- Windows redirected output was checked under a non-UTF-8 encoding. The failure led to portable JSON output and a regression. Native Windows CI remains a separate pending gate.
+- Windows redirected output was checked under a non-UTF-8 encoding. The failure led to portable JSON output and a regression. Native Windows CI subsequently passed; see the separate platform evidence.
 
 ## Boundaries
 

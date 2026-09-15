@@ -21,13 +21,14 @@ V3, mevcut vault içine isteğe bağlı kurulan ortak yerel motordur. Markdown k
 
 Bu küçük küme kaynak bulma, durum, revizyon ve yapılandırılmış bilgiyi ölçer. Motor kelime tabanlı yerel arama kullanır; embedding veya genel doğal dil anlama başarısı iddia edilmez. Holdout ilk koşuda da geçmişti. Gerçek istemci testleri sentetik örneklerle sınırlıdır.
 
+Native CI: Windows, macOS ve Ubuntu üzerinde Python 3.11/3.13 ile **6/6 koşu geçti**. Her koşuda 62 V3 testi ve development/holdout değerlendirmesi çalıştı. [GitHub koşusu](https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466) · [Makine kanıtı](evidence/native-ci.json).
+
 ## Yayın öncesi kalanlar
 
-- Native Windows CI çalıştırması; matris yazılmış olması başarı kanıtı değildir.
 - Codex Desktop için ayrıca soğuk oturum/arayüz doğrulaması. CLI kanıtı Desktop kanıtının yerine geçmez.
 - Eski V2 indeksinin otomatik migration'ı ve eski compiler akışının tam dönüşümü bu opt-in sürümün kapsamı dışındadır. Yeni indeks Markdown kaynaklardan kurulur; eski notlar taşınmaz.
 
-Mem0 için opt-in factory arayüzü bulunur; hazır SDK/servis adaptörü bu sürümde yoktur. V3 kurulumu eski V2 kurulumundan ayrıdır. V3 değişiklikleri henüz GitHub’a gönderilmedi veya PR ile birleştirilmedi.
+Mem0 için opt-in factory arayüzü bulunur; hazır SDK/servis adaptörü bu sürümde yoktur. V3 kurulumu eski V2 kurulumundan ayrıdır. V3 değişiklikleri `codex/v3-foundation` dalına gönderildi. Ana dala birleştirme yapılmadı.
 
 ## Araştırma kaydı
 

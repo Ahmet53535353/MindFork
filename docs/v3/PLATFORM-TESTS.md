@@ -1,5 +1,18 @@
 # V3 source, lifecycle and platform contracts
 
+## Latest native CI result, 16 September 2026
+
+**All six hosted jobs passed** on Windows, macOS and Ubuntu, each with Python 3.11 and 3.13. Every job ran **62 V3 tests** and the frozen development/holdout evaluation. This is real Windows runner execution, including the installed encoded PowerShell hook command under a minimal PATH.
+
+[Successful GitHub run](https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466), tested code commit `89c9f37d6e4e4650edd71b1d52493b4ed84ed6f2`. [Machine evidence and hashes](evidence/native-ci.json).
+
+The first native Windows run failed on path separators in citations, regex replacement of backslashes during reinstall, and PowerShell discovery under a minimal PATH. The implementation now persists forward-slash source references, inserts instruction text literally and resolves built-in PowerShell from the system directory. A reinstall path regression was added; expectations were not relaxed. The failed run is retained in the evidence.
+
+This verifies offline runtime, source, queue, skills and installation behavior on those platforms. Real Codex/Claude/Antigravity model sessions were tested on macOS separately; native CI does not establish a Windows model session or Codex Desktop UI continuity.
+
+The sections below preserve earlier contracts and pre-CI measurements; their pending statuses are historical and superseded by this result.
+
+
 All fixtures are synthetic, all state is in temporary directories outside the temporary vault, and hook/installer subprocesses receive a temporary HOME/USERPROFILE. No model call, remote provider, real user vault or package dependency is required. Existing semantic fixture and expected results remain frozen.
 
 ## Source adapter API, frozen before implementation
@@ -37,7 +50,7 @@ python scripts/evaluate_v3.py
 |---|---|---|
 | Ubuntu | Python 3.11, 3.13 | Linux container Python 3.13.15: 47 legacy + 61 V3 passed with network disabled; distinct from hosted native CI |
 | macOS | Python 3.11, 3.13 | Local Python 3.14.2: 47 legacy + 61 V3 passed after final source freeze |
-| Windows | Python 3.11, 3.13 | Not run natively in this work; no native Windows success claim |
+| Windows | Python 3.11, 3.13 | Native hosted jobs passed, 62 V3 tests plus semantic evaluation on each version |
 
 `.github/workflows/v3.yml` contains the read-only native OS matrix with standard-library-only tests. Authoring the workflow does not run CI. No push or public CI trigger was performed by this test lane. Interpreter/OS simulation is not native Windows evidence. CLI/model sign-in and real companion continuity are outside these offline gates.
 
@@ -79,6 +92,6 @@ The final independent run passed **47/47 existing regressions + 61/61 V3 tests**
 
 The final audit added regression coverage for native Windows launcher inspection, deterministic symlink-denial copy fallback, CLI Unicode JSON under cp1252, preservation of existing UTF-8 settings under a simulated cp1252 file default, and UTF-8 JSON stdin. CLI stdout and installer settings tests reproduced failures before fixes. The stdin fix arrived concurrently and passed its first test run; it is not described as a measured red-to-green result. Encoded launcher inspection decodes UTF-16LE before looking for the target module and still executes the installed command on the actual host.
 
-These encoding and fallback injections are portable simulations, **not native Windows execution**. Windows CI remains pending. No push, public CI trigger, real vault access or model/provider call was performed by this test lane.
+These encoding and fallback injections are portable simulations, **not native Windows execution**. At the time of that earlier offline run, Windows CI was pending; the native result above supersedes it. No push, public CI trigger, real vault access or model/provider call was performed by this test lane.
 
 [Final machine evidence](evidence/offline-final.json) binds source/test hashes, per-suite exit codes and output hashes, image identity, aggregate semantic metrics and the documentation smoke. Earlier counts/hashes in this document are historical checkpoints. Actual hosted client delivery is recorded separately in the live-client report.
