@@ -4,11 +4,23 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.0.0:** Üç işletim sistemi ve iki Python sürümünde 114 test geçti. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
+> **V3.0.1:** Tek mesajlık ajan kurulumu ve kullanıcının seçebildiği Normal, Ekonomik ve Manuel kontrol profilleri eklendi. Yerel paket kapısında 124 test ve 10/10 + 6/6 semantik senaryo geçti. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
 
-## İlk kurulum
+## En kolay kurulum: bir klasör, bir mesaj
 
-1. [V3.0.0 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) aç. **[beyin-v3-3.0.0.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip)** dosyasını indir ve aç. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
+1. Obsidian'da yeni bir vault oluştur veya mevcut vault klasörünü seç.
+2. Bu klasörü Codex, Claude Code veya Antigravity ile aç.
+3. Aşağıdaki mesajı yapıştır:
+
+> https://avenox.lol/beyin.md adresini oku. Bu klasöre ikinci beynimi kur. Mevcut kurulum varsa notlarımı koruyarak güncelle. Gerekli indirme ve kurulum adımlarını sen yap. Sonunda örnek bir bilgiyi kaydedip yeni oturumda geri okuyarak birlikte doğrulayalım.
+
+Ajan resmi kararlı paketi bulur, checksum ile doğrular, geçici alanda açar, kurulumu yapar ve sağlık kontrolünü çalıştırır. Kullanıcı yalnızca istemcinin gösterdiği normal klasör, workspace veya hook güven incelemesini tamamlar.
+
+Görsel anlatım, kopyalanabilir mesaj ve manuel indirme: **[avenox.lol/ikincibeyin](https://avenox.lol/ikincibeyin)**.
+
+## Manuel kurulum
+
+1. [V3.0.1 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.1) aç. **[beyin-v3-3.0.1.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.1/beyin-v3-3.0.1.zip)** dosyasını ve yanındaki SHA-256 dosyasını indir. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
 2. Obsidian'da bir vault oluştur veya mevcut vault klasörünü seç. Notlarını başka yere taşıman gerekmez.
 3. Açtığın paket klasöründe terminal aç ve vault yolunu kendi klasörünle değiştir:
 
@@ -55,6 +67,20 @@ python3 beyin.py doctor
 ```
 
 Windows'ta aynı komutun başında `py -3` kullan. Kurulumda özel runtime yolu seçtiysen kurulu `beyin.py` bunu zaten bilir.
+
+## Tüketim ve kontrol sıklığı
+
+Ajanına **“ekonomik moda geç”**, **“otomatik kontrolleri kapat”** veya **“kontrol aralığını 30 dakika yap”** diyebilirsin. Üç istemci aynı vault tercihini kullanır; güncellemeler tercihini korur.
+
+| Mod | Yerel kontrol | Oturuma eklenen bağlam |
+| --- | --- | --- |
+| Normal (varsayılan) | Her ilgili istemci olayında | Oturum başı ve mesajlarda, en çok 5000 karakter |
+| Ekonomik | Yeni oturumda; sonrasında en az 15 dakika aralıklı | Yalnız oturum başında, en çok 2000 karakter |
+| Manuel | Otomatik kapalı | Otomatik kapalı |
+
+Süre dolunca kendi başına çalışan bir zamanlayıcı kurulmaz; bir sonraki istemci olayı kontrolü başlatır. İstemciler kapalıyken işlem yapılmaz. Yerel Python kontrolleri **model çağırmaz**; otomatik Luna/Sonnet maliyeti yoktur. Ajana yaptırdığın işler ve eklenen bağlam normal istemci tüketimine girer. Ekonomik veya manuel modda gerektiğinde kaynaklar açık `context`/`sync` komutuyla tazelenir.
+
+Tercihler: `python3 beyin.py preferences`. Ekonomik: `preferences --profile economical`. Manuel: `preferences --profile manual`. Aralık: `preferences --interval-minutes 30`. Windows'ta `py -3` kullan. [Ayrıntılar](docs/v3/PREFERENCES.md).
 
 ## Güncelleme
 

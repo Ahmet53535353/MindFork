@@ -56,3 +56,21 @@ Hook bağlamında `Receipt session=...` verilmişse JSON içine `session` alanı
 refs mevcut vault-relative dosyalardır. Aynı gönderimi yeniden denerken aynı event_id ve gövdeyi kullan; farklı sonuç için yeni ID seç. Geçici JSON'u kullanıcı içerik klasörüne dağıtma. Günlük/knowledge otomatik görünümlerini CLI/worker üretir; kaynağını düzenle. Son kaydı ve gerektiğinde `doctor` çıktısını kontrol et; failed/pending/conflict durumunu başarı diye sunma.
 
 Basit soru veya selamlaşma için gereksiz kayıt yazma. Kullanıcının no-memory, no-tools ve dosya sınırları bu akıştan önceliklidir. Kendi skill kurallarını konuşma transkriptinden kendiliğinden değiştirme.
+
+
+## Tüketim ve otomatik kontrol tercihleri
+
+Kullanıcı “ekonomik moda geç”, “otomatik kontrolleri kapat” veya “kontrol aralığını değiştir” dediğinde aşağıdaki ortak CLI'ı kullan. Önce `python3 beyin.py preferences` ile mevcut tercihleri oku; yalnız istenen alanları değiştir, sonucu geri oku. Windows'ta `py -3` kullan. Bu ayarlar Claude, Codex ve Antigravity için ortaktır ve güncellemede korunur.
+
+- Ekonomik mod: `python3 beyin.py preferences --profile economical`
+- Normal mod: `python3 beyin.py preferences --profile normal`
+- Otomatik kontrolleri kapat / manuel kullanım: `python3 beyin.py preferences --profile manual`
+- Aralığı 30 dakika yap: `python3 beyin.py preferences --interval-minutes 30`
+- Otomatik bağlamı kapat, yerel kontroller devam etsin: `python3 beyin.py preferences --context-mode off`
+- Daha az bağlam: `python3 beyin.py preferences --context-chars 2000`
+
+Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 5000 karakter ek bağlam. Ekonomik: yeni oturumda taze kontrol ve en çok 2000 karakter bağlam; sonraki olaylarda kontroller arası en az 15 dakika. Manuel: otomatik iş başlatma ve bağlam kapalı; açık `context`, `sync`, not/görev ve receipt komutları çalışır. Sadece aralığı değiştirmek manuel modu açmaz; kullanıcı kontrolleri yeniden açmayı istiyorsa `--auto-sync on` kullan.
+
+Aralık bir zamanlayıcı değildir: süre dolduktan sonraki istemci olayında kontrol yapılır. Uygulamalar kapalıyken çalışmaz. Seyrek kontrol veya manuel modda bilgi gerektiğinde `context` komutuyla kaynağı tazele; eski oturum bağlamını güncel varsayma. Önceden başlamış iş bitmiş olabilir; kapatma sonraki işleri durdurur.
+
+Bu V3 motoru Luna, Sonnet veya başka bir modele otomatik çağrı yapmaz. Yerel kontrol token tüketmez; ajanın yazdığı sonuçlar ve okuduğu/eklenen bağlam istemcinin kullanımına girer. Karakter sınırı token sayısı veya ücret garantisi değildir. Kullanıcının ayrıca kurduğu 15 dakikalık ajan otomasyonu bu ayarla yönetilmez; onu ayrı incele. İstek olmadan ücretli zamanlayıcı, model runner veya yeni bağımlılık ekleme.

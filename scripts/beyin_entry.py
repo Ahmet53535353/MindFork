@@ -14,6 +14,13 @@ def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
         return 'Islem tamamlanamadi: ' + str(result.get('message', result['error']))
+    if command == 'preferences':
+        prefs = result['preferences']
+        return ('Otomatik kontrol: ' + ('acik' if prefs['auto_sync'] else 'kapali') +
+                '\nKontrol araligi: ' + str(prefs['interval_minutes']) + ' dakika (0 = her olay)' +
+                '\nOtomatik baglam: ' + prefs['context_mode'] +
+                '\nBaglam ust siniri: ' + str(prefs['context_chars']) + ' karakter' +
+                '\nYerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
     if command == 'doctor':
         labels = {'never_seen': 'Henuz gercek istemci oturumu gozlenmedi.',
                   'observed_metadata': 'Oturum olaylari gozleniyor.',

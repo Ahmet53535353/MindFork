@@ -65,6 +65,12 @@ def parser():
     sub.add_parser("sync", help="Reconcile Markdown sources into local state")
     sub.add_parser("skill-sync", help="Reconcile project-local shared skills")
     sub.add_parser("doctor", help="Read local hook health and pending metadata counts")
+    settings = sub.add_parser("preferences", help="Control automatic local checks and injected context")
+    settings.add_argument("--profile", choices=("normal", "economical", "manual"))
+    settings.add_argument("--auto-sync", choices=("on", "off"))
+    settings.add_argument("--interval-minutes", type=int)
+    settings.add_argument("--context-mode", choices=("turn", "session", "off"))
+    settings.add_argument("--context-chars", type=int)
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
     skill.add_argument("--source", type=Path, required=True)
     skill.add_argument("--name")
@@ -110,6 +116,15 @@ def main(argv=None):
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
+        elif args.command == "preferences":
+            load_sync()
+            import beyin_v3_preferences as preferences
+            changes = {key: getattr(args, key) for key in ('interval_minutes', 'context_mode', 'context_chars') if getattr(args, key) is not None}
+            if args.auto_sync is not None:
+                changes['auto_sync'] = args.auto_sync == 'on'
+            settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
+            result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
+                      'model_calls': False, 'timer_installed': False}
         elif args.command == "doctor":
             result = {"pending_events": len(list((state / "hook-queue").glob("*.json"))),
                       "acknowledged_events": len(list((state / "hook-done").glob("*.json")))}
@@ -123,6 +138,10 @@ def main(argv=None):
                     seen[event['harness']].add(event.get('event', 'unknown'))
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
+            load_sync()
+            import beyin_v3_preferences as preferences
+            result['preferences'] = preferences.read(vault)
+            result['automatic_model_calls'] = False
             health = result['hook-health.json'] or {}
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook-error.json'] else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":

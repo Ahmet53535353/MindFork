@@ -6,3 +6,6 @@ tmp-brief/
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Yerel release çıktıları GitHub Release varlığı olarak yayınlanır
+release/

@@ -1,0 +1,31 @@
+{
+  "status": "release_candidate",
+  "version": "3.0.1",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests -p 'v3_*test.py'",
+    "passed": 124,
+    "exit_code": 0
+  },
+  "semantic": {
+    "passed": true,
+    "development": 10,
+    "holdout": 6
+  },
+  "platform": "macOS local Python; Windows/Linux CI required on pushed commit before release",
+  "files": {
+    "scripts/beyin_v3.py": "ac716e400ed2c58a42a767440e9321d209265e71a048ef00f131c58b50e52639",
+    "scripts/beyin_entry.py": "1e3c281b6ce2f283781d0f4892099463dd19330f88c6e5e81bd715bfab822e14",
+    "template/.claude/scripts/beyin_v3_hook.py": "5f30cc33d0c72d2c36777170c7ee1c7caa7bd672edc683f52a4b2e39b38e0a7c",
+    "template/.claude/scripts/beyin_v3_preferences.py": "b26cfbe8c8e1802e870e1212859a1e115d10fb49b9fe46bd361e16a390dadbcd",
+    "template/.agents/skills/beyin/SKILL.md": "7e13537cebaa001d7eb8e2b814b400e1ec6d898df3194bac789a12a2f1aa877f",
+    "tests/v3_preferences_test.py": "bf976a731e169f005b21b2ceef22e90f6b12120d2f7a7d95ba8be54a1efc5a08",
+    "tests/v3_public_entry_test.py": "a563d2b7837be72d687f6d1c0623155d9408f6c286e4ed769950a59b89294389",
+    "beyin.md": "c9945316de392089d3466cb29968321690375c589d390e2ee369274de56ecc3d"
+  },
+  "package": {
+    "name": "beyin-v3-3.0.1.zip",
+    "sha256": "7c1c1d420196191efa0ac5ba48623dc846627d0f6725238d4a7eee3565ba85e6",
+    "clean_install": "passed"
+  },
+  "published": false
+}
