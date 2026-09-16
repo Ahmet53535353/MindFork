@@ -34,13 +34,19 @@ class ContextRefreshTest(unittest.TestCase):
         self.assertIn('CHANGED',output['records'][0]['text'])
         self.assertNotIn('Initial',result.stdout)
 
-    def test_context_refuses_degraded_sync_without_stale_result(self):
+    def test_context_serves_fresh_healthy_subset_with_explicit_degraded_warning(self):
+        healthy = self.vault/'notes/healthy.md'
+        healthy.write_text('Current healthy nebula calibration note.\n', encoding='utf-8')
         self.source.write_text('---\nunsupported:\n  nested: metadata\n---\nChanged source',encoding='utf-8')
-        result=self.run_cli('context','synthetic calibration')
-        self.assertNotEqual(result.returncode,0)
-        self.assertEqual(result.stdout,'')
-        self.assertIn('sync',result.stderr.lower())
-        self.assertIn('degraded',result.stderr.lower())
+        result=self.run_cli('context','nebula calibration')
+        self.assertEqual(result.returncode,0,result.stderr)
+        output=json.loads(result.stdout)
+        self.assertTrue(output['partial'])
+        self.assertEqual(output['source_sync']['status'],'degraded')
+        self.assertEqual(output['source_sync']['warning_count'],1)
+        self.assertEqual(output['source_sync']['warnings'][0]['source'],'notes/decision.md')
+        self.assertIn('healthy.md',{record['source'].split('/')[-1] for record in output['records']})
+        self.assertNotIn('Initial',result.stdout)
 
     def test_context_refuses_conflict_without_stale_result(self):
         (self.vault/'notes/duplicate.md').write_bytes(self.source.read_bytes())

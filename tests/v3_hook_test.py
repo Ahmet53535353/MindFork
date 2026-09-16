@@ -112,6 +112,19 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(repeated['processed'], 0)
         self.assertEqual(repeated['pending'], 0)
 
+    def test_degraded_sync_acknowledges_event_and_keeps_explicit_health_warning(self):
+        self.seed()
+        broken = self.vault / 'notes/broken.md'
+        broken.write_text('---\nunsupported:\n  nested: metadata\n---\nExcluded synthetic note.\n', encoding='utf-8')
+        self.hook.enqueue_event(self.vault, self.state, self.payload, 'codex')
+        result = self.hook.drain_queue(self.vault, self.state)
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['failed'], 0)
+        self.assertEqual(result['pending'], 0)
+        health = json.loads((self.state / 'hook-health.json').read_text(encoding='utf-8'))
+        self.assertEqual(health['sync']['status'], 'degraded')
+        self.assertEqual(health['sync']['warnings'][0]['source'], 'notes/broken.md')
+
     def test_queue_crash_after_sync_before_ack_retries_without_extra_revision(self):
         engine = self.seed()
         source = self.vault / 'notes/task.md'

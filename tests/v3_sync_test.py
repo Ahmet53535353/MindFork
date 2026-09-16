@@ -236,6 +236,22 @@ class SourceSyncTest(unittest.TestCase):
                     'title': 'Karar: V3', 'note': "it'quote"}
         self.assertEqual(self.module.parse('---\n' + header + '\n---\n' + body), (expected, body))
 
+    def test_unicode_property_keys_may_start_with_localized_letters(self):
+        header = ('özet: karar\nşirket: Avenox\nüberblick: bereit\n'
+                  'étiquette: memoire\nключ: значение\n_internal: true')
+        metadata, body = self.module.parse('---\n' + header + '\n---\nLocalized keys.\n')
+        self.assertEqual(metadata['özet'], 'karar')
+        self.assertEqual(metadata['şirket'], 'Avenox')
+        self.assertEqual(metadata['überblick'], 'bereit')
+        self.assertEqual(metadata['étiquette'], 'memoire')
+        self.assertEqual(metadata['ключ'], 'значение')
+        self.assertTrue(metadata['_internal'])
+        self.assertEqual(body, 'Localized keys.\n')
+        for key in ('1özet', '-özet', '.özet'):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    self.module.parse(f'---\n{key}: test\n---\nBody\n')
+
     def test_canonical_json_still_preserves_complex_metadata(self):
         metadata = {'id': 'json-note', 'project': 'nebula', 'title': None,
                     'facts': {'nested': {'values': [1, True, None]}}, 'tags': [['a'], {'b': 'c'}]}

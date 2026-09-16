@@ -106,7 +106,9 @@ def parse(text):
         index += 1
         if not line.strip() or line.lstrip().startswith('#'):
             continue
-        match = re.fullmatch(r'([A-Za-z_][\w-]*):[ \t]*(.*)', line)
+        # Python's Unicode-aware word class lets localized Obsidian property
+        # names start with a letter while still rejecting digits/punctuation.
+        match = re.fullmatch(r'([^\W\d][\w-]*):[ \t]*(.*)', line)
         if not match or match[1] in metadata:
             raise ValueError('unsupported YAML metadata; use JSON frontmatter')
         key, value = match.groups()

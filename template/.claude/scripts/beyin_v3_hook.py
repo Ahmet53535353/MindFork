@@ -74,7 +74,10 @@ def drain_queue(vault, state):
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         return {"processed": 0, "failed": len(pending), "pending": len(pending)}
     atomic(state / "hook-health.json", {"at": time.time(), "sync": result})
-    if result.get("status") in ("ok", "succeeded", "synced") and not result.get("conflicts"):
+    # A degraded scan is complete but excluded one or more invalid sources. The
+    # fresh healthy subset may be injected with an explicit warning. Conflicts
+    # still block acknowledgement because ownership is ambiguous.
+    if result.get("status") in ("ok", "succeeded", "synced", "degraded") and not result.get("conflicts"):
         (state / "hook-error.json").unlink(missing_ok=True)
         processed = 0
         for path in pending:
@@ -182,7 +185,7 @@ def main():
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if locals().get("event") in ("SessionStart", "UserPromptSubmit"):
-            print(json.dumps(output_context(args.harness, event, "V3 source sync failed or degraded; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))
+            print(json.dumps(output_context(args.harness, event, "V3 source sync failed or conflicted; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))
         else:
             print("{}")
 

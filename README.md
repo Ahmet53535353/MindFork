@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.0.1:** Tek mesajlık ajan kurulumu ve kullanıcının seçebildiği Normal, Ekonomik ve Manuel kontrol profilleri eklendi. Yerel paket kapısında 124 test ve 10/10 + 6/6 semantik senaryo geçti. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
+> **V3.0.1:** Tek mesajlık ajan kurulumu ve kullanıcının seçebildiği Normal, Ekonomik ve Manuel kontrol profilleri eklendi. Yerel paket kapısında 133 test ve 10/10 + 6/6 semantik senaryo geçti. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 

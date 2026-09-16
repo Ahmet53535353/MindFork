@@ -170,10 +170,19 @@ def main(argv=None):
             if not isinstance(params["query"], str) or not params["query"].strip():
                 raise ValueError("context requires a nonempty query")
             refreshed = sync.sync()
-            if refreshed.get('status') != 'succeeded':
+            if refreshed.get('status') == 'conflict':
                 raise RuntimeError('Context blocked: source sync '+str(refreshed.get('status', 'failed'))+'. Run sync with the same vault/state to inspect and reconcile source issues, then retry context.')
             # Harness selection deliberately does not change retrieval semantics.
             result = sync.store.context_for(args.harness, **params)
+            if refreshed.get('status') == 'degraded':
+                warnings = refreshed.get('warnings', [])
+                result['partial'] = True
+                result['source_sync'] = {
+                    'status': 'degraded',
+                    'warning_count': len(warnings),
+                    'warnings': warnings[:20],
+                    'truncated': len(warnings) > 20,
+                }
         elif args.command == "receipt":
             payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],
