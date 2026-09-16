@@ -316,13 +316,20 @@ class SourceSyncTest(unittest.TestCase):
                 self.assertFalse(output['abstained'])
 
     def test_block_list_task_update_writes_json_and_preserves_body(self):
-        body = '# Nebula calibration\n\n- Keep exact prose.\n  Unicode: ölçüm 🔭\n'
+        for label, newline in (('LF', '\n'), ('CRLF', '\r\n')):
+            with self.subTest(newline=label):
+                self._assert_block_list_task_update(newline)
+
+    def _assert_block_list_task_update(self, newline):
+        body = '# Nebula calibration\n\n- Keep exact prose.\n  Unicode: ölçüm 🔭\n'.replace('\n', newline)
         header = ('id: yaml-task\nkind: task\nrevision: 1\nproject: nebula\nstatus: active\n'
                   'tags:\n  - a\n  - "b c"\naliases: ["Foo, Bar", \'baz\']\ntitle:')
         source = self.vault / 'task.md'
-        source.write_text('---\n' + header + '\n---\n' + body, encoding='utf-8')
+        # Write exact bytes so the newline style is the one under test on every platform.
+        source.write_bytes(('---\n' + header + '\n---\n').replace('\n', newline).encode('utf-8') + body.encode('utf-8'))
         self.assertEqual(self.engine.sync()['status'], 'succeeded')
-        original, _ = self.module.parse(source.read_text(encoding='utf-8'))
+        original, parsed_body = self.module.parse(source.read_bytes().decode('utf-8'))
+        self.assertEqual(parsed_body, body)
         before = source.read_bytes()
         for field in ('status', 'visibility'):
             for value in (None, ['waiting']):
@@ -332,12 +339,14 @@ class SourceSyncTest(unittest.TestCase):
                     self.assertEqual(source.read_bytes(), before)
         updated = self.engine.update_task('yaml-task', 1, {'status': 'waiting'})
         expected = dict(original, status='waiting', revision=2)
-        rendered = source.read_text(encoding='utf-8')
+        rendered = source.read_bytes().decode('utf-8')
         self.assertEqual(json.loads(rendered.split('---', 2)[1]), expected)
         self.assertEqual(source.read_bytes(), self.module.render(expected, body).encode('utf-8'))
         self.assertEqual(self.module.parse(rendered), (expected, body))
         for key, value in expected.items():
             self.assertEqual(updated[key], value)
+        source.unlink()
+        self.engine.sync()
 
     def test_receipt_has_immutable_iso_created_at(self):
         self.write()
