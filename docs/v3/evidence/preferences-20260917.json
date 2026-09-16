@@ -4,14 +4,16 @@
   "tests": {
     "command": "python3 -m unittest discover -s tests -p 'v3_*test.py'",
     "passed": 133,
-    "exit_code": 0
+    "exit_code": 0,
+    "full_suite_passed": 180,
+    "v3_suite_passed": 133
   },
   "semantic": {
     "passed": true,
     "development": 10,
     "holdout": 6
   },
-  "platform": "macOS local Python; Windows/Linux CI required on pushed commit before release",
+  "platform": "macOS local passed; Windows/Linux/macOS CI rerun required on portability-fix commit before release",
   "files": {
     "scripts/beyin_v3.py": "6eacc3a42bc3af807222eaed474e5bc2027fda5c6d7e10340d3a2f6000c97e51",
     "scripts/beyin_entry.py": "1e3c281b6ce2f283781d0f4892099463dd19330f88c6e5e81bd715bfab822e14",
@@ -22,8 +24,8 @@
     "tests/v3_preferences_test.py": "bf976a731e169f005b21b2ceef22e90f6b12120d2f7a7d95ba8be54a1efc5a08",
     "tests/v3_public_entry_test.py": "a563d2b7837be72d687f6d1c0623155d9408f6c286e4ed769950a59b89294389",
     "tests/v3_sync_test.py": "0256870b844617e860ba7e7dbb231c9e6070380141794f6d3593e9d64b0bfa3c",
-    "tests/v3_cli_context_test.py": "1364738d1b6dae2b0f18dafe7d7ea574173d8959b1984ac9b680cf94bbabdb5f",
-    "tests/v3_hook_test.py": "31c4060876379336cf88acf2eb0135eec846f5ec757ed3a29a0d9582bc398a65",
+    "tests/v3_cli_context_test.py": "00b4a080af89e1bc33904b95fc060bdc6bc74102beacc5de0e5adefef77d5ca6",
+    "tests/v3_hook_test.py": "01f62dd9bcbaca3b6dd5447e4f5c429c16aba36d12c965d6905208d72848b71b",
     "beyin.md": "c9945316de392089d3466cb29968321690375c589d390e2ee369274de56ecc3d"
   },
   "package": {

@@ -123,7 +123,10 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(result['pending'], 0)
         health = json.loads((self.state / 'hook-health.json').read_text(encoding='utf-8'))
         self.assertEqual(health['sync']['status'], 'degraded')
-        self.assertEqual(health['sync']['warnings'][0]['source'], 'notes/broken.md')
+        self.assertEqual(
+            Path(health['sync']['warnings'][0]['source']).parts,
+            ('notes', 'broken.md'),
+        )
 
     def test_queue_crash_after_sync_before_ack_retries_without_extra_revision(self):
         engine = self.seed()

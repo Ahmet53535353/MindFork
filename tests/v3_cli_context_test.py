@@ -44,7 +44,10 @@ class ContextRefreshTest(unittest.TestCase):
         self.assertTrue(output['partial'])
         self.assertEqual(output['source_sync']['status'],'degraded')
         self.assertEqual(output['source_sync']['warning_count'],1)
-        self.assertEqual(output['source_sync']['warnings'][0]['source'],'notes/decision.md')
+        self.assertEqual(
+            Path(output['source_sync']['warnings'][0]['source']).parts,
+            ('notes', 'decision.md'),
+        )
         self.assertIn('healthy.md',{record['source'].split('/')[-1] for record in output['records']})
         self.assertNotIn('Initial',result.stdout)
 
