@@ -25,7 +25,16 @@ def build(output, version='3.0.0'):
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('manifest.json', json.dumps(manifest, sort_keys=True, indent=2) + '\n')
         for name, data in sorted(files.items()): archive.writestr(name, data)
-    return {'status': 'built', 'version': version, 'files': len(files), 'sha256': hashlib.sha256(output.read_bytes()).hexdigest()}
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    checksum = output.with_name(output.name + '.sha256')
+    checksum.write_text(f'{digest}  {output.name}\n', encoding='utf-8')
+    return {
+        'status': 'built',
+        'version': version,
+        'files': len(files),
+        'sha256': digest,
+        'checksum': str(checksum),
+    }
 
 
 if __name__ == '__main__':

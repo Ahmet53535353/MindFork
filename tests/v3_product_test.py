@@ -1,4 +1,5 @@
 """Tests-first installation acceptance for the user-facing V3 product package."""
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -87,6 +88,13 @@ class ProductInstallationTest(unittest.TestCase):
                             ['--vault', self.vault, '--state', self.state], extracted, self.env)
         self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
         self.assertEqual((self.vault / '.beyin-version').read_text().strip(), '3.0.1')
+
+    def test_release_builder_refreshes_matching_checksum(self):
+        from v3_package_helpers import build_package
+        package = build_package(self.base / 'release.zip', '3.0.1', self.env)
+        checksum = package.with_name(package.name + '.sha256')
+        expected = hashlib.sha256(package.read_bytes()).hexdigest()
+        self.assertEqual(checksum.read_text(encoding='utf-8'), f'{expected}  {package.name}\n')
 
     def test_extracted_release_installer_retires_stock_legacy_workers(self):
         import zipfile
