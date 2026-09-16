@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -183,6 +184,160 @@ class SourceSyncTest(unittest.TestCase):
         self.assertTrue(report['warnings'])
         self.assertEqual(report['status'], 'degraded')
         self.assertEqual(self.records(), [])
+
+    def test_yaml_scalar_lists_and_empty_values_round_trip(self):
+        cases = [
+            ('tags: [ikinci-beyin, obsidian]', {'tags': ['ikinci-beyin', 'obsidian']}),
+            ('tags: []', {'tags': []}),
+            ('tags: [  ]', {'tags': []}),
+            ('aliases: ["Foo, Bar", \'baz\', \'it\'\'s fine\']',
+             {'aliases': ['Foo, Bar', 'baz', "it's fine"]}),
+            (r'aliases: ["quote: \"x\"", "back\\slash", "line\nfeed", "\u00e7"]',
+             {'aliases': ['quote: "x"', 'back\\slash', 'line\nfeed', 'ç']}),
+            ('tags: [1, true, null, word]', {'tags': ['1', 'true', 'null', 'word']}),
+            ('tags: [1, true, null]', {'tags': [1, True, None]}),
+            ('tags:\n  - a\n  - "b c"', {'tags': ['a', 'b c']}),
+            ('aliases:\n    - "Foo, Bar"\n    - \'it\'\'s fine\'\n    - plain, comma',
+             {'aliases': ['Foo, Bar', "it's fine", 'plain, comma']}),
+            (r'aliases:' + '\n  - "line\\nfeed"\n  - "\\u00e7"',
+             {'aliases': ['line\nfeed', 'ç']}),
+            ('tags:\n  - 1\n  - true\n  - null', {'tags': ['1', 'true', 'null']}),
+            ('tags:\n  - a\naliases:\n    - b\ntitle:',
+             {'tags': ['a'], 'aliases': ['b'], 'title': None}),
+            ('title:\naliases: []', {'title': None, 'aliases': []}),
+            ('title:   ', {'title': None}),
+            ('tags:\naliases:', {'tags': None, 'aliases': None}),
+            ('aliases: ["", \'\', " # literal", "&literal", "[literal]"]',
+             {'aliases': ['', '', ' # literal', '&literal', '[literal]']}),
+            ('tags:\n  - ""\n  - \' # literal\'\n  - "!literal"',
+             {'tags': ['', ' # literal', '!literal']}),
+            ('title: "Example"\nscore: 1\nenabled: true\nempty: null',
+             {'title': 'Example', 'score': 1, 'enabled': True, 'empty': None}),
+        ]
+        source = self.vault / 'lists.md'
+        body = 'Nebula calibration YAML fixture.\n'
+        for header, expected in cases:
+            with self.subTest(header=header):
+                metadata = dict(expected, id='yaml-note', project='nebula')
+                source.write_text('---\nid: yaml-note\nproject: nebula\n' + header + '\n---\n' + body, encoding='utf-8')
+                self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'succeeded', report)
+                record = self.records()[0]
+                for key, value in expected.items():
+                    self.assertEqual(record[key], value)
+                self.assertEqual(self.module.parse(self.module.render(metadata, body)), (metadata, body))
+
+    def test_inline_json_and_plain_values_keep_existing_behaviour(self):
+        body = 'Nebula calibration inline JSON fixture.\n'
+        header = ('id: inline-json\nfacts: {"nested": [1, true]}\ntags: [["a"], {"b": "c"}]\n'
+                  "title: Karar: V3\nnote: 'it'quote'")
+        expected = {'id': 'inline-json', 'facts': {'nested': [1, True]}, 'tags': [['a'], {'b': 'c'}],
+                    'title': 'Karar: V3', 'note': "it'quote"}
+        self.assertEqual(self.module.parse('---\n' + header + '\n---\n' + body), (expected, body))
+
+    def test_canonical_json_still_preserves_complex_metadata(self):
+        metadata = {'id': 'json-note', 'project': 'nebula', 'title': None,
+                    'facts': {'nested': {'values': [1, True, None]}}, 'tags': [['a'], {'b': 'c'}]}
+        body = 'Nebula calibration canonical JSON fixture.\n'
+        source = self.vault / 'canonical.md'
+        source.write_text(self.module.render(metadata, body), encoding='utf-8')
+        self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        record = self.records()[0]
+        for key, value in metadata.items():
+            self.assertEqual(record[key], value)
+
+    def test_unsupported_yaml_forms_warn_and_exclude_source(self):
+        headers = [
+            'field:\n  nested: value', 'field: {nested: value}', 'field: [a, [b]]',
+            'field:\n  - [nested]', 'field:\n  - {nested: value}',
+            'field:\n  - - nested', 'field:\n  - nested: value',
+            'field:\n  - a\n    - b', 'field:\n    - a\n  - b',
+            'field: |\n  multiline', 'field: >\n  folded', 'field: [a,\n  b]',
+            'field:\n  - |\n    multiline', 'field:\n  - >\n    folded',
+            'field: &anchor value', 'field: *alias', 'field: !tag value',
+            'field: [a, &anchor b]', 'field: [*alias]', 'field: [!tag value]',
+            'field:\n  - &anchor a', 'field:\n  - *alias', 'field:\n  - !tag a',
+            'field: [a # comment, b]', 'field:\n  - a # comment',
+            'field: [# comment]', 'field: [a\t# comment]',
+            'field: [a]\nfield: [b]', 'field:\nfield: value',
+            'field:\n\t- a', 'field:\n \t- a', 'field:\n  - a\n\t- b',
+            '  field: value', '\tfield: value', 'field:\n- a',
+            'field:\n  - ', 'field:\n  - a\n  continuation',
+            'field: [a,,b]', 'field: [a,]', 'field: [a', 'field: [a] trailing',
+            'field: ["a" trailing]', "field: ['unclosed]", 'field: ["unclosed]',
+            r'field: ["bad\q"]', "field: ['bad'quote']",
+            'field: [a: b]', 'field: [a:]', 'field: [? a]', 'field: [- a]',
+        ]
+        source = self.vault / 'unsupported.md'
+        for header in headers:
+            with self.subTest(header=header):
+                source.write_text('---\nid: unsupported\nproject: nebula\n' + header +
+                                  '\n---\nNebula calibration rejected fixture.\n', encoding='utf-8')
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'degraded', report)
+                self.assertEqual(report['indexed'], 0)
+                self.assertEqual([w['source'] for w in report['warnings']], ['unsupported.md'])
+                self.assertEqual(self.records(), [])
+
+    def test_yaml_null_and_list_values_respect_record_validation(self):
+        source = self.vault / 'invalid.md'
+        for field in ('id', 'kind', 'status', 'project', 'updated_at', 'revision', 'visibility', 'facts', 'supersedes'):
+            for value in ('', '[public, internal]', '\n  - public\n  - internal'):
+                # Supersedes explicitly accepts a sequence of record IDs.
+                if field == 'supersedes' and value:
+                    continue
+                with self.subTest(field=field, value=value):
+                    source.write_text('---\n' + field + ': ' + value +
+                                      '\n---\nNebula calibration invalid metadata.\n', encoding='utf-8')
+                    report = self.engine.sync()
+                    self.assertEqual(report['status'], 'degraded', report)
+                    self.assertEqual(report['indexed'], 0)
+                    self.assertEqual(len(report['warnings']), 1)
+                    self.assertEqual(self.engine.store.snapshot_context()['records'], [])
+
+    def test_block_list_vault_sync_and_context_cli_succeed(self):
+        (self.vault / 'plain.md').write_text('Nebula calibration plain note.\n', encoding='utf-8')
+        (self.vault / 'flow.md').write_text('---\ntags: [nebula, calibration]\n---\nNebula calibration flow note.\n', encoding='utf-8')
+        (self.vault / 'block.md').write_text('---\ntags:\n  - nebula\n  - "calibration"\ntitle:\n---\nNebula calibration block note.\n', encoding='utf-8')
+        for command in (('sync',), ('context', 'Nebula calibration')):
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'),
+                                     '--vault', str(self.vault), '--state', str(self.state), *command],
+                                    capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout)
+            if command[0] == 'sync':
+                self.assertEqual(output['status'], 'succeeded')
+                self.assertEqual(output['indexed'], 3)
+                self.assertEqual(output['warnings'], [])
+            else:
+                self.assertEqual({record['source'] for record in output['records']}, {'plain.md', 'flow.md', 'block.md'})
+                self.assertFalse(output['abstained'])
+
+    def test_block_list_task_update_writes_json_and_preserves_body(self):
+        body = '# Nebula calibration\n\n- Keep exact prose.\n  Unicode: ölçüm 🔭\n'
+        header = ('id: yaml-task\nkind: task\nrevision: 1\nproject: nebula\nstatus: active\n'
+                  'tags:\n  - a\n  - "b c"\naliases: ["Foo, Bar", \'baz\']\ntitle:')
+        source = self.vault / 'task.md'
+        source.write_text('---\n' + header + '\n---\n' + body, encoding='utf-8')
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        original, _ = self.module.parse(source.read_text(encoding='utf-8'))
+        before = source.read_bytes()
+        for field in ('status', 'visibility'):
+            for value in (None, ['waiting']):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(ValueError):
+                        self.engine.update_task('yaml-task', 1, {field: value})
+                    self.assertEqual(source.read_bytes(), before)
+        updated = self.engine.update_task('yaml-task', 1, {'status': 'waiting'})
+        expected = dict(original, status='waiting', revision=2)
+        rendered = source.read_text(encoding='utf-8')
+        self.assertEqual(json.loads(rendered.split('---', 2)[1]), expected)
+        self.assertEqual(source.read_bytes(), self.module.render(expected, body).encode('utf-8'))
+        self.assertEqual(self.module.parse(rendered), (expected, body))
+        for key, value in expected.items():
+            self.assertEqual(updated[key], value)
 
     def test_receipt_has_immutable_iso_created_at(self):
         self.write()
