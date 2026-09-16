@@ -47,8 +47,44 @@ def atomic(path, text):
             os.unlink(name)
 
 
+def _yaml_scalar(value):
+    """Decode a bounded YAML string; plain list items are never coerced."""
+    value = value.strip()
+    if value.startswith('"'):
+        result = json.loads(value)
+        if isinstance(result, str):
+            return result
+    elif re.fullmatch(r"'(?:[^']|'')*'", value):
+        return value[1:-1].replace("''", "'")
+    elif (value and value[0] not in '|>&*!#[]{}"\'`@%'
+          and not re.match(r'[-?:](?:\s|$)', value)
+          and not re.search(r':(?:\s|$)|\s#', value)):
+        return value
+    raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+
+
+def _yaml_sequence(value):
+    if not value.endswith(']'):
+        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    remaining, items = value[1:-1].strip(), []
+    while remaining:
+        match = re.match(r'''"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,]+''', remaining)
+        if not match:
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        item = match[0].strip()
+        if item[0] not in '"\'' and any(char in item for char in '[]{}'):
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        items.append(_yaml_scalar(item))
+        remaining = remaining[match.end():].strip()
+        if remaining:
+            if not remaining.startswith(',') or not remaining[1:].strip():
+                raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+            remaining = remaining[1:].strip()
+    return items
+
+
 def parse(text):
-    """JSON frontmatter or deliberately bounded flat scalar YAML."""
+    """JSON frontmatter or deliberately bounded flat scalar/list YAML."""
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != '---':
         return {}, text
@@ -63,13 +99,29 @@ def parse(text):
             raise ValueError('frontmatter must be an object')
         return metadata, body
     metadata = {}
-    for line in header.splitlines():
+    header_lines = header.splitlines()
+    index = 0
+    while index < len(header_lines):
+        line = header_lines[index]
+        index += 1
         if not line.strip() or line.lstrip().startswith('#'):
             continue
         match = re.fullmatch(r'([A-Za-z_][\w-]*):[ \t]*(.*)', line)
-        if not match or not match[2] or match[1] in metadata:
+        if not match or match[1] in metadata:
             raise ValueError('unsupported YAML metadata; use JSON frontmatter')
         key, value = match.groups()
+        if not value.strip():
+            # Obsidian writes empty properties as `key:` and lists as indented `- item` blocks.
+            items, indent = [], None
+            while index < len(header_lines) and header_lines[index].startswith((' ', '\t')):
+                item = re.fullmatch(r'( +)-[ ]+(.+)', header_lines[index])
+                if not item or (indent is not None and item[1] != indent):
+                    raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                indent = item[1]
+                items.append(_yaml_scalar(item[2]))
+                index += 1
+            metadata[key] = items if items else None
+            continue
         if value[0] in '|>&*!':
             raise ValueError('unsupported YAML metadata; use JSON frontmatter')
         try:
@@ -77,7 +129,9 @@ def parse(text):
         except json.JSONDecodeError:
             if value.startswith("'") and value.endswith("'"):
                 metadata[key] = value[1:-1].replace("''", "'")
-            elif value[0] in '[{"\'' or ' #' in value:
+            elif value.startswith('['):
+                metadata[key] = _yaml_sequence(value.rstrip())
+            elif value[0] in '{"\'' or ' #' in value:
                 raise ValueError('unsupported YAML metadata; use JSON frontmatter')
             else:
                 metadata[key] = value
