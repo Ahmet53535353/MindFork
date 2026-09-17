@@ -182,7 +182,7 @@ class CompanionTest(unittest.TestCase):
     def test_knowledge_map_is_available_with_companion_sources(self):
         self.seed()
         knowledge = self.vault / 'knowledge'; knowledge.mkdir()
-        (knowledge / 'index.md').write_text('# Bilgi haritası\nCONCEPT_LINK_CANARY [[concepts/deney]]')
+        (knowledge / 'index.md').write_text('# Bilgi haritası\nCONCEPT_LINK_CANARY [[concepts/deney]]', encoding='utf-8')
         self.sync()
         self.assertIn('CONCEPT_LINK_CANARY', self.hook())
 
