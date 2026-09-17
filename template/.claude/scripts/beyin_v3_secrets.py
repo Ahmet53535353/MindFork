@@ -1,6 +1,7 @@
 """Opt-in local secret redaction for user-authored V3 write commands."""
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -63,7 +64,7 @@ def record(state, count):
     path = state / 'secret-filter.sqlite3'
     if path.is_symlink():
         raise ValueError('secret filter health database must not be a symlink')
-    with sqlite3.connect(path, timeout=10) as db:
+    with closing(sqlite3.connect(path, timeout=10)) as db, db:
         db.execute('CREATE TABLE IF NOT EXISTS health (id INTEGER PRIMARY KEY CHECK(id=1), total INTEGER NOT NULL, last_count INTEGER NOT NULL, last_at TEXT)')
         db.execute('BEGIN IMMEDIATE')
         row = db.execute('SELECT total FROM health WHERE id=1').fetchone()
@@ -83,7 +84,7 @@ def health(state):
         return {'total': 0, 'last_count': 0, 'last_at': None}
     if path.is_symlink() or not path.is_file():
         raise ValueError('secret filter health database must be a regular file')
-    with sqlite3.connect(path, timeout=2) as db:
+    with closing(sqlite3.connect(path, timeout=2)) as db:
         row = db.execute('SELECT total,last_count,last_at FROM health WHERE id=1').fetchone()
     return ({'total': row[0], 'last_count': row[1], 'last_at': row[2]}
             if row else {'total': 0, 'last_count': 0, 'last_at': None})
