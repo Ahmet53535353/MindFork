@@ -58,6 +58,22 @@ shared plugin directory on a multi-vault machine would use. The installer never 
 turn; the plugin uses nothing else. `on_session_end` is a *turn* outcome in Hermes, not a chat
 close, so it is deliberately not bound.
 
+### Unattended sessions
+
+Hermes passes `platform` to `pre_llm_call`. Sessions on platforms nobody sits in front of
+(`cron`, `telegram`, `discord`, `slack`, `whatsapp`, `signal`, `matrix`, `email`, `sms`,
+`webhook`; see `UNATTENDED_PLATFORMS`) still receive context, but their finalize does **not**
+queue `SessionEnd`. Those sessions never submit receipts, so counting them as checkpoints would
+make every later interactive start warn about "missing receipts". The platform is remembered
+from the first turn because Hermes reports a generic value at finalize. Unknown or absent
+platforms are tracked normally.
+
+### Receipt reminder
+
+Every `REMINDER_EVERY` (15) user turns of an interactive session the plugin appends a one-line
+`[Hafıza]` reminder to write a receipt — the same cadence the V2 Hermes adapter used. It is
+plain text inside the injected context, not an instruction the adapter enforces.
+
 Retrieval semantics are identical to the other harnesses (`tests/v3_hermes_test.py` asserts the
 Claude and Hermes outputs for the same query are byte-equal). Preferences (`beyin.py preferences`)
 apply unchanged: `context_mode`, `context_chars`, `interval_minutes` and `auto_sync` all govern the

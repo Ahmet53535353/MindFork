@@ -169,6 +169,35 @@ class HermesHarnessTest(unittest.TestCase):
         self.assertEqual(payload['hook_event_name'], 'UserPromptSubmit', 'Unknown first-turn flag must not claim SessionStart')
         self.assertEqual(payload['prompt'], '', 'Non-string user input is forwarded as an empty prompt')
 
+    def test_finalize_skips_receipt_tracking_on_unattended_platforms(self):
+        # Cron and chat-gateway sessions never write receipts; queuing SessionEnd for them
+        # would flag a "missing receipt" on every later Desktop start.
+        hooks = self.module.make_hooks(self.vault, self.state)
+        with patch.object(self.module, 'run_hook', return_value='') as run:
+            hooks['pre_llm_call'](session_id='tg-1', turn_id='1', user_message='selam', is_first_turn=True, platform='telegram')
+            hooks['on_session_finalize'](session_id='tg-1', platform='gateway')
+            hooks['pre_llm_call'](session_id='cli-1', turn_id='1', user_message='selam', is_first_turn=True, platform='cli')
+            hooks['on_session_finalize'](session_id='cli-1', platform='gateway')
+            hooks['on_session_finalize'](session_id='never-seen')
+        events = [(c.args[2]['session_id'], c.args[2]['hook_event_name']) for c in run.call_args_list]
+        self.assertNotIn(('tg-1', 'SessionEnd'), events, 'Telegram session must not be receipt-tracked')
+        self.assertIn(('cli-1', 'SessionEnd'), events, 'Interactive session keeps receipt tracking')
+        self.assertIn(('never-seen', 'SessionEnd'), events, 'Unknown platform defaults to tracking')
+        self.assertTrue(self.module.UNATTENDED_PLATFORMS >= {'telegram', 'cron'})
+
+    def test_receipt_reminder_every_nth_user_turn(self):
+        hooks = self.module.make_hooks(self.vault, self.state)
+        seen = []
+        with patch.object(self.module, 'run_hook', return_value='ctx'):
+            for turn in range(1, self.module.REMINDER_EVERY * 2 + 1):
+                result = hooks['pre_llm_call'](session_id='long', turn_id=str(turn), user_message='devam', is_first_turn=turn == 1)
+                seen.append('[Hafıza]' in result['context'])
+        reminders = [i + 1 for i, hit in enumerate(seen) if hit]
+        self.assertEqual(reminders, [self.module.REMINDER_EVERY, self.module.REMINDER_EVERY * 2])
+        with patch.object(self.module, 'run_hook', return_value=''):
+            result = hooks['pre_llm_call'](session_id='long', turn_id='x', user_message='devam', is_first_turn=False)
+        self.assertIsNone(result, 'No adapter context and no reminder due means no injection')
+
 
 if __name__ == '__main__':
     unittest.main()

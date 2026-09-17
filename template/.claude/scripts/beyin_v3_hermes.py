@@ -36,6 +36,14 @@ import sys
 HOOK_TIMEOUT = 20 if os.name == "nt" else 6
 PLUGIN_NAME = "beyin-v3"
 LOGGER = logging.getLogger(__name__)
+# Sessions nobody sits in front of (scheduled jobs, chat bots) never submit receipts, so
+# their SessionEnd must not be counted as a checkpoint: otherwise every later interactive
+# start warns about "missing receipts" for work that was never receipt-shaped. Hermes
+# reports a generic platform at finalize, so the platform seen on the first turn is kept.
+UNATTENDED_PLATFORMS = frozenset({"cron", "telegram", "discord", "slack", "whatsapp", "signal", "matrix", "email", "sms", "webhook"})
+# Same cadence as the V2 nudge: remind a long interactive session to write a receipt.
+REMINDER_EVERY = 15
+REMINDER = "[Hafıza] {n}. mesaj. Anlamlı iş bittiyse `beyin.py receipt --harness hermes` ile kaynak bağlantılı makbuz yaz."
 
 
 def _runtime(vault):
@@ -81,19 +89,32 @@ def make_hooks(vault, state=None, python=None):
     """Build the Hermes hook callables. Pure function so tests can drive them without Hermes."""
     vault = Path(vault).expanduser().resolve()
     state = Path(state).expanduser().resolve() if state else _runtime(vault)
+    sessions = {}  # session_id -> {"platform": str | None, "turns": int}; process-local, no disk
 
     def before(**kw):
         session_id = kw.get("session_id")
         if not isinstance(session_id, str) or not session_id:
             return None
-        event = "SessionStart" if kw.get("is_first_turn") else "UserPromptSubmit"
+        first = bool(kw.get("is_first_turn"))
+        info = sessions.setdefault(session_id, {"platform": None, "turns": 0})
+        if first or info["platform"] is None:
+            platform = kw.get("platform")
+            info["platform"] = platform if isinstance(platform, str) else None
+        info["turns"] += 1
+        event = "SessionStart" if first else "UserPromptSubmit"
         prompt = kw.get("user_message") if isinstance(kw.get("user_message"), str) else ""
         text = run_hook(vault, state, {"hook_event_name": event, "session_id": session_id, "prompt": prompt}, python)
-        return {"context": text} if text else None
+        parts = [text] if text else []
+        if info["turns"] % REMINDER_EVERY == 0 and info["platform"] not in UNATTENDED_PLATFORMS:
+            parts.append(REMINDER.format(n=info["turns"]))
+        return {"context": "\n\n".join(parts)} if parts else None
 
     def finalize(**kw):
         session_id = kw.get("session_id")
         if not isinstance(session_id, str) or not session_id:
+            return None
+        info = sessions.pop(session_id, None)
+        if info and info["platform"] in UNATTENDED_PLATFORMS:
             return None
         run_hook(vault, state, {"hook_event_name": "SessionEnd", "session_id": session_id}, python)
         return None
