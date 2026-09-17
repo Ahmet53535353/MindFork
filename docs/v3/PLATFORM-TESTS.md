@@ -52,7 +52,7 @@ All fixtures are synthetic, all state is in temporary directories outside the te
 
 ## Lifecycle and installation contract
 
-`beyin_v3_hook.py --vault PATH --state PATH --harness codex|claude|antigravity` accepts JSON on stdin. Codex and Claude return a single `hookSpecificOutput.additionalContext` JSON response for startup context. Antigravity `PreInvocation` with `invocationNum: 0` returns `injectSteps[].ephemeralMessage`; later invocations do not reinject. Antigravity `Stop` queues only when `fullyIdle` is exactly true and returns `decision: stop`.
+`beyin_v3_hook.py --vault PATH --state PATH --harness codex|claude|antigravity|hermes` accepts JSON on stdin. Codex, Claude and Hermes return a single `hookSpecificOutput.additionalContext` JSON response for startup context (Hermes reaches the adapter through the vault-owned plugin in `beyin_v3_hermes.py`; see `HERMES.md`). Antigravity `PreInvocation` with `invocationNum: 0` returns `injectSteps[].ephemeralMessage`; later invocations do not reinject. Antigravity `Stop` queues only when `fullyIdle` is exactly true and returns `decision: stop`.
 
 `enqueue_event(vault,state,payload,harness)` returns a stable event ID, and `drain_queue(vault,state)` returns `{processed,failed,pending}`. Queue files contain metadata rather than transcript text. `--drain-queue` is a deterministic worker entry point. `BEYIN_V3_NO_SPAWN=1` disables detached workers while allowing already-synced context to be read. A failed worker leaves pending work; repeated delivery or competing workers must not acknowledge one event twice. A crash after source sync and before acknowledgement may retry idempotent source synchronization, with no duplicate revision/event.
 

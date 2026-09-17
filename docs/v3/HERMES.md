@@ -1,0 +1,100 @@
+# Hermes Agent harness
+
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) is the fourth supported client
+after Codex, Claude Code and Antigravity. It has no project-local hook file; it loads plugins from
+`~/.hermes/plugins/<name>/` and calls `register(ctx)` once at startup. V3 therefore ships the
+implementation inside the vault and lets the installer plan a two-file shim that the user links
+into that directory once.
+
+## What the installer writes
+
+| File | Owner | Purpose |
+| --- | --- | --- |
+| `.claude/scripts/beyin_v3_hermes.py` | managed | Hook implementation; runs `beyin_v3_hook.py --harness hermes` as a bounded subprocess |
+| `.claude/hermes-plugin/__init__.py` | managed | Shim that pins this machine's vault path and imports the module above |
+| `.claude/hermes-plugin/plugin.yaml` | managed | Hermes plugin manifest (`pre_llm_call`, `on_session_finalize`) |
+
+All three roll back with `beyin.py rollback` / `--uninstall` like every other managed file.
+
+## Linking the plugin (one time per machine)
+
+Hermes loads user plugins only after they are explicitly enabled, so linking alone is not
+enough. `HERMES_HOME` must be the profile of the Hermes process you actually run
+(`~/.hermes` by default on macOS/Linux, `%LOCALAPPDATA%\hermes` on native Windows; a named
+profile needs `hermes -p PROFILE` for the enable step).
+
+```sh
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+VAULT="/absolute/path/to/vault"
+mkdir -p "$HERMES_HOME/plugins"
+ln -s "$VAULT/.claude/hermes-plugin" "$HERMES_HOME/plugins/beyin-v3"
+hermes plugins enable beyin-v3
+hermes plugins list        # beyin-v3 must show "enabled"
+```
+
+```powershell
+$hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:LOCALAPPDATA 'hermes' }
+$vault = 'C:\absolute\path\to\vault'
+New-Item -ItemType Directory -Force -Path (Join-Path $hermesHome 'plugins') | Out-Null
+New-Item -ItemType Junction -Path (Join-Path $hermesHome 'plugins\beyin-v3') -Target (Join-Path $vault '.claude\hermes-plugin')
+hermes plugins enable beyin-v3
+hermes plugins list
+```
+
+Then restart the Hermes process that uses this profile (`hermes serve`, the gateway or the
+CLI). `BEYIN_VAULT` in that process' environment overrides the pinned path, which is what a
+shared plugin directory on a multi-vault machine would use. The installer never touches
+`HERMES_HOME`; linking, enabling and removing the link on uninstall are operator steps.
+
+## Event mapping
+
+| Hermes hook | V3 event | Context returned |
+| --- | --- | --- |
+| `pre_llm_call` with `is_first_turn=True` | `SessionStart` | companion continuity + ranked context |
+| `pre_llm_call` afterwards | `UserPromptSubmit` (`prompt` = user message) | ranked context for that turn, companion when the query asks for it |
+| `on_session_finalize` | `SessionEnd` | none; queues the checkpoint for receipt-gap tracking |
+
+`pre_llm_call` returning `{"context": text}` is the only Hermes channel that injects text into a
+turn; the plugin uses nothing else. `on_session_end` is a *turn* outcome in Hermes, not a chat
+close, so it is deliberately not bound.
+
+Retrieval semantics are identical to the other harnesses (`tests/v3_hermes_test.py` asserts the
+Claude and Hermes outputs for the same query are byte-equal). Preferences (`beyin.py preferences`)
+apply unchanged: `context_mode`, `context_chars`, `interval_minutes` and `auto_sync` all govern the
+Hermes turns too.
+
+## Failure behaviour
+
+The subprocess waits at most `HOOK_TIMEOUT` (6 s POSIX / 20 s Windows, inside Hermes' default
+30 s hook budget). Two failure classes are reported in two places:
+
+- Failures the adapter handles itself (sync conflicts, degraded sources, invalid payloads) are
+  written to the adapter's `hook-error.json` and surfaced by `beyin.py doctor`.
+- Transport failures (interpreter missing, timeout, non-zero exit, unparsable stdout) happen
+  before or outside the adapter, so they cannot reach `hook-error.json`. They return no context
+  for that turn and are logged as warnings through Hermes' plugin logger (`beyin_v3_hermes`),
+  without the prompt, payload or child output.
+
+A vault without `.beyin-runtime.json` registers no hooks at all so Hermes stays usable when the
+vault is unmounted. A damaged runtime file (invalid JSON, missing or relative `state`) also
+registers nothing and logs the exception class only; fix the file and restart to re-enable.
+
+Hook metadata files carry the event name, harness and a hashed session id, never the prompt.
+
+## Receipts
+
+Agents running inside Hermes submit receipts with `--harness hermes`; `doctor` lists `hermes`
+under `lifecycle`. The `beyin` skill's receipt step already says "choose the current client", so no
+skill text changes were needed beyond naming the fourth option.
+
+## Not covered
+
+This adapter does not map compaction or tool-completion events. Hermes exposes `post_tool_call`,
+but selective write-tool mapping is outside this change's scope. Prompts longer than the
+adapter's 1 000 000-character stdin limit are rejected by the adapter itself (logged in
+`hook-error.json`) and produce no queue event; Hermes turns are far below that.
+
+The unittest suite drives the installed shim and the hook mapping with a fake plugin context;
+it does not establish live model or remote Desktop delivery. Sanitized operator `doctor`
+output for a real Hermes profile is attached to the pull request separately and is not part
+of the synthetic CI canaries.

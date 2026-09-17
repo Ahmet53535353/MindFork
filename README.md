@@ -38,6 +38,8 @@ py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim"
 
 Kurulum üç istemci için proje bağlantılarını, ortak motoru, üç başlangıç skill'ini ve güncelleme kısayolunu kurar. Bundan sonra paket klasörünü açık tutman gerekmez.
 
+Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlanır; installer eklenti dosyalarını vault içine yazar, ama profil bazlı bağlantı ve `hermes plugins enable beyin-v3` adımını sen yaparsın. Adımlar: [docs/v3/HERMES.md](docs/v3/HERMES.md). Bu destek kaynak checkout'undadır; yukarıda bağlantısı verilen V3.0.2 release ZIP'inde henüz yoktur.
+
 Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başlat**. Codex'te `/hooks` ekranında yeni hook tanımlarını inceleyip güven; diğer istemcilerde workspace güvenini tamamla. İstemci güvenini kurucu senin adına uydurmaz. Agent ile kurulum yapmak istersen [SETUP-V3.md](SETUP-V3.md) rehberini takip etmesini iste.
 
 ## İlk konuşma
