@@ -47,11 +47,18 @@ class PreferencesTest(unittest.TestCase):
         self.assertFalse(result['model_calls'])
         self.assertFalse(result['timer_installed'])
 
+    def test_secret_filter_is_explicit_and_survives_profile_changes(self):
+        self.assertFalse(self.cli('preferences')['preferences']['secret_filter'])
+        self.assertTrue(self.cli('preferences', '--secret-filter', 'on')['preferences']['secret_filter'])
+        self.assertTrue(self.cli('preferences', '--profile', 'economical')['preferences']['secret_filter'])
+        self.assertFalse(self.cli('preferences', '--secret-filter', 'off')['preferences']['secret_filter'])
+
     def test_invalid_settings_do_not_replace_user_preferences(self):
         prefs.save(self.vault, {}, 'economical')
         before = (self.vault / '.beyin-preferences.json').read_bytes()
         for changes in ({'interval_minutes': -1}, {'interval_minutes': True}, {'context_chars': 999},
-                        {'context_mode': 'unknown'}, {'unknown': 1}, {'auto_sync': 'false'}):
+                        {'context_mode': 'unknown'}, {'unknown': 1}, {'auto_sync': 'false'},
+                        {'secret_filter': 'true'}):
             with self.assertRaises(ValueError):
                 prefs.save(self.vault, changes)
         self.assertEqual(before, (self.vault / '.beyin-preferences.json').read_bytes())

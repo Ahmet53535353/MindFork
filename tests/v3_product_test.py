@@ -115,6 +115,21 @@ class ProductInstallationTest(unittest.TestCase):
             self.assertIn(b'BEYIN_V3_LEGACY_RETIRED', (old_scripts / name).read_bytes())
         self.assertEqual((self.vault / '.beyin-version').read_text().strip(), '3.0.0')
 
+    def test_extracted_release_accepts_current_stock_v23_doctor_skill(self):
+        import zipfile
+        from v3_package_helpers import build_package
+        skill = self.vault / '.claude/skills/beyin-doktor/SKILL.md'
+        skill.parent.mkdir(parents=True)
+        skill.write_bytes((ROOT/'template/.claude/skills/beyin-doktor/SKILL.md').read_bytes())
+        package = build_package(self.base/'release.zip', '3.0.0', self.env)
+        extracted = self.base/'extracted'
+        with zipfile.ZipFile(package) as archive:
+            archive.extractall(extracted)
+        result = run_python(extracted/'scripts/install_v3.py',
+                            ['--vault', self.vault, '--state', self.state], extracted, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        self.assertEqual(skill.read_bytes(), (self.vault/'.agents/skills/beyin-doktor/SKILL.md').read_bytes())
+
     def test_clean_install_entrypoint_version_skills_and_doctor(self):
         self.installed()
         self.assertTrue((self.vault / 'beyin.py').is_file())
@@ -185,9 +200,16 @@ class ProductInstallationTest(unittest.TestCase):
         config.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [
             {'type': 'command', 'command': '"${CLAUDE_PROJECT_DIR}/.claude/hooks/session-start.sh"'},
             {'type': 'command', 'command': 'synthetic-custom-command'}]}]}}))
+        codex = self.vault / '.codex/hooks.json'; codex.parent.mkdir()
+        codex.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [
+            {'type': 'command', 'command': "bash '/synthetic/vault/.codex/hooks/session-start.sh'"},
+            {'type': 'command', 'command': 'synthetic-codex-command'}]}]}}))
         self.installed()
         for name, body in sources.items():
             self.assertEqual((self.vault / name).read_text(encoding='utf-8'), body)
+        serialized = codex.read_text(encoding='utf-8')
+        self.assertNotIn('.codex/hooks/session-start.sh', serialized)
+        self.assertIn('synthetic-codex-command', serialized)
         self.command('sync')
         context = self.command('context', 'Legacy starlight')
         self.assertTrue(set(sources).issubset({r['source'] for r in context['records']}))

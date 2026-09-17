@@ -101,6 +101,12 @@ def validate_package(package):
         version(manifest.get('version'))
         if manifest.get('migrations', []) not in ([], ['v2-cutover']):
             raise ValueError('unsupported migration')
+        legacy_skill_hashes = manifest.get('legacy_skill_hashes', {})
+        if not isinstance(legacy_skill_hashes, dict) or any(
+                name != '.claude/skills/beyin-doktor/SKILL.md' or not isinstance(values, list) or
+                not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in values)
+                for name, values in legacy_skill_hashes.items()):
+            raise ValueError('invalid legacy skill hashes')
         minimum = manifest.get('min_python', '3.11')
         if not isinstance(minimum, str) or not re.fullmatch(r'\d+\.\d+', minimum) or tuple(map(int, minimum.split('.'))) > sys.version_info[:2]:
             raise ValueError('unsupported Python runtime')
@@ -308,7 +314,9 @@ def update(vault, state, package=None, check=False):
                 spec = importlib.util.spec_from_file_location('beyin_release_installer', stage / 'scripts/install_v3.py')
                 installer = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(installer)
-                plan = installer.install(vault, state, plan_only=True, version=new, legacy_hashes=manifest.get('legacy_hashes', {}))
+                plan = installer.install(vault, state, plan_only=True, version=new,
+                                         legacy_hashes=manifest.get('legacy_hashes', {}),
+                                         legacy_skill_hashes=manifest.get('legacy_skill_hashes', {}))
                 trust_review = False
                 for name in ('.claude/settings.local.json', '.codex/hooks.json', '.agents/hooks.json'):
                     if name in plan['planned']:

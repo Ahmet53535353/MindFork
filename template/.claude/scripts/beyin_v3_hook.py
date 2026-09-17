@@ -66,6 +66,8 @@ def drain_queue(vault, state):
         from beyin_v3_projections import record_checkpoints
         record_checkpoints(engine, [json.loads(path.read_text(encoding='utf-8')) for path in pending if path.exists()])
         result = engine.sync()
+        from beyin_v3_secrets import health as secret_filter_health
+        result['secrets_redacted'] = secret_filter_health(state)['total']
         gap_path = state/'receipt-gaps.json'
         if gap_path.exists():
             result['potential_missing_receipts'] = json.loads(gap_path.read_text(encoding='utf-8'))['potential_missing_receipts']

@@ -20,6 +20,7 @@ def human_result(result, command, installed_version=None):
                 '\nKontrol araligi: ' + str(prefs['interval_minutes']) + ' dakika (0 = her olay)' +
                 '\nOtomatik baglam: ' + prefs['context_mode'] +
                 '\nBaglam ust siniri: ' + str(prefs['context_chars']) + ' karakter' +
+                '\nSir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali') +
                 '\nYerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
     if command == 'doctor':
         labels = {'never_seen': 'Henuz gercek istemci oturumu gozlenmedi.',
@@ -29,6 +30,8 @@ def human_result(result, command, installed_version=None):
                  'Bekleyen is: ' + str(result.get('pending_events', 0))]
         for name, details in result.get('lifecycle', {}).items():
             lines.append(name + ': ' + ('olay goruldu' if details.get('status') == 'observed_metadata' else 'henuz dogrulanmadi'))
+        if result.get('secrets_redacted'):
+            lines.append('Sir suzgeci ' + str(result['secrets_redacted']) + ' eslesmeyi [REDACTED] olarak yazdi.')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines)
