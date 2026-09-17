@@ -55,7 +55,7 @@ def sync_skills(vault, state, mode=None):
         if not p.resolve().is_relative_to(vault):raise ValueError('skill root escapes vault')
         p.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(state/'skills.sqlite3',timeout=10)
-    result={'synced':[],'conflicts':[],'mode':mode}
+    result={'synced':[],'conflicts':[],'unmanaged':[],'mode':mode}
     try:
         db.execute('CREATE TABLE IF NOT EXISTS skills(name TEXT PRIMARY KEY, hash TEXT NOT NULL)')
         db.execute('BEGIN IMMEDIATE')
@@ -63,6 +63,19 @@ def sync_skills(vault, state, mode=None):
         for name in names:
             a=left/name;b=right/name
             try:
+                a_present=a.exists() or a.is_symlink();b_present=b.exists() or b.is_symlink()
+                a_external=a_present and not a.resolve().is_relative_to(vault)
+                b_external=b_present and not b.resolve().is_relative_to(vault)
+                if a_external or b_external:
+                    # External project skills are intentionally outside this
+                    # vault's ownership. Never traverse, copy, or mirror them.
+                    # Matching dual links and one-sided links remain usable by
+                    # their host without wedging the V3 source queue.
+                    if ((a_external and b_external and a.resolve() == b.resolve()) or
+                            (a_external and not b_present) or (b_external and not a_present)):
+                        result['unmanaged'].append(name)
+                        continue
+                    raise ValueError('external skill collides with managed skill')
                 ah=_tree(a,vault) if a.exists() or a.is_symlink() else None
                 bh=_tree(b,vault) if b.exists() or b.is_symlink() else None
                 old=db.execute('SELECT hash FROM skills WHERE name=?',(name,)).fetchone()
