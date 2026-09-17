@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.0.1:** Tek mesajlık ajan kurulumu ve kullanıcının seçebildiği Normal, Ekonomik ve Manuel kontrol profilleri eklendi. Yerel paket kapısında 133 test ve 10/10 + 6/6 semantik senaryo geçti. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
+> **V3.0.2:** Windows güncelleme kilitleri ve Unicode/Git Bash hook yolları düzeltildi; harici skill symlink'leri korunuyor ve yeni oturumda süreklilik dosyaları öncelikli yükleniyor. Yerel paket kapısında 139 test ve 10/10 + 6/6 semantik senaryo geçti; native Windows işleri de yeşil. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
@@ -20,7 +20,7 @@ Görsel anlatım, kopyalanabilir mesaj ve manuel indirme: **[avenox.lol/ikincibe
 
 ## Manuel kurulum
 
-1. [V3.0.1 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.1) aç. **[beyin-v3-3.0.1.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.1/beyin-v3-3.0.1.zip)** dosyasını ve yanındaki SHA-256 dosyasını indir. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
+1. [V3.0.2 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.2) aç. **[beyin-v3-3.0.2.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.2/beyin-v3-3.0.2.zip)** dosyasını ve yanındaki SHA-256 dosyasını indir. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
 2. Obsidian'da bir vault oluştur veya mevcut vault klasörünü seç. Notlarını başka yere taşıman gerekmez.
 3. Açtığın paket klasöründe terminal aç ve vault yolunu kendi klasörünle değiştir:
 

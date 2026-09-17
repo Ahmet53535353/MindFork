@@ -42,11 +42,11 @@ GitHub API adresi:
 
 `https://api.github.com/repos/avenoxai/avenoxbeyin/releases/latest`
 
-Release kararlı bir `vMAJOR.MINOR.PATCH` etiketi tasimalidir. Etiket `v3.0.1` ise gerekli
+Release kararlı bir `vMAJOR.MINOR.PATCH` etiketi tasimalidir. Etiket `v3.0.2` ise gerekli
 varliklar sunlardir:
 
-- `beyin-v3-3.0.1.zip`
-- `beyin-v3-3.0.1.zip.sha256`
+- `beyin-v3-3.0.2.zip`
+- `beyin-v3-3.0.2.zip.sha256`
 
 Surumu sabitleme: Isimleri API'deki gercek etiketten uret. Ikisini HTTPS ile isletim
 sisteminin gecici klasorune indir. SHA-256 dosyasindaki ilk alani ZIP'in yerel SHA-256
