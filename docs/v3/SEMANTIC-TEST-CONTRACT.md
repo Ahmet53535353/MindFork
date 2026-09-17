@@ -1,0 +1,9 @@
+# V3 semantic test contract
+
+Frozen before implementation: 12 synthetic records, 16 scenarios (10 development, 6 holdout). No real user data. Fixture SHA256 is stored alongside the fixture. Do not change expected results to improve a score; any justified benchmark change requires a separately documented version.
+
+This measures source-backed retrieval and state semantics, not free-form LLM intelligence. No model, embedding API or Mem0 needed. Natural-language cases cover correction, cross-project isolation, decision owner, plan-versus-completion, unknown abstention, public visibility, active filtering, untrusted text and latest decisions.
+
+Metrics: recall@5 of required record IDs; precision@5 against declared relevant IDs (diagnostic); forbidden-result count; abstention accuracy; required structured-fact retention; privacy canary leakage; harness equivalence. Pass gates: required recall 100%, zero forbidden/privacy results, abstention 100%, fact retention 100%, Codex/Claude normalized result equality. Report development and holdout separately. These small synthetic gates do not establish broad natural-language generalization.
+
+Foundation API to implement: MemoryStore(state_dir, vault_root); ingest(record), retrieve(query, project=None, audience='internal', statuses=None, limit=5, budget_chars=8000), submit_receipt(event_id, summary, refs, harness), update_task(id, expected_revision, changes). Retrieval response: records, citations, abstained, truncated, omitted_count. Records preserve id/text/facts/source. Source refs are validated existing relative files. Local runtime outside vault, SQLite persistence, revision conflicts and idempotent receipt IDs. The same shared context function is callable from both harnesses. No automatic model calls or remote provider imports. Optional providers are explicit opt-in; disabling one must preserve local functionality.

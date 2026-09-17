@@ -1,0 +1,443 @@
+"""Explicit, in-process Markdown synchronization. No services or model calls."""
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+import sys
+
+# Keep adjacent installed modules importable when this file is loaded by path.
+_MODULE_DIR = str(Path(__file__).resolve().parent)
+if _MODULE_DIR not in sys.path:
+    sys.path.insert(0, _MODULE_DIR)
+
+from beyin_v3 import MemoryStore, ReceiptConflict, RevisionConflict, _json
+from beyin_v3_projections import project_receipts
+
+
+def _hash(data):
+    return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()
+
+
+def atomic(path, text):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.beyin-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, path)
+        try:
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            # Windows does not expose directory fsync through this API.
+            pass
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _yaml_scalar(value):
+    """Decode a bounded YAML string; plain list items are never coerced."""
+    value = value.strip()
+    if value.startswith('"'):
+        result = json.loads(value)
+        if isinstance(result, str):
+            return result
+    elif re.fullmatch(r"'(?:[^']|'')*'", value):
+        return value[1:-1].replace("''", "'")
+    elif (value and value[0] not in '|>&*!#[]{}"\'`@%'
+          and not re.match(r'[-?:](?:\s|$)', value)
+          and not re.search(r':(?:\s|$)|\s#', value)):
+        return value
+    raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+
+
+def _yaml_sequence(value):
+    if not value.endswith(']'):
+        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    remaining, items = value[1:-1].strip(), []
+    while remaining:
+        match = re.match(r'''"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,]+''', remaining)
+        if not match:
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        item = match[0].strip()
+        if item[0] not in '"\'' and any(char in item for char in '[]{}'):
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        items.append(_yaml_scalar(item))
+        remaining = remaining[match.end():].strip()
+        if remaining:
+            if not remaining.startswith(',') or not remaining[1:].strip():
+                raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+            remaining = remaining[1:].strip()
+    return items
+
+
+def parse(text):
+    """JSON frontmatter or deliberately bounded flat scalar/list YAML."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != '---':
+        return {}, text
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == '---'), None)
+    if end is None:
+        raise ValueError('unterminated frontmatter')
+    header = ''.join(lines[1:end]).strip()
+    body = ''.join(lines[end + 1:])
+    if header.startswith('{'):
+        metadata = json.loads(header)
+        if not isinstance(metadata, dict):
+            raise ValueError('frontmatter must be an object')
+        return metadata, body
+    metadata = {}
+    header_lines = header.splitlines()
+    index = 0
+    while index < len(header_lines):
+        line = header_lines[index]
+        index += 1
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        # Python's Unicode-aware word class lets localized Obsidian property
+        # names start with a letter while still rejecting digits/punctuation.
+        match = re.fullmatch(r'([^\W\d][\w-]*):[ \t]*(.*)', line)
+        if not match or match[1] in metadata:
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        key, value = match.groups()
+        if not value.strip():
+            # Obsidian writes empty properties as `key:` and lists as indented `- item` blocks.
+            items, indent = [], None
+            while index < len(header_lines) and header_lines[index].startswith((' ', '\t')):
+                item = re.fullmatch(r'( +)-[ ]+(.+)', header_lines[index])
+                if not item or (indent is not None and item[1] != indent):
+                    raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                indent = item[1]
+                items.append(_yaml_scalar(item[2]))
+                index += 1
+            metadata[key] = items if items else None
+            continue
+        if value[0] in '|>&*!':
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        try:
+            metadata[key] = json.loads(value)
+        except json.JSONDecodeError:
+            if value.startswith("'") and value.endswith("'"):
+                metadata[key] = value[1:-1].replace("''", "'")
+            elif value.startswith('['):
+                metadata[key] = _yaml_sequence(value.rstrip())
+            elif value[0] in '{"\'' or ' #' in value:
+                raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+            else:
+                metadata[key] = value
+    return metadata, body
+
+
+def render(metadata, body):
+    return '---\n' + json.dumps(metadata, ensure_ascii=False, indent=2) + '\n---\n' + body
+
+
+EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md', 'config.md', 'settings.md', 'instructions.md', 'codex.md', 'setup.md', 'install.md'}
+EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
+
+
+class SyncEngine:
+    def projection_helpers(self):
+        return _hash, atomic, render
+
+    def __init__(self, vault_root, state_dir):
+        self.store = MemoryStore(state_dir, vault_root)
+        self.root = self.store.vault_root
+        self.state = self.store.state_dir
+        self.journal = self.state / 'markdown-journal'
+        self.journal.mkdir(exist_ok=True, mode=0o700)
+        with self.store._connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS markdown_sources(id TEXT PRIMARY KEY, source TEXT NOT NULL)')
+
+    def snapshot_context(self, **kwargs):
+        return self.store.snapshot_context(**kwargs)
+
+    def _path(self, relative, existing=False):
+        if not isinstance(relative, str) or Path(relative).is_absolute() or '..' in Path(relative).parts:
+            raise ValueError('relative source required')
+        path = self.root / relative
+        if not path.resolve().is_relative_to(self.root):
+            raise ValueError('source outside vault')
+        cursor = path
+        while cursor != self.root:
+            if cursor.is_symlink():
+                raise ValueError('symlink source rejected')
+            cursor = cursor.parent
+        if existing and not path.is_file():
+            raise ValueError('source missing')
+        return path
+
+    def _scan(self):
+        records, warnings, conflicts = {}, [], []
+        duplicate = set()
+        for directory, dirs, files in os.walk(self.root, followlinks=False):
+            dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d.casefold() not in EXCLUDED_DIRS and not (Path(directory) / d).is_symlink())
+            for name in sorted(files):
+                if name.startswith('.') or not name.lower().endswith('.md') or name.casefold() in EXCLUDED_FILES or name.casefold().startswith('setup-'):
+                    continue
+                path = Path(directory) / name
+                relative = str(path.relative_to(self.root))
+                try:
+                    self._path(relative, existing=True)
+                    raw = path.read_bytes()
+                    metadata, body = parse(raw.decode('utf-8'))
+                    if metadata.get('kind') == 'task' and body.lstrip().startswith('---'):
+                        raise ValueError('task has embedded frontmatter; reconcile metadata and body explicitly')
+                    if metadata.get('kind') == 'receipt' or metadata.get('generated') is True:
+                        continue
+                    record = dict(metadata, source=relative, text=body)
+                    record.setdefault('id', 'md-' + _hash(relative)[:24])
+                    record.setdefault('kind', 'note')
+                    record = self.store._validate(record)
+                    if record['source_sha256'] != _hash(raw):
+                        raise ValueError('source changed while scanning')
+                    if record['id'] in records:
+                        duplicate.add(record['id'])
+                    records[record['id']] = record
+                except (ValueError, OSError, UnicodeError) as exc:
+                    warnings.append({'source': relative, 'reason': str(exc)})
+        for id in sorted(duplicate):
+            records.pop(id, None)
+            conflicts.append({'id': id, 'reason': 'duplicate source id; all copies quarantined'})
+        return records, warnings, conflicts
+
+    def _recover(self, db):
+        completed, conflicts = [], []
+        for entry in sorted(self.journal.glob('*.json')):
+            try:
+                intent = json.loads(entry.read_text(encoding='utf-8'))
+                path = self._path(intent['source'])
+                actual = _hash(path.read_bytes()) if path.exists() else None
+                desired = _hash(intent['content'])
+                if actual == intent['old_hash']:
+                    atomic(path, intent['content'])
+                elif actual != desired:
+                    conflicts.append({'source': intent['source'], 'reason': 'recovery conflict; manual edit preserved'})
+                    continue
+                if intent['kind'] == 'receipt':
+                    event = intent['event']
+                    for ref in event['refs']:
+                        self.store._source(ref)
+                    row = db.execute('SELECT payload FROM receipts WHERE id=?', (event['event_id'],)).fetchone()
+                    if row:
+                        previous = json.loads(row[0])
+                        if previous['summary'] != event['summary'] or previous['refs'] != event['refs']:
+                            raise ReceiptConflict('event id collision during recovery')
+                    db.execute('INSERT OR IGNORE INTO receipts VALUES (?,?)', (event['event_id'], _json(event)))
+                completed.append(entry)
+            except (ValueError, OSError, KeyError) as exc:
+                conflicts.append({'journal': entry.name, 'reason': str(exc)})
+        return completed, conflicts
+
+    def sync(self):
+        # Serialize recovery, source scan and projection across local processes.
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            completed, recovery_conflicts = self._recover(db)
+            records, warnings, conflicts = self._scan()
+            conflicts.extend(recovery_conflicts)
+            old_owned = {row[0] for row in db.execute('SELECT id FROM markdown_sources')}
+            deleted = 0
+            for id in old_owned - records.keys():
+                row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
+                if row:
+                    old = json.loads(row[0])
+                    db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('delete',?,?,?)", (id, old['revision'], row[0]))
+                    db.execute('DELETE FROM records WHERE id=?', (id,))
+                    deleted += 1
+                db.execute('DELETE FROM markdown_sources WHERE id=?', (id,))
+            for id, record in records.items():
+                row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
+                if row and id in old_owned:
+                    previous = json.loads(row[0])
+                    if previous['source_sha256'] != record['source_sha256']:
+                        record['revision'] = max(record['revision'], previous['revision'] + 1)
+                    else:
+                        record['revision'] = max(record['revision'], previous['revision'])
+                payload = _json(record)
+                if row and id not in old_owned and row[0] != payload:
+                    conflicts.append({'id': id, 'reason': 'id already owned by another record'})
+                    continue
+                if not row or row[0] != payload:
+                    event_type = 'update' if row else 'ingest'
+                    db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (id, payload))
+                    db.execute('INSERT INTO events(event_type,record_id,revision,record) VALUES (?,?,?,?)', (event_type, id, record['revision'], payload))
+                db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
+            conflicts.extend(project_receipts(self, db))
+        for entry in completed:
+            entry.unlink(missing_ok=True)
+        return {'status': 'conflict' if conflicts else 'degraded' if warnings else 'succeeded', 'indexed': len(records), 'deleted': deleted, 'warnings': warnings, 'conflicts': conflicts}
+
+    def _intent(self, relative, old_hash, content, kind, event=None):
+        path = self._path(relative)
+        entry = self.journal / (_hash(relative) + '.json')
+        if entry.exists():
+            raise RevisionConflict('pending source operation; sync and resolve first')
+        intent = {'source': relative, 'old_hash': old_hash, 'content': content, 'kind': kind}
+        if event:
+            intent['event'] = event
+        atomic(entry, _json(intent))
+        actual = _hash(path.read_bytes()) if path.exists() else None
+        if actual != old_hash:
+            raise RevisionConflict('source changed before replace')
+        atomic(path, content)
+        return entry
+
+    def update_task(self, id, expected_revision, changes):
+        allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes'}
+        if not isinstance(changes, dict) or set(changes) - allowed:
+            raise ValueError('unsupported task metadata changes')
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
+            if not row:
+                raise KeyError(id)
+            record = json.loads(row[0])
+            if record.get('kind') != 'task':
+                raise ValueError('explicit task source required')
+            if type(expected_revision) is not int or record['revision'] != expected_revision:
+                raise RevisionConflict('revision conflict')
+            path = self._path(record['source'], existing=True)
+            raw = path.read_bytes()
+            if _hash(raw) != record['source_sha256']:
+                raise RevisionConflict('source changed; sync and reread')
+            metadata, body = parse(raw.decode('utf-8'))
+            if metadata.get('id') != id or type(metadata.get('revision')) is not int or metadata['revision'] > expected_revision:
+                raise RevisionConflict('source revision conflict')
+            metadata.update(changes)
+            metadata['revision'] = expected_revision + 1
+            self.store._validate(dict(metadata, source=record['source'], text=body))
+            intended = render(metadata, body)
+            self._intent(record['source'], record['source_sha256'], intended, 'task')
+        result = self.sync()
+        if result['conflicts']:
+            raise RevisionConflict('source projection conflict')
+        with self.store._connect() as db:
+            row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
+        if not row:
+            raise RevisionConflict('task projection missing')
+        result_record = json.loads(row[0])
+        if result_record['revision'] != expected_revision + 1 or result_record['source_sha256'] != _hash(intended):
+            raise RevisionConflict('task source changed before projection readback')
+        return result_record
+
+    def note_create(self, source, text, metadata=None):
+        if not isinstance(text, str) or not text.strip() or (metadata is not None and not isinstance(metadata, dict)):
+            raise ValueError('note text and metadata required')
+        if text.lstrip().startswith('---'):
+            raise ValueError('text must be body only; put frontmatter fields in metadata')
+        if not source.startswith(('notes/', 'knowledge/')) or not source.endswith('.md'):
+            raise ValueError('new semantic notes belong under notes/ or knowledge/')
+        metadata = dict(metadata or {})
+        if metadata.get('kind') == 'task':
+            raise ValueError('use task-create for new tasks')
+        if metadata.get('generated') or metadata.get('kind') == 'receipt':
+            raise ValueError('managed note kinds require their dedicated command')
+        path = self._path(source)
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if path.exists():
+                raise ValueError('source exists; preserve and edit deliberately')
+            self._intent(source, None, render(metadata, text+'\n'), 'note')
+        result = self.sync()
+        if result['conflicts'] or result['warnings']:
+            raise RevisionConflict('note requires projection review')
+        return {'status': 'succeeded', 'source': source}
+
+    def task_create(self, source, text, metadata):
+        if not isinstance(source, str) or not source.startswith('tasks/') or not source.endswith('.md'):
+            raise ValueError('task-create source must be a tasks/ Markdown path')
+        if not isinstance(text, str) or not text.strip() or not isinstance(metadata, dict):
+            raise ValueError('task body and metadata required')
+        if text.lstrip().startswith('---'):
+            raise ValueError('text must be body only; put frontmatter fields in metadata')
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at'}
+        if set(metadata) - allowed:
+            raise ValueError('unsupported task metadata')
+        metadata = dict(metadata)
+        if not isinstance(metadata.get('id'), str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}', metadata['id']):
+            raise ValueError('stable task id required')
+        if not isinstance(metadata.get('owner'), str) or not metadata['owner'].strip():
+            raise ValueError('explicit task owner required')
+        if metadata.get('status') not in ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled'):
+            raise ValueError('valid explicit task status required')
+        if type(metadata.get('revision', 1)) is not int or metadata.get('revision', 1) != 1:
+            raise ValueError('new task revision must be 1')
+        if metadata.get('kind', 'task') != 'task':
+            raise ValueError('task kind required')
+        if not isinstance(metadata.get('facts', {}), dict) or metadata.get('visibility', 'internal') not in ('internal', 'public', 'private'):
+            raise ValueError('invalid task facts or visibility')
+        for field in ('title', 'project', 'next_action', 'updated_at'):
+            if field in metadata and not isinstance(metadata[field], str):
+                raise ValueError('task metadata text fields must be strings')
+        metadata.update(kind='task', revision=1)
+        path = self._path(source)
+        intended = render(metadata, text+'\n')
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if path.exists() or db.execute('SELECT 1 FROM records WHERE id=?', (metadata['id'],)).fetchone():
+                raise ValueError('task source or id exists; use task-update')
+            self._intent(source, None, intended, 'task')
+        result = self.sync()
+        if result['conflicts'] or result['warnings']:
+            raise RevisionConflict('task-create projection requires review')
+        with self.store._connect() as db:
+            row = db.execute('SELECT payload FROM records WHERE id=?', (metadata['id'],)).fetchone()
+        if not row:
+            raise RevisionConflict('created task missing from projection')
+        record = json.loads(row[0])
+        if any(record.get(key) != value for key, value in metadata.items()) or record['source_sha256'] != _hash(intended) or path.read_bytes() != intended.encode('utf-8'):
+            raise RevisionConflict('created task metadata or source readback mismatch')
+        return record
+
+    def receipt(self, event_id, summary, refs, harness, session=None):
+        if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
+            raise ValueError('event id and summary required')
+        if harness not in ('codex', 'claude', 'antigravity', 'manual') or not isinstance(refs, list) or not refs:
+            raise ValueError('harness and refs required')
+        refs = [self.store._source(ref) for ref in refs]
+        source = 'receipts/' + _hash(event_id) + '.md'
+        event = {'event_id': event_id, 'summary': summary, 'refs': refs, 'harness': harness, 'created_at': datetime.now(timezone.utc).isoformat()}
+        if session is not None:
+            if not isinstance(session, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', session):
+                raise ValueError('invalid receipt session')
+            event['session'] = session
+        with self.store._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT payload FROM receipts WHERE id=?', (event_id,)).fetchone()
+            if row:
+                old = json.loads(row[0])
+                if old['summary'] != summary or old['refs'] != refs:
+                    raise ReceiptConflict('event id collision')
+                event = old
+            receipt_metadata = {'kind': 'receipt', 'event_id': event_id, 'harness': event['harness'], 'refs': refs, 'visibility': 'internal'}
+            if event.get('created_at'):
+                receipt_metadata['created_at'] = event['created_at']
+            if event.get('session'):
+                receipt_metadata['session'] = event['session']
+            content = render(receipt_metadata, summary + '\n')
+            path = self._path(source)
+            if path.exists():
+                if path.read_text(encoding='utf-8') != content:
+                    raise ReceiptConflict('receipt source manually changed')
+            else:
+                self._intent(source, None, content, 'receipt', event)
+        result = self.sync()
+        if result['conflicts']:
+            raise ReceiptConflict('receipt projection conflict')
+        if self._path(source, existing=True).read_text(encoding='utf-8') != content:
+            raise ReceiptConflict('receipt source changed before readback')
+        self.store.submit_receipt(event_id, summary, refs, event['harness'])
+        return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source}

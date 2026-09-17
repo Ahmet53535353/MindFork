@@ -1,0 +1,60 @@
+# Markdown sources, local index
+
+`beyin_v3_sync.py` adds explicit in-process synchronization to the V3 foundation. It requires only Python's standard library. No package install, model, network, cloud account, or background service is involved. Existing compiler isolation and hook behavior are unchanged by this module.
+
+Use `SyncEngine(vault_root, state_dir)`, then `sync()`. The runtime must be a dedicated directory outside the vault. Its `.store` is the existing `MemoryStore`; retrieve through that store after synchronization. The same source and context APIs serve Codex, Claude and Antigravity.
+
+## Source format
+
+An ordinary Markdown file is indexed by its complete body with a stable ID derived from its relative path. Its visibility defaults to internal. A rename therefore removes the old ordinary-note ID and creates a new one. Explicit IDs persist across renames.
+
+Canonical managed metadata is a JSON object between Markdown frontmatter delimiters. JSON objects are also valid YAML:
+
+```markdown
+---
+{
+  "id": "example-task",
+  "kind": "task",
+  "revision": 1,
+  "project": "demo",
+  "status": "active",
+  "visibility": "internal",
+  "facts": {"owner": "team"}
+}
+---
+# Example
+
+Keep this source body when updating task metadata.
+```
+
+Flat scalar YAML fields are also accepted, including Unicode property names, quoted strings, numbers, empty values (null), single-line scalar lists (`[a, "b c"]`, `[]`) and consistently space-indented block lists; list items may be plain or quoted (JSON escapes in double quotes, doubled single quotes), with plain items kept as strings unless the entire inline list is valid JSON, which retains its JSON types. Unsupported multiline scalars, nested collections, flow mappings, anchors/aliases/tags, inline comments in plain items, duplicate keys or ambiguous indentation produce a warning and the file is excluded; metadata is never silently discarded, and complex metadata requires JSON frontmatter. Explicit context reads still return the freshly indexed healthy subset with `partial: true` and bounded source warnings. Source-ID conflicts remain fail-closed. No task or completion status is inferred from body prose.
+
+The scanner skips hidden directories/files, node_modules, symlinks, known instruction/configuration Markdown names, receipt output directories and files explicitly marked as generated or `kind: receipt`. It does not assume that all ordinary prose is instruction-safe; untrusted content should be explicitly marked `kind: untrusted`. Visibility must be public, internal or private. Privacy-filtered context does not include private notes by default.
+
+## Synchronization and task updates
+
+Markdown is authoritative. `sync()` reads sources and replaces their derived record projection in one SQLite transaction. Edits, deletions and renames converge on the next explicit call. Ingest/update/delete events are recorded for real projection changes, with no extra events for an unchanged sync. Source hashes prevent retrieval from returning a changed source before synchronization. Duplicate source IDs are quarantined rather than choosing a winning file. Warnings and conflicts are returned explicitly; a conflict pass reports `status: conflict`, a warning-only pass reports `status: degraded`, and a clean pass reports `status: succeeded`.
+
+`update_task(id, expected_revision, changes)` only updates explicit task metadata. The source must contain an ID, kind task, and revision. The body remains byte-equivalent for ordinary UTF-8 LF Markdown. The index revision and source hash are compared before replacement. The operation increments revision, writes canonical JSON frontmatter, synchronizes and checks the intended revision/hash on readback. Unsupported keys, stale revisions and manual edits fail rather than returning success. This API never marks a task complete unless the supplied changes explicitly request that status.
+
+The local SQLite write lock serializes participating clients across processes without a platform-specific file-lock dependency. It does not lock other editors or cloud synchronization. Source hash comparison detects observed changes; an unrelated writer can still race after the final check, so reread/sync remains the conflict-resolution path.
+
+## Receipts and recovery
+
+`receipt(event_id, summary, refs, harness)` writes exactly one deterministic source under `receipts/`, using a full hash of the event ID as the filename. References must exist inside the vault. The same semantic receipt replays across harnesses without another file; a changed payload or manually modified receipt source is a conflict. First-writer harness attribution stays stable. Receipts do not automatically become tasks or get copied to a second daily summary.
+
+Before replacing a source, the module atomically writes a private intent journal outside the vault. If a replacement or projection fails, the next `sync()` retries the intent only when the existing file matches its recorded old or intended new hash. A third-party edit is preserved and returned as a conflict, with the journal retained for deliberate resolution. The projection transaction commits before successful journal cleanup. An interrupted task update can consequently finish on the next sync; callers must inspect recovery rather than assuming that an exception means cancellation.
+
+File writes use temporary files, flush/fsync and atomic replace; directory fsync is attempted where the platform supports it. This is recoverable local intent, not a distributed transaction across arbitrary editors. No automatic destructive rollback of source records occurs.
+
+## Scope
+
+This layer is intentionally explicit and synchronous. It does not install a daemon, parse real chat transcripts, infer semantic outcomes, modify model settings, or replace the staged knowledge compiler. A separate adapter may call it, but a queued adapter event is not proof of successful synchronization.
+
+## Effective revisions and session snapshots
+
+A changed managed source advances the indexed effective revision even when its author did not edit the declared frontmatter revision. A larger explicit revision is honored. Repeated unchanged sync does not advance it. Task updates compare this effective revision and write its successor into canonical frontmatter, preventing a previously read revision from silently overwriting a manual edit after synchronization.
+
+Skipped unsupported metadata returns `status: degraded` with warnings. Context adapters must surface this rather than treating an incomplete scan as healthy.
+
+`store.snapshot_context(audience='internal', budget_chars=6000, limit=5)` (also available on SyncEngine) selects recent active/waiting records and statusless notes/facts using the same visibility, trust, source-freshness and budget checks as retrieval. A task without explicit status is unknown and excluded from this current-state snapshot; no active or completed state is invented. It is explicit: an empty ordinary retrieval query continues to abstain. Receipts remain separate historical agent claims; adapters may include a bounded latest receipt with that label, never convert it into verified facts. New source receipts have an immutable ISO `created_at` timestamp retained on replay.

@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""Source-authoritative synchronization contract, synthetic local fixtures only."""
+import importlib.util
+import json
+from datetime import datetime
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+MODULE = ROOT / 'template/.claude/scripts/beyin_v3_sync.py'
+
+
+def load_module():
+    if not MODULE.is_file():
+        raise AssertionError('SyncEngine not implemented')
+    spec = importlib.util.spec_from_file_location('beyin_v3_sync_test_subject', MODULE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    scripts = str(MODULE.parent)
+    sys.path.insert(0, scripts)
+    old = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = old
+        sys.path.remove(scripts)
+    return module
+
+
+class SourceSyncTest(unittest.TestCase):
+    def setUp(self):
+        self.module = load_module()
+        self.tmp = tempfile.TemporaryDirectory(prefix='beyin-sync-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.vault = self.root / 'Synthetic Beyin Çalışma'
+        self.vault.mkdir()
+        self.state = self.root / 'runtime'
+        self.engine = self.module.SyncEngine(self.vault, self.state)
+        self.addCleanup(lambda: getattr(self.engine.store, 'close', lambda: None)())
+
+    def write(self, name='notes/task.md', body='Nebula calibration awaits owner Synthetic Reviewer.\n', **changes):
+        metadata = {'id': 'nebula-task', 'kind': 'task', 'project': 'nebula', 'revision': 1,
+                    'status': 'active', 'visibility': 'internal', 'facts': {'owner': 'Synthetic Reviewer'}}
+        metadata.update(changes)
+        path = self.vault / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('---\n' + json.dumps(metadata, ensure_ascii=False) + '\n---\n' + body, encoding='utf-8')
+        return path
+
+    def records(self, query='Nebula calibration', **kwargs):
+        return self.engine.store.retrieve(query, project='nebula', **kwargs)['records']
+
+    def test_add_edit_delete_follow_authoritative_source(self):
+        path = self.write()
+        result = self.engine.sync()
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertGreaterEqual(result['indexed'], 1)
+        self.assertEqual(self.records()[0]['facts']['owner'], 'Synthetic Reviewer')
+        self.write(body='Nebula calibration approved by New Reviewer.\n', revision=2, facts={'owner': 'New Reviewer'})
+        self.engine.sync()
+        records = self.records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['revision'], 2)
+        self.assertEqual(records[0]['facts']['owner'], 'New Reviewer')
+        self.assertNotIn('Synthetic Reviewer', records[0]['text'])
+        path.unlink()
+        deleted = self.engine.sync()
+        self.assertGreaterEqual(deleted['deleted'], 1)
+        self.assertEqual(self.records(), [])
+
+    def test_duplicate_source_id_quarantined_without_winner(self):
+        self.write()
+        self.engine.sync()
+        self.write('notes/conflicting.md', body='Nebula calibration has different owner.\n')
+        report = self.engine.sync()
+        self.assertTrue(report['conflicts'])
+        self.assertEqual(self.records(), [])
+        self.assertTrue((self.vault / 'notes/task.md').exists())
+        self.assertTrue((self.vault / 'notes/conflicting.md').exists())
+
+    def test_source_rename_updates_citation_without_duplicate(self):
+        path = self.write()
+        self.engine.sync()
+        destination = path.with_name('renamed.md')
+        path.rename(destination)
+        self.engine.sync()
+        records = self.records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['id'], 'nebula-task')
+        self.assertEqual(records[0]['source'], 'notes/renamed.md')
+
+    def test_plain_markdown_full_thread_body_preserved(self):
+        path = self.vault / 'Threads.md'
+        body = '# Threads\n## Active\n### Thread: Spectroscope\n**Status:** waiting\nSpectroscope decision belongs to Synthetic Reviewer.\nNext action: inspect violet calibration sample.\n'
+        path.write_text(body, encoding='utf-8')
+        self.engine.sync()
+        response = self.engine.store.retrieve('Spectroscope decision reviewer')
+        self.assertEqual(len(response['records']), 1)
+        self.assertIn('Next action: inspect violet calibration sample.', response['records'][0]['text'])
+        self.assertIn('decision belongs to Synthetic Reviewer.', response['records'][0]['text'])
+        self.assertEqual(response['records'][0]['source'], 'Threads.md')
+
+    def test_public_boundary_excludes_private_and_untrusted_source(self):
+        self.write('notes/public.md', id='visible', visibility='public')
+        self.write('notes/private.md', id='hidden', visibility='private', body='Nebula calibration SYNTHETIC_PRIVATE_CANARY\n')
+        self.write('notes/untrusted.md', id='untrusted', kind='untrusted')
+        self.engine.sync()
+        response = self.engine.store.retrieve('Nebula calibration', project='nebula', audience='public')
+        self.assertEqual([r['id'] for r in response['records']], ['visible'])
+        self.assertNotIn('SYNTHETIC_PRIVATE_CANARY', json.dumps(response))
+
+    def test_receipt_markdown_idempotent_and_collision_rejected(self):
+        self.write()
+        self.engine.sync()
+        first = self.engine.receipt('synthetic-event', 'Nebula reviewed.', ['notes/task.md'], 'codex')
+        second = self.engine.receipt('synthetic-event', 'Nebula reviewed.', ['notes/task.md'], 'claude')
+        self.assertEqual(first, second)
+        self.assertEqual(first['status'], 'succeeded')
+        source = self.vault / first['source']
+        self.assertTrue(source.is_file())
+        self.assertIn('Nebula reviewed.', source.read_text(encoding='utf-8'))
+        original = source.read_bytes()
+        with self.assertRaises(ValueError):
+            self.engine.receipt('synthetic-event', 'Different summary.', ['notes/task.md'], 'codex')
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(len(list((self.vault / 'receipts').glob('*.md'))), 1)
+        self.engine.sync()
+        self.assertFalse(any(r.get('kind') == 'receipt' for r in self.records('Nebula reviewed')))
+
+    def test_receipt_manually_mutated_source_never_overwritten(self):
+        self.write()
+        self.engine.sync()
+        receipt = self.engine.receipt('edited-event', 'Nebula reviewed.', ['notes/task.md'], 'codex')
+        source = self.vault / receipt['source']
+        source.write_text('User synthetic edit must survive.\n', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            self.engine.receipt('edited-event', 'Nebula reviewed.', ['notes/task.md'], 'codex')
+        self.assertEqual(source.read_text(encoding='utf-8'), 'User synthetic edit must survive.\n')
+
+    def test_task_update_preserves_body_and_rejects_stale_revision(self):
+        body = 'Nebula calibration.\n\n- Keep this exact task prose.\n  Unicode: ölçüm 🔭\n'
+        path = self.write(body=body)
+        self.engine.sync()
+        updated = self.engine.update_task('nebula-task', 1, {'status': 'waiting'})
+        self.assertEqual(updated['revision'], 2)
+        self.assertEqual(updated['status'], 'waiting')
+        self.assertEqual(path.read_text(encoding='utf-8').split('\n---\n', 1)[1], body)
+        saved = path.read_bytes()
+        with self.assertRaises(ValueError):
+            self.engine.update_task('nebula-task', 1, {'status': 'done'})
+        self.assertEqual(path.read_bytes(), saved)
+        self.engine.sync()
+        self.assertEqual(self.records()[0]['status'], 'waiting')
+
+    def test_manual_edit_without_revision_bump_invalidates_old_expected_revision(self):
+        self.write()
+        self.engine.sync()
+        self.assertEqual(self.records()[0]['revision'], 1)
+        # Human editor changes authoritative content but leaves frontmatter revision 1.
+        self.write(body='Nebula calibration manually changed by source author.\n', status='waiting')
+        self.engine.sync()
+        effective = self.records()[0]['revision']
+        self.assertEqual(effective, 2)
+        self.engine.sync()
+        self.assertEqual(self.records()[0]['revision'], effective)
+        with self.assertRaises(ValueError):
+            self.engine.update_task('nebula-task', 1, {'status': 'done'})
+        updated = self.engine.update_task('nebula-task', effective, {'status': 'done'})
+        self.assertEqual(updated['revision'], 3)
+        self.engine.sync()
+        self.assertEqual(self.records()[0]['revision'], 3)
+
+    def test_unsupported_metadata_reports_degraded_not_succeeded(self):
+        source = self.vault / 'unsupported.md'
+        source.write_text('---\nid: unsupported\nfacts:\n  owner: Synthetic Reviewer\n---\nNebula calibration metadata fixture.\n', encoding='utf-8')
+        report = self.engine.sync()
+        self.assertTrue(report['warnings'])
+        self.assertEqual(report['status'], 'degraded')
+        self.assertEqual(self.records(), [])
+
+    def test_yaml_scalar_lists_and_empty_values_round_trip(self):
+        cases = [
+            ('tags: [ikinci-beyin, obsidian]', {'tags': ['ikinci-beyin', 'obsidian']}),
+            ('tags: []', {'tags': []}),
+            ('tags: [  ]', {'tags': []}),
+            ('aliases: ["Foo, Bar", \'baz\', \'it\'\'s fine\']',
+             {'aliases': ['Foo, Bar', 'baz', "it's fine"]}),
+            (r'aliases: ["quote: \"x\"", "back\\slash", "line\nfeed", "\u00e7"]',
+             {'aliases': ['quote: "x"', 'back\\slash', 'line\nfeed', 'ç']}),
+            ('tags: [1, true, null, word]', {'tags': ['1', 'true', 'null', 'word']}),
+            ('tags: [1, true, null]', {'tags': [1, True, None]}),
+            ('tags:\n  - a\n  - "b c"', {'tags': ['a', 'b c']}),
+            ('aliases:\n    - "Foo, Bar"\n    - \'it\'\'s fine\'\n    - plain, comma',
+             {'aliases': ['Foo, Bar', "it's fine", 'plain, comma']}),
+            (r'aliases:' + '\n  - "line\\nfeed"\n  - "\\u00e7"',
+             {'aliases': ['line\nfeed', 'ç']}),
+            ('tags:\n  - 1\n  - true\n  - null', {'tags': ['1', 'true', 'null']}),
+            ('tags:\n  - a\naliases:\n    - b\ntitle:',
+             {'tags': ['a'], 'aliases': ['b'], 'title': None}),
+            ('title:\naliases: []', {'title': None, 'aliases': []}),
+            ('title:   ', {'title': None}),
+            ('tags:\naliases:', {'tags': None, 'aliases': None}),
+            ('aliases: ["", \'\', " # literal", "&literal", "[literal]"]',
+             {'aliases': ['', '', ' # literal', '&literal', '[literal]']}),
+            ('tags:\n  - ""\n  - \' # literal\'\n  - "!literal"',
+             {'tags': ['', ' # literal', '!literal']}),
+            ('title: "Example"\nscore: 1\nenabled: true\nempty: null',
+             {'title': 'Example', 'score': 1, 'enabled': True, 'empty': None}),
+        ]
+        source = self.vault / 'lists.md'
+        body = 'Nebula calibration YAML fixture.\n'
+        for header, expected in cases:
+            with self.subTest(header=header):
+                metadata = dict(expected, id='yaml-note', project='nebula')
+                source.write_text('---\nid: yaml-note\nproject: nebula\n' + header + '\n---\n' + body, encoding='utf-8')
+                self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'succeeded', report)
+                record = self.records()[0]
+                for key, value in expected.items():
+                    self.assertEqual(record[key], value)
+                self.assertEqual(self.module.parse(self.module.render(metadata, body)), (metadata, body))
+
+    def test_inline_json_and_plain_values_keep_existing_behaviour(self):
+        body = 'Nebula calibration inline JSON fixture.\n'
+        header = ('id: inline-json\nfacts: {"nested": [1, true]}\ntags: [["a"], {"b": "c"}]\n'
+                  "title: Karar: V3\nnote: 'it'quote'")
+        expected = {'id': 'inline-json', 'facts': {'nested': [1, True]}, 'tags': [['a'], {'b': 'c'}],
+                    'title': 'Karar: V3', 'note': "it'quote"}
+        self.assertEqual(self.module.parse('---\n' + header + '\n---\n' + body), (expected, body))
+
+    def test_unicode_property_keys_may_start_with_localized_letters(self):
+        header = ('özet: karar\nşirket: Avenox\nüberblick: bereit\n'
+                  'étiquette: memoire\nключ: значение\n_internal: true')
+        metadata, body = self.module.parse('---\n' + header + '\n---\nLocalized keys.\n')
+        self.assertEqual(metadata['özet'], 'karar')
+        self.assertEqual(metadata['şirket'], 'Avenox')
+        self.assertEqual(metadata['überblick'], 'bereit')
+        self.assertEqual(metadata['étiquette'], 'memoire')
+        self.assertEqual(metadata['ключ'], 'значение')
+        self.assertTrue(metadata['_internal'])
+        self.assertEqual(body, 'Localized keys.\n')
+        for key in ('1özet', '-özet', '.özet'):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    self.module.parse(f'---\n{key}: test\n---\nBody\n')
+
+    def test_canonical_json_still_preserves_complex_metadata(self):
+        metadata = {'id': 'json-note', 'project': 'nebula', 'title': None,
+                    'facts': {'nested': {'values': [1, True, None]}}, 'tags': [['a'], {'b': 'c'}]}
+        body = 'Nebula calibration canonical JSON fixture.\n'
+        source = self.vault / 'canonical.md'
+        source.write_text(self.module.render(metadata, body), encoding='utf-8')
+        self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        record = self.records()[0]
+        for key, value in metadata.items():
+            self.assertEqual(record[key], value)
+
+    def test_unsupported_yaml_forms_warn_and_exclude_source(self):
+        headers = [
+            'field:\n  nested: value', 'field: {nested: value}', 'field: [a, [b]]',
+            'field:\n  - [nested]', 'field:\n  - {nested: value}',
+            'field:\n  - - nested', 'field:\n  - nested: value',
+            'field:\n  - a\n    - b', 'field:\n    - a\n  - b',
+            'field: |\n  multiline', 'field: >\n  folded', 'field: [a,\n  b]',
+            'field:\n  - |\n    multiline', 'field:\n  - >\n    folded',
+            'field: &anchor value', 'field: *alias', 'field: !tag value',
+            'field: [a, &anchor b]', 'field: [*alias]', 'field: [!tag value]',
+            'field:\n  - &anchor a', 'field:\n  - *alias', 'field:\n  - !tag a',
+            'field: [a # comment, b]', 'field:\n  - a # comment',
+            'field: [# comment]', 'field: [a\t# comment]',
+            'field: [a]\nfield: [b]', 'field:\nfield: value',
+            'field:\n\t- a', 'field:\n \t- a', 'field:\n  - a\n\t- b',
+            '  field: value', '\tfield: value', 'field:\n- a',
+            'field:\n  - ', 'field:\n  - a\n  continuation',
+            'field: [a,,b]', 'field: [a,]', 'field: [a', 'field: [a] trailing',
+            'field: ["a" trailing]', "field: ['unclosed]", 'field: ["unclosed]',
+            r'field: ["bad\q"]', "field: ['bad'quote']",
+            'field: [a: b]', 'field: [a:]', 'field: [? a]', 'field: [- a]',
+        ]
+        source = self.vault / 'unsupported.md'
+        for header in headers:
+            with self.subTest(header=header):
+                source.write_text('---\nid: unsupported\nproject: nebula\n' + header +
+                                  '\n---\nNebula calibration rejected fixture.\n', encoding='utf-8')
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'degraded', report)
+                self.assertEqual(report['indexed'], 0)
+                self.assertEqual([w['source'] for w in report['warnings']], ['unsupported.md'])
+                self.assertEqual(self.records(), [])
+
+    def test_yaml_null_and_list_values_respect_record_validation(self):
+        source = self.vault / 'invalid.md'
+        for field in ('id', 'kind', 'status', 'project', 'updated_at', 'revision', 'visibility', 'facts', 'supersedes'):
+            for value in ('', '[public, internal]', '\n  - public\n  - internal'):
+                # Supersedes explicitly accepts a sequence of record IDs.
+                if field == 'supersedes' and value:
+                    continue
+                with self.subTest(field=field, value=value):
+                    source.write_text('---\n' + field + ': ' + value +
+                                      '\n---\nNebula calibration invalid metadata.\n', encoding='utf-8')
+                    report = self.engine.sync()
+                    self.assertEqual(report['status'], 'degraded', report)
+                    self.assertEqual(report['indexed'], 0)
+                    self.assertEqual(len(report['warnings']), 1)
+                    self.assertEqual(self.engine.store.snapshot_context()['records'], [])
+
+    def test_block_list_vault_sync_and_context_cli_succeed(self):
+        (self.vault / 'plain.md').write_text('Nebula calibration plain note.\n', encoding='utf-8')
+        (self.vault / 'flow.md').write_text('---\ntags: [nebula, calibration]\n---\nNebula calibration flow note.\n', encoding='utf-8')
+        (self.vault / 'block.md').write_text('---\ntags:\n  - nebula\n  - "calibration"\ntitle:\n---\nNebula calibration block note.\n', encoding='utf-8')
+        for command in (('sync',), ('context', 'Nebula calibration')):
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'),
+                                     '--vault', str(self.vault), '--state', str(self.state), *command],
+                                    capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout)
+            if command[0] == 'sync':
+                self.assertEqual(output['status'], 'succeeded')
+                self.assertEqual(output['indexed'], 3)
+                self.assertEqual(output['warnings'], [])
+            else:
+                self.assertEqual({record['source'] for record in output['records']}, {'plain.md', 'flow.md', 'block.md'})
+                self.assertFalse(output['abstained'])
+
+    def test_block_list_task_update_writes_json_and_preserves_body(self):
+        for label, newline in (('LF', '\n'), ('CRLF', '\r\n')):
+            with self.subTest(newline=label):
+                self._assert_block_list_task_update(newline)
+
+    def _assert_block_list_task_update(self, newline):
+        body = '# Nebula calibration\n\n- Keep exact prose.\n  Unicode: ölçüm 🔭\n'.replace('\n', newline)
+        header = ('id: yaml-task\nkind: task\nrevision: 1\nproject: nebula\nstatus: active\n'
+                  'tags:\n  - a\n  - "b c"\naliases: ["Foo, Bar", \'baz\']\ntitle:')
+        source = self.vault / 'task.md'
+        # Write exact bytes so the newline style is the one under test on every platform.
+        source.write_bytes(('---\n' + header + '\n---\n').replace('\n', newline).encode('utf-8') + body.encode('utf-8'))
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        original, parsed_body = self.module.parse(source.read_bytes().decode('utf-8'))
+        self.assertEqual(parsed_body, body)
+        before = source.read_bytes()
+        for field in ('status', 'visibility'):
+            for value in (None, ['waiting']):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(ValueError):
+                        self.engine.update_task('yaml-task', 1, {field: value})
+                    self.assertEqual(source.read_bytes(), before)
+        updated = self.engine.update_task('yaml-task', 1, {'status': 'waiting'})
+        expected = dict(original, status='waiting', revision=2)
+        rendered = source.read_bytes().decode('utf-8')
+        self.assertEqual(json.loads(rendered.split('---', 2)[1]), expected)
+        self.assertEqual(source.read_bytes(), self.module.render(expected, body).encode('utf-8'))
+        self.assertEqual(self.module.parse(rendered), (expected, body))
+        for key, value in expected.items():
+            self.assertEqual(updated[key], value)
+        source.unlink()
+        self.engine.sync()
+
+    def test_receipt_has_immutable_iso_created_at(self):
+        self.write()
+        self.engine.sync()
+        receipt = self.engine.receipt('dated-receipt', 'Synthetic dated evidence.', ['notes/task.md'], 'codex')
+        path = self.vault / receipt['source']
+        original = path.read_bytes()
+        frontmatter = path.read_text(encoding='utf-8').split('---', 2)[1]
+        metadata = json.loads(frontmatter)
+        self.assertIn('created_at', metadata)
+        timestamp = datetime.fromisoformat(metadata['created_at'].replace('Z', '+00:00'))
+        self.assertIsNotNone(timestamp.tzinfo)
+        self.assertEqual(receipt, self.engine.receipt('dated-receipt', 'Synthetic dated evidence.', ['notes/task.md'], 'claude'))
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_no_query_snapshot_preserves_visibility_status_and_budget(self):
+        self.write('notes/active.md', id='active', status='active', visibility='public')
+        self.write('notes/waiting.md', id='waiting', status='waiting')
+        self.write('notes/done.md', id='done', status='done')
+        self.write('notes/private.md', id='private', visibility='private')
+        self.write('notes/untrusted.md', id='untrusted', kind='untrusted')
+        self.engine.sync()
+        response = self.engine.store.snapshot_context(audience='internal', budget_chars=8000, limit=5)
+        self.assertEqual({r['id'] for r in response['records']}, {'active', 'waiting'})
+        self.assertLessEqual(response['used_chars'], 8000)
+        public = self.engine.store.snapshot_context(audience='public', budget_chars=8000, limit=5)
+        self.assertEqual([r['id'] for r in public['records']], ['active'])
+
+    def test_snapshot_includes_plain_notes_and_statusless_facts(self):
+        plain = self.vault / 'observatory.md'
+        plain.write_text('# Synthetic observatory note\nNebula observatory uses violet calibration.\n', encoding='utf-8')
+        fact = self.vault / 'fact.md'
+        fact.write_text('---\n' + json.dumps({'id': 'statusless-fact', 'kind': 'fact', 'project': 'nebula', 'visibility': 'internal'}) +
+                        '\n---\nNebula spectroscope owner is Synthetic Reviewer.\n', encoding='utf-8')
+        self.write('notes/done.md', id='done-task', status='done')
+        self.engine.sync()
+        snapshot = self.engine.store.snapshot_context(audience='internal', budget_chars=8000, limit=5)
+        self.assertEqual({r['source'] for r in snapshot['records']}, {'observatory.md', 'fact.md'})
+        self.assertNotIn('done-task', [r['id'] for r in snapshot['records']])
+        self.assertIn('violet calibration', json.dumps(snapshot))
+        self.assertIn('Synthetic Reviewer', json.dumps(snapshot))
+
+    def test_source_replace_failure_recovers_consistently(self):
+        path = self.write()
+        self.engine.sync()
+        original = path.read_bytes()
+        real_replace = os.replace
+        def fail_source(src, dst, *args, **kwargs):
+            if Path(dst).resolve() == path.resolve():
+                raise OSError('Synthetic source replace failure')
+            return real_replace(src, dst, *args, **kwargs)
+        with patch.object(self.module.os, 'replace', side_effect=fail_source):
+            with self.assertRaises(OSError):
+                self.engine.update_task('nebula-task', 1, {'status': 'waiting'})
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(self.records()[0]['revision'], 1)
+        getattr(self.engine.store, 'close', lambda: None)()
+        self.engine = self.module.SyncEngine(self.vault, self.state)
+        self.engine.sync()
+        recovered = self.records()[0]
+        self.assertEqual(recovered['revision'], 2)
+        self.assertEqual(recovered['status'], 'waiting')
+        self.engine.sync()
+        self.assertEqual(self.records()[0]['revision'], 2)
+
+    def test_recovery_does_not_overwrite_intervening_manual_change(self):
+        path = self.write()
+        self.engine.sync()
+        real_replace = os.replace
+        def fail_source(src, dst, *args, **kwargs):
+            if Path(dst).resolve() == path.resolve():
+                raise OSError('Synthetic source replace failure')
+            return real_replace(src, dst, *args, **kwargs)
+        with patch.object(self.module.os, 'replace', side_effect=fail_source):
+            with self.assertRaises(OSError):
+                self.engine.update_task('nebula-task', 1, {'status': 'waiting'})
+        self.write(body='Nebula calibration manual source revision wins.\n', revision=2, status='done')
+        manual = path.read_bytes()
+        report = self.engine.sync()
+        self.assertTrue(report['conflicts'])
+        self.assertEqual(path.read_bytes(), manual)
+        self.assertNotEqual(self.records()[0]['status'], 'waiting')
+
+
+if __name__ == '__main__':
+    unittest.main()

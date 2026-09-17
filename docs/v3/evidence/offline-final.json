@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-09-15T21:14:48.021564+00:00",
+  "scope": "Independent synthetic offline regressions and novice-doc smoke; no actual model or provider calls.",
+  "source_hashes_sha256": {
+    "template/.claude/scripts/beyin_v3.py": "657ce6f4866b5217bca4dd33a9cee58f3990b3b29c7f2d867f87644aa380c268",
+    "template/.claude/scripts/beyin_v3_hook.py": "fef0c7bb99f46b331f96cc6ef10aa3ba6d73472928a361e7ca9cfba1d60e00be",
+    "template/.claude/scripts/beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e",
+    "template/.claude/scripts/beyin_v3_sync.py": "8444e9be6192224bef89acb7c3f9a1ceeff473b4f9e1b13c7f0cb31da892238a",
+    "scripts/beyin_v3.py": "9c2b0470a5c2742bfe286f1ba700dc79713f64ab630bb6fe77cb74a1fae9ac5b",
+    "scripts/install_v3.py": "e4258ab43eac6392cb9235f6ebbe405cd6fd5b58db4e5b018f6c86b2389a3db9",
+    "scripts/evaluate_v3.py": "d88805a44161d36b70dc656840a69ca374726d1e2f9ad58b1b919e935349668d",
+    "tests/v3_hook_test.py": "d60639be956cc8a2d5c19baaec36ecf7ea52739aa0bbb889a486a848ce80c18b",
+    "tests/v3_runtime_test.py": "3466904ada3be5476eae8c56abbd0f34f7808435d3b7fc7d71250f7ba7cd97b1",
+    "tests/v3_semantic_test.py": "08352839f612b705102941bff6a2428ec77096343f6656dfe25132c09e6897e3",
+    "tests/v3_skills_test.py": "6fd9b9c0801c5bfcbfb87f3eeb3bf288b97cee4dfb73732dfcc57d4f5657dd37",
+    "tests/v3_sync_test.py": "94ce33f8e507d71bfea4dd7bf200094e46a6726ca45195c95f0aabd2f743d369",
+    "tests/scripts_test.py": "ef762a7fb88994d20eaa2cbed61f0ebefc1836921c98255d6073b0c70b2dc069",
+    "tests/entrypoint_test.py": "045f12dd5bc5fadcb9cf8f8f5d5c1615d3c2859299c831133e11cc2c95ad1e08",
+    "tests/antigravity_test.py": "1cb6122949e5dcdc02d06efefa879730e09c4fa216ffd0f835f0a4db795e4673",
+    "tests/fixtures/v3/semantic_scenarios.json": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+    ".github/workflows/v3.yml": "ee3d48b7901edd77c1b609693dba0aef04d5f3fa9043e005bfb40a5db45d512f",
+    "docs/v3/QUICKSTART.md": "cfae70d8877bfed3749b402e2085cf12ec6f30a5f038a7a25fd2a961b37ecfef"
+  },
+  "macos": {
+    "platform": "Darwin",
+    "python": "3.14.2",
+    "checks": [
+      {
+        "suite": "legacy-scripts",
+        "command": "python tests/scripts_test.py",
+        "exit_code": 0,
+        "tests": 36,
+        "output_sha256": "cf17a999173a8cd351dd99ab8fad3e352cdb30ba0892527c8748ccae71d0274d",
+        "duration_seconds": 7.071
+      },
+      {
+        "suite": "legacy-entrypoint",
+        "command": "python tests/entrypoint_test.py",
+        "exit_code": 0,
+        "tests": 5,
+        "output_sha256": "7a8d01603d417b6adaebe9b2499b33399bea619fd15772390e2dbfea7ee1ed2c",
+        "duration_seconds": 0.043
+      },
+      {
+        "suite": "legacy-antigravity",
+        "command": "python tests/antigravity_test.py",
+        "exit_code": 0,
+        "tests": 6,
+        "output_sha256": "6176382fc3988723c7ed12400f0ae969632b2ad7ba930bfcdffc19c037071113",
+        "duration_seconds": 0.087
+      },
+      {
+        "suite": "v3-all",
+        "command": "python -m unittest discover -s tests -p v3_*test.py",
+        "exit_code": 0,
+        "tests": 61,
+        "output_sha256": "1db187ea20521a00505c5a835dea01c18708ae6c428981d43a5ab9e080712a0d",
+        "duration_seconds": 1.673
+      }
+    ],
+    "evaluation_exit_code": 0,
+    "evaluation": {
+      "fixture_sha256": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+      "runtime_sha256": "657ce6f4866b5217bca4dd33a9cee58f3990b3b29c7f2d867f87644aa380c268",
+      "development": {
+        "cases": 10,
+        "passed_cases": 10,
+        "recall_at_5": 1.0,
+        "precision_at_5_diagnostic": 0.95,
+        "forbidden_count": 0,
+        "abstention_accuracy": 1.0,
+        "structured_fact_retention": 1.0,
+        "privacy_canary_leaks": 0,
+        "harness_equivalence": true,
+        "passed": true
+      },
+      "holdout": {
+        "cases": 6,
+        "passed_cases": 6,
+        "recall_at_5": 1.0,
+        "precision_at_5_diagnostic": 1.0,
+        "forbidden_count": 0,
+        "abstention_accuracy": 1.0,
+        "structured_fact_retention": 1.0,
+        "privacy_canary_leaks": 0,
+        "harness_equivalence": true,
+        "passed": true
+      },
+      "passed": true
+    },
+    "legacy_tests_passed": 47,
+    "v3_tests_passed": 61
+  },
+  "linux": {
+    "platform": "Linux container",
+    "python": "3.13.15",
+    "network": "none",
+    "rootfs": "read-only",
+    "checks": [
+      {
+        "suite": "legacy-scripts",
+        "command": "python tests/scripts_test.py",
+        "exit_code": 0,
+        "tests": 36,
+        "output_sha256": "77028f5022022652cf4b17f1cc83665f72508436c92bccd17e8d7ab068ab60e2",
+        "duration_seconds": 5.888
+      },
+      {
+        "suite": "legacy-entrypoint",
+        "command": "python tests/entrypoint_test.py",
+        "exit_code": 0,
+        "tests": 5,
+        "output_sha256": "7a8d01603d417b6adaebe9b2499b33399bea619fd15772390e2dbfea7ee1ed2c",
+        "duration_seconds": 0.145
+      },
+      {
+        "suite": "legacy-antigravity",
+        "command": "python tests/antigravity_test.py",
+        "exit_code": 0,
+        "tests": 6,
+        "output_sha256": "f254ec5869951e76f0d629d1cb49685cfb2d0442196c1a3bd27b53fb402a1488",
+        "duration_seconds": 0.248
+      },
+      {
+        "suite": "v3-all",
+        "command": "python -m unittest discover -s tests -p v3_*test.py",
+        "exit_code": 0,
+        "tests": 61,
+        "output_sha256": "ba6a0835c9bc181fb9ddcdf81d420216c44bb6dff282b6112ed88dc2cd005eaa",
+        "duration_seconds": 2.599
+      }
+    ],
+    "evaluation_exit_code": 0,
+    "evaluation": {
+      "fixture_sha256": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+      "runtime_sha256": "657ce6f4866b5217bca4dd33a9cee58f3990b3b29c7f2d867f87644aa380c268",
+      "development": {
+        "cases": 10,
+        "passed_cases": 10,
+        "recall_at_5": 1.0,
+        "precision_at_5_diagnostic": 0.95,
+        "forbidden_count": 0,
+        "abstention_accuracy": 1.0,
+        "structured_fact_retention": 1.0,
+        "privacy_canary_leaks": 0,
+        "harness_equivalence": true,
+        "passed": true
+      },
+      "holdout": {
+        "cases": 6,
+        "passed_cases": 6,
+        "recall_at_5": 1.0,
+        "precision_at_5_diagnostic": 1.0,
+        "forbidden_count": 0,
+        "abstention_accuracy": 1.0,
+        "structured_fact_retention": 1.0,
+        "privacy_canary_leaks": 0,
+        "harness_equivalence": true,
+        "passed": true
+      },
+      "passed": true
+    },
+    "legacy_tests_passed": 47,
+    "v3_tests_passed": 61,
+    "container_image": {
+      "reference": "python:3.13-slim",
+      "id": "sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285",
+      "repo_digests": [
+        "python@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285"
+      ],
+      "architecture": "arm64"
+    }
+  },
+  "quickstart_smoke": {
+    "command": "python [exact QUICKSTART.md synthetic smoke]",
+    "exit_code": 0,
+    "code_sha256": "447e3a33af03b684b4fafd9eb95a0bd911c05586a438839cf478adf0c0edaa05",
+    "output_sha256": "86bcdb033089d228611b9decbd62b7a449e47038524280f655d7a87da733547b"
+  },
+  "native_windows": {
+    "status": "not_run",
+    "ci": "configured, not triggered by this lane",
+    "encoding_tests": "simulated cp1252 streams/default reads, not native OS proof",
+    "symlink_test": "injected permission failure with copy reconciliation"
+  },
+  "resolved_audit_findings": [
+    "Encoded Windows launcher matching now decodes UTF-16LE command for inspection; actual host command is executed by tests.",
+    "Windows uses built-in powershell.exe; no separate PowerShell 7 or pwsh installation requirement.",
+    "Symlink-denied shared skills correctly fall back to copies; deterministic fallback and edit reconciliation are tested.",
+    "CLI Unicode output was reproduced failing under cp1252 and fixed with lossless ASCII JSON.",
+    "Installer UTF-8 unrelated settings were reproduced corrupted under simulated cp1252 default and fixed with explicit UTF-8 reads.",
+    "UTF-8 JSON stdin receipt preservation has an additional regression test; fix landed concurrently before its first run."
+  ],
+  "privacy": {
+    "fixtures": "synthetic only",
+    "raw_logs_in_artifact": false,
+    "real_vault_access": false,
+    "model_calls": 0,
+    "provider_calls": 0,
+    "push_or_ci_trigger": false
+  }
+}

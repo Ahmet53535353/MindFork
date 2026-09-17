@@ -1,0 +1,97 @@
+{
+  "date": "2026-09-16",
+  "fixture": "Synthetic Aster notes, private visibility sentinel, shared beyin-smoke skill",
+  "operating_system": "macOS",
+  "raw_logs": "Private temporary files excluded from repository",
+  "results": [
+    {
+      "harness": "claude",
+      "exit_code": 0,
+      "answer_correct": true,
+      "private_canary_leak": false,
+      "answer_length": 9,
+      "check": "claude-live"
+    },
+    {
+      "harness": "claude",
+      "exit_code": 0,
+      "skill_correct": true,
+      "private_canary_leak": false,
+      "answer_length": 17,
+      "check": "claude-skill"
+    },
+    {
+      "harness": "claude",
+      "exit_code": 0,
+      "freshness_correct": true,
+      "old_marker_returned": false,
+      "private_canary_leak": false,
+      "check": "claude-freshness"
+    },
+    {
+      "harness": "codex",
+      "exit_code": 0,
+      "answer_correct": true,
+      "private_canary_leak": false,
+      "answer_length": 9,
+      "hook_mode": "project discovery; isolated home; interactive folder trust and /hooks review; no bypass",
+      "check": "codex-trusted"
+    },
+    {
+      "harness": "codex",
+      "exit_code": 0,
+      "skill_correct": true,
+      "private_canary_leak": false,
+      "answer_length": 17,
+      "check": "codex-skill"
+    },
+    {
+      "harness": "codex",
+      "exit_code": 0,
+      "freshness_correct": true,
+      "old_marker_returned": false,
+      "private_canary_leak": false,
+      "check": "codex-freshness"
+    },
+    {
+      "exit": 0,
+      "parsed": true,
+      "answer_correct": true,
+      "skill_correct": false,
+      "private_canary_leak": false,
+      "check": "agy-live",
+      "harness": "antigravity"
+    },
+    {
+      "exit": 0,
+      "parsed": true,
+      "skill_correct": true,
+      "private_canary_leak": false,
+      "attempt": 2,
+      "first_attempt_exact_correct": false,
+      "first_attempt_marker_present": true,
+      "check": "agy-skill",
+      "harness": "antigravity"
+    }
+  ],
+  "observed_lifecycle_counts_including_diagnostic_attempts": {
+    "antigravity:Stop": 6,
+    "claude:Stop": 5,
+    "codex:SessionEnd": 3,
+    "claude:UserPromptSubmit": 5,
+    "claude:SessionEnd": 5,
+    "claude:SessionStart": 5,
+    "antigravity:SessionStart": 5,
+    "codex:SessionStart": 3,
+    "codex:Stop": 3,
+    "codex:UserPromptSubmit": 3
+  },
+  "installed_runtime_sha256": {
+    "beyin_v3.py": "657ce6f4866b5217bca4dd33a9cee58f3990b3b29c7f2d867f87644aa380c268",
+    "beyin_v3_sync.py": "8444e9be6192224bef89acb7c3f9a1ceeff473b4f9e1b13c7f0cb31da892238a",
+    "beyin_v3_hook.py": "ad015719c62b8e5f98203011fcf5992d3d7a8aedbec3652b5b662b42bbd16df2",
+    "beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e",
+    "beyin_v3_cli.py": "ee2f3ccc2153a0fe7d5c54b9d51925e133f57508dc3ee75eee2f44ebe3730517"
+  },
+  "scope": "Client checks used these installed runtime bytes; final offline evidence separately binds later Windows launcher/encoding fixes."
+}

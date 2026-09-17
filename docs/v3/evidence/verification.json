@@ -1,0 +1,31 @@
+{
+  "at": "2026-09-15T20:37:34.628077+00:00",
+  "base_commit": "2e074cc44df5966543b4c21432cb5a895d141211",
+  "runtime_sha256": "9b71a57156799fa95de3a85e2bf59ddaa4cb0d7e5e2eb6fd5e6d686e2e9be6bd",
+  "fixture_sha256": "26755d6fb2ab368f5c7b5882cb2dd33ef651404f366bce45a4632deae57099bc",
+  "checks": [
+    {
+      "suite": "tests/scripts_test.py",
+      "exit_code": 0,
+      "tests": 36
+    },
+    {
+      "suite": "tests/entrypoint_test.py",
+      "exit_code": 0,
+      "tests": 5
+    },
+    {
+      "suite": "tests/antigravity_test.py",
+      "exit_code": 0,
+      "tests": 6
+    },
+    {
+      "suite": "v3_*test.py",
+      "tests": 23,
+      "exit_code": 0
+    }
+  ],
+  "evaluation_exit_code": 0,
+  "model_calls_for_benchmark": 0,
+  "third_party_memory_calls": 0
+}

@@ -1,0 +1,139 @@
+{
+  "date": "2026-09-16",
+  "scope": "GitHub hosted native OS offline tests; no real model sessions on Windows",
+  "runs": [
+    {
+      "conclusion": "failure",
+      "databaseId": 35024841994,
+      "headSha": "397edce6fe7ae3ca17d27489e15cb160bfc16b8e",
+      "jobs": [
+        {
+          "name": "windows-latest / Python 3.11",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994/job/104569260514",
+          "databaseId": 104569260514
+        },
+        {
+          "name": "ubuntu-latest / Python 3.11",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994/job/104569260750",
+          "databaseId": 104569260750
+        },
+        {
+          "name": "macos-latest / Python 3.13",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994/job/104569260754",
+          "databaseId": 104569260754
+        },
+        {
+          "name": "windows-latest / Python 3.13",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994/job/104569260800",
+          "databaseId": 104569260800
+        },
+        {
+          "name": "ubuntu-latest / Python 3.13",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994/job/104569260912",
+          "databaseId": 104569260912
+        },
+        {
+          "name": "macos-latest / Python 3.11",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994/job/104569260928",
+          "databaseId": 104569260928
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35024841994"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 35025071466,
+      "headSha": "89c9f37d6e4e4650edd71b1d52493b4ed84ed6f2",
+      "jobs": [
+        {
+          "name": "ubuntu-latest / Python 3.11",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466/job/104570020283",
+          "databaseId": 104570020283
+        },
+        {
+          "name": "ubuntu-latest / Python 3.13",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466/job/104570020437",
+          "databaseId": 104570020437
+        },
+        {
+          "name": "macos-latest / Python 3.11",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466/job/104570020533",
+          "databaseId": 104570020533
+        },
+        {
+          "name": "windows-latest / Python 3.11",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466/job/104570020588",
+          "databaseId": 104570020588
+        },
+        {
+          "name": "macos-latest / Python 3.13",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466/job/104570020635",
+          "databaseId": 104570020635
+        },
+        {
+          "name": "windows-latest / Python 3.13",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466/job/104570020713",
+          "databaseId": 104570020713
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35025071466"
+    }
+  ],
+  "windows_log_checks": [
+    {
+      "job": "windows-latest / Python 3.11",
+      "unit_test_counts": [
+        "62"
+      ],
+      "log_sha256": "3abe5491dc134e699c059953c330b8fb0b42b82089a9302f27706df274d30049"
+    },
+    {
+      "job": "windows-latest / Python 3.13",
+      "unit_test_counts": [
+        "62"
+      ],
+      "log_sha256": "71b5b9f4c8f716ab6711714d1b40cec7e82b97f85f5542c31cef7ef8049b233b"
+    }
+  ],
+  "source_sha256": {
+    ".github/workflows/v3.yml": "25bc27b76a33b8ed90f04e49e7aaba9d2c1cb4b7565621a037584cd61551191c",
+    "scripts/install_v3.py": "7f8d50536083f263485ab7ccc4510d304a89ca06feaa5beb8053532657b77916",
+    "scripts/beyin_v3.py": "9c2b0470a5c2742bfe286f1ba700dc79713f64ab630bb6fe77cb74a1fae9ac5b",
+    "template/.claude/scripts/beyin_v3.py": "9f92e03f770651501146363bcd8404bcadd4d85823337509c47e1f608dee48cb",
+    "template/.claude/scripts/beyin_v3_sync.py": "8444e9be6192224bef89acb7c3f9a1ceeff473b4f9e1b13c7f0cb31da892238a",
+    "template/.claude/scripts/beyin_v3_hook.py": "fef0c7bb99f46b331f96cc6ef10aa3ba6d73472928a361e7ca9cfba1d60e00be",
+    "template/.claude/scripts/beyin_v3_skills.py": "9768ba7866f53c7e540e98daf22d7a26736a2eef2ddac1d991169a557e87c78e"
+  },
+  "fixes": [
+    "Use forward slashes in persisted source citations on every OS",
+    "Treat managed instruction replacement as literal text, preserving Windows backslashes",
+    "Resolve built-in Windows PowerShell from system root instead of relying on PATH"
+  ],
+  "final_expected_tests_per_job": 62
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "captured_at_utc": "2026-09-15T22:00:55.647790+00:00",
+  "failed_native_run": "https://github.com/avenoxai/avenoxbeyin/actions/runs/35028468425",
+  "failed_commit": "b30d795",
+  "affected_jobs": [
+    "Windows Python 3.11",
+    "Windows Python 3.13"
+  ],
+  "failure_counts_per_job": {
+    "failures": 5,
+    "errors": 2,
+    "skipped": 1
+  },
+  "root_cause": "Installer planned-path keys used platform-native separators, while semantic config merge and legacy allowlists require forward-slash keys.",
+  "fix": "Serialize relative managed paths with as_posix before storing plan and manifest keys.",
+  "regression": "PureWindowsPath relative serialization with actual isolated native filesystem operations; not native Windows execution.",
+  "red": {
+    "command": "python -m unittest discover -s tests -p v3_product_test.py",
+    "tests": 9,
+    "failures": 1,
+    "exit_code": 1,
+    "output_sha256": "6df982ab818bc7b479d07c8bb1cf77eedd9a91544829c1610babff3c9beaafc9"
+  },
+  "green": {
+    "platform": "macOS",
+    "command": "python -m unittest discover -s tests -p 'v3_*test.py'",
+    "tests": 107,
+    "exit_code": 0,
+    "output_sha256": "9f18dfa6de609f05fad57325a54bb545005caab45b60233750031497c08127c2"
+  },
+  "source_sha256": {
+    "scripts/install_v3.py": "bb737b84c603e307375db89d1200d7e4866a30dacc5cbb95a203181bcb707410",
+    "tests/v3_product_test.py": "ae4dd137cc755bf9d22ba99da34a92fe6889770e05f54d67359323b704d028a1"
+  },
+  "native_windows_rerun": "pending",
+  "privacy": {
+    "raw_logs_in_artifact": false,
+    "synthetic_only": true,
+    "real_vault_access": false,
+    "model_calls": 0,
+    "push": false
+  }
+}

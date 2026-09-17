@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = (ROOT / "docs" / "beyin-v2.md").read_text(encoding="utf-8")
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+README = (ROOT / "docs" / "V2-README.md").read_text(encoding="utf-8")
 
 
 def section(text: str, start: str, end: str) -> str:

@@ -1,0 +1,45 @@
+{
+  "status": "release_candidate_with_issue_fixes",
+  "version": "3.0.1",
+  "tests": {
+    "command": "python3 -m unittest discover -s tests -p 'v3_*test.py'",
+    "passed": 133,
+    "exit_code": 0,
+    "full_suite_passed": 181,
+    "v3_suite_passed": 134
+  },
+  "semantic": {
+    "passed": true,
+    "development": 10,
+    "holdout": 6
+  },
+  "platform": "macOS local passed; Windows/Linux/macOS CI required on final pushed commit before release",
+  "files": {
+    "scripts/beyin_v3.py": "6eacc3a42bc3af807222eaed474e5bc2027fda5c6d7e10340d3a2f6000c97e51",
+    "scripts/beyin_entry.py": "1e3c281b6ce2f283781d0f4892099463dd19330f88c6e5e81bd715bfab822e14",
+    "template/.claude/scripts/beyin_v3_hook.py": "d6d34162bb84b1461f829a253901c9bfd07b652e25922f2d31877b4ab13c6948",
+    "template/.claude/scripts/beyin_v3_preferences.py": "b26cfbe8c8e1802e870e1212859a1e115d10fb49b9fe46bd361e16a390dadbcd",
+    "template/.claude/scripts/beyin_v3_sync.py": "b7dff824eca10efdb93b739d79f6dad664c278bddd98c63db530befc6e88d2a5",
+    "template/.agents/skills/beyin/SKILL.md": "7e13537cebaa001d7eb8e2b814b400e1ec6d898df3194bac789a12a2f1aa877f",
+    "tests/v3_preferences_test.py": "bf976a731e169f005b21b2ceef22e90f6b12120d2f7a7d95ba8be54a1efc5a08",
+    "tests/v3_public_entry_test.py": "a563d2b7837be72d687f6d1c0623155d9408f6c286e4ed769950a59b89294389",
+    "tests/v3_sync_test.py": "0256870b844617e860ba7e7dbb231c9e6070380141794f6d3593e9d64b0bfa3c",
+    "tests/v3_cli_context_test.py": "00b4a080af89e1bc33904b95fc060bdc6bc74102beacc5de0e5adefef77d5ca6",
+    "tests/v3_hook_test.py": "01f62dd9bcbaca3b6dd5447e4f5c429c16aba36d12c965d6905208d72848b71b",
+    "beyin.md": "c9945316de392089d3466cb29968321690375c589d390e2ee369274de56ecc3d",
+    "scripts/build_v3_release.py": "14b887b8fdda61c8da3371853babc2f4cc283c74e0843208c5fd5e10a6c54f63",
+    "tests/v3_product_test.py": "6f2a4b5e9484da584797f6bcb8e1b36c8bb0b777f7772bb8992202baffbe360c"
+  },
+  "package": {
+    "name": "beyin-v3-3.0.1.zip",
+    "sha256": "12e5febb4d8ab7bfee7c061513b68af6c4a297059da01eee89181402d2d2a6e4",
+    "clean_install": "passed",
+    "checksum_generated_by_builder": true
+  },
+  "published": false,
+  "issue_fixes": {
+    "22": "Obsidian scalar lists and empty properties accepted; degraded sources return bounded explicit partial context instead of blocking healthy records",
+    "23": "Contributor commits preserved in merge",
+    "24": "Unicode-leading frontmatter keys accepted with digits and punctuation still rejected"
+  }
+}

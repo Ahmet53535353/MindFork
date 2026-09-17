@@ -1,0 +1,9 @@
+{
+  "finding": "confirmed",
+  "event_state": "succeeded",
+  "receipt_marked_complete": true,
+  "artifact_contains_receipt": false,
+  "manual_artifact_preserved": true,
+  "conflict_recorded": true,
+  "test_scope": "temporary synthetic root and state only"
+}
