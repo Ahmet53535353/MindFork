@@ -4,7 +4,7 @@ Vault içindeki `beyin.py` tek giriş noktasıdır. Komutları vault klasöründ
 
 ## Git kullanmadan ilk kurulum
 
-[V3.0.0 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0) `beyin-v3-3.0.0.zip` indirip aç. Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
+[V3.0.2 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.2) `beyin-v3-3.0.2.zip` indirip aç. Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
 
 Bir vault klasörü seç veya oluştur. Açılan paketin içinde:
 
@@ -39,11 +39,11 @@ Varsayılan indirme kaynağı `avenoxai/avenoxbeyin` deposunun resmi GitHub stab
 Yerel, önceden indirilmiş ZIP ile ağ gerekmez:
 
 ```sh
-python3 beyin.py update --check --package "/indirilen/beyin-v3-3.0.1.zip"
-python3 beyin.py update --package "/indirilen/beyin-v3-3.0.1.zip"
+python3 beyin.py update --check --package "/indirilen/beyin-v3-3.0.2.zip"
+python3 beyin.py update --package "/indirilen/beyin-v3-3.0.2.zip"
 ```
 
-Bu örnekteki `3.0.1` dosyası bir kullanım örneğidir, yayımlanmış sürüm iddiası değildir. Yerel paketi yalnız güvendiğin kaynaktan al: checksum bütünlüğü kontrol eder; bağımsız bir imza veya kaynak güveninin yerine geçmez.
+Yerel paketi yalnız güvendiğin kaynaktan al: checksum bütünlüğü kontrol eder; bağımsız bir imza veya kaynak güveninin yerine geçmez.
 
 ## Tıklanabilir başlatıcılar
 
@@ -87,7 +87,7 @@ Bu kontroller dağıtık cloud kilidi veya bütün harici uygulamalar için atom
 Repo kökünde:
 
 ```sh
-python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.0.0.zip" --version 3.0.0
+python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.0.2.zip" --version 3.0.2
 ```
 
 Bu komut yalnız yerel ZIP oluşturur, GitHub'a yayınlamaz. Paket `manifest.json`, izin verilen installer/giriş dosyaları, runtime modülleri ve üç skill'i içerir. Manifest sürüm, schema/runtime schema, minimum Python, dosya hashleri ve tanınan legacy hashlerini taşır. Release yayınlama ve final platform CI ayrı işlemlerdir.
