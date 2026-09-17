@@ -34,7 +34,11 @@ def _inventory(vault):
             if name.lower().endswith('.md') and name.casefold() not in EXCLUDED_FILES and not p.is_symlink():
                 sources[p.relative_to(vault).as_posix()] = _hash(p)
     legacy = _legacy_root(vault)
-    states = {p.relative_to(vault).as_posix(): _hash(p) for p in legacy.rglob('*') if p.is_file() and not p.is_symlink()} if legacy.exists() else {}
+    # Lock files are coordination artifacts, not user state. On Windows their
+    # mandatory locks also make reopening them for hashing fail against the
+    # installer process's own migration guard.
+    states = {p.relative_to(vault).as_posix(): _hash(p) for p in legacy.rglob('*')
+              if p.is_file() and not p.is_symlink() and p.suffix.casefold() != '.lock'} if legacy.exists() else {}
     return sources, states
 
 
@@ -83,7 +87,9 @@ def migration_guard(vault_root, state_dir):
                 except (ValueError, UnicodeError):
                     raise RuntimeError('legacy writer state unreadable; review locally')
                 if isinstance(item, dict) and any(item.get(key) in ('inflight', 'running', 'pending') for key in ('status', 'state')):
-                    raise RuntimeError('legacy writer inflight sentinel; complete or reconcile before migration')
+                    relative = path.relative_to(vault).as_posix()
+                    raise RuntimeError('legacy writer inflight sentinel in ' + relative +
+                                       '; verify the prior write completed, then reconcile that record before migration')
         sources, states = _inventory(vault)
         prior = state/'v2-migration.json'
         plan = {'migration': 'v2-to-v3-source-cutover-1', 'cutover_at': datetime.now(timezone.utc).isoformat(),
