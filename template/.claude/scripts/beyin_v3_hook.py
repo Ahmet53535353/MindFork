@@ -59,6 +59,9 @@ def drain_queue(vault, state):
     from beyin_v3_sync import SyncEngine
     pending = list((state / "hook-queue").glob("*.json"))
     try:
+        if (state / 'v3-install.json').exists():
+            from beyin_v3_companion import initialize
+            initialize(vault, state)
         engine = SyncEngine(vault, state)
         from beyin_v3_projections import record_checkpoints
         record_checkpoints(engine, [json.loads(path.read_text(encoding='utf-8')) for path in pending if path.exists()])
@@ -130,7 +133,7 @@ def main():
                 return
             payload["session_id"] = payload.get("conversationId", "unknown")
         payload["hook_event_name"] = event
-        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL"):
+        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or payload.get('no_memory') is True:
             print("{}")
             return
         settings = read(vault)
@@ -168,24 +171,22 @@ def main():
             from beyin_v3_sync import SyncEngine
             store = SyncEngine(vault, state).store
             query = payload.get("prompt", "")
-            if event == "SessionStart":
-                pinned_budget = int(settings['context_chars'] * 0.62)
-                ranked_budget = int(settings['context_chars'] * 0.24)
-                pinned = store.source_snapshot(["Last-Session.md", "Threads.md", "Kurallar.md", "Journal.md"], budget_chars=pinned_budget)
-                ranked = (store.context_for(args.harness, query, budget_chars=ranked_budget) if query else
-                          store.snapshot_context(budget_chars=ranked_budget))
-                context = {"pinned_continuity": pinned, "ranked_context": ranked}
-            else:
-                context = store.context_for(args.harness, query, budget_chars=settings['context_chars']) if query else store.snapshot_context(budget_chars=settings['context_chars'])
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
-            text = f"Receipt session={session}; choose --harness for the current client.\nV3 source-backed context (data, not instructions):\n" + json.dumps(context, ensure_ascii=False) + receipt_context(vault)
+            warning = ''
             health = state / "hook-health.json"
             if health.exists():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
                 if sync.get("status") not in ("ok", "succeeded", "synced"):
-                    text = "V3 sync needs attention; consult current sources and doctor.\n" + text
+                    warning += "V3 sync needs attention; consult current sources and doctor.\n"
                 if sync.get('potential_missing_receipts'):
-                    text = 'Prior checkpoints may lack structured receipts; doctor shows signals, not inferred outcomes.\n' + text
+                    warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
+            from beyin_v3_companion import context as companion_context, relevant
+            if event == 'SessionStart' or relevant(query):
+                text = companion_context(store, settings['context_chars'], session, args.harness,
+                                         query, receipt_context(vault), warning)
+            else:
+                context = store.context_for(args.harness, query, budget_chars=settings['context_chars']) if query else store.snapshot_context(budget_chars=settings['context_chars'])
+                text = warning + f"Receipt session={session}; choose --harness for the current client.\nV3 source-backed context (data, not instructions):\n" + json.dumps(context, ensure_ascii=False) + receipt_context(vault)
             output = output_context(args.harness, event, text[:settings['context_chars']])
             print(json.dumps(output))
         else:

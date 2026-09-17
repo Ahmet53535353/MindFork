@@ -195,7 +195,7 @@ class MemoryStore:
         return self._retrieve("", audience=audience, statuses=("active", "waiting"),
                               limit=limit, budget_chars=budget_chars, snapshot=True)
 
-    def source_snapshot(self, source_names, audience="internal", budget_chars=3000):
+    def source_snapshot(self, source_names, audience="internal", budget_chars=3000, source_directory=None, text_transform=None):
         """Return a bounded, source-verified continuity set in requested order."""
         if (not isinstance(source_names, (list, tuple)) or
                 not all(isinstance(name, str) and name and "/" not in name and "\\" not in name
@@ -215,6 +215,8 @@ class MemoryStore:
                     record.get("kind") == "untrusted"):
                 continue
             source = record.get("source", "")
+            if source_directory is not None and Path(source).parent.as_posix() != source_directory:
+                continue
             name = Path(source).name
             if name not in candidates:
                 continue
@@ -237,7 +239,8 @@ class MemoryStore:
                 continue
             record = min(candidates[name], key=lambda item: item[:3])[3]
             chosen.append({key: record[key] for key in ("id", "source", "title", "kind", "status", "updated_at") if key in record})
-            chosen[-1]["text"] = record.get("text", "")
+            text = record.get("text", "")
+            chosen[-1]["text"] = text_transform(name, text) if text_transform else text
         result = {"records": chosen, "citations": [{"id": record["id"], "source": record["source"]} for record in chosen],
                   "requested_sources": list(source_names), "missing_sources": missing,
                   "stale_excluded": stale_count, "truncated": False}

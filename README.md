@@ -42,6 +42,12 @@ Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başl
 
 ## İlk konuşma
 
+`main` dalındaki kişilik/süreklilik düzeltmesi: yeni kurulum düşünme ortağı kimliğini
+ve başlangıç notlarını oluşturur; mevcut Core/Soul, kullanıcı düzeltmeleri, aktif konular
+ve son oturum kaynakları açılışta önceliklidir. Kalıcı öğrenimler aktif ajan tarafından
+kavram ve bağlantı notlarına işlenir. [V2/V3 karşılaştırması ve doğrulama](docs/v3/COMPANION-PARITY.md).
+Bu değişiklik henüz yukarıdaki V3.0.2 release ZIP'inde değildir.
+
 Ajanına şunu söyle:
 
 > Beyin skill'ini kullan. Beni tanımak için kısa sorular sor; cevapları kaynak notlara kaydet. Sonra birlikte bir görev oluşturup tekrar okuyalım.

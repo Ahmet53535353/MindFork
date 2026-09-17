@@ -12,7 +12,8 @@ Kullanıcı bu dosyayı takip etmeni istediğinde mevcut Codex, Claude Code veya
 4. Kurulan CLI ile kontrol et: `python3 "VAULT_YOLU/beyin.py" doctor`. Hataları ve skill çakışmalarını açıkça bildir. Çalışan servis veya gerçek istemci testi olmadan 'her şey sağlıklı' deme.
 5. Codex kullanılıyorsa vault klasöründe yeni oturum açıp `/hooks` üzerinden yeni hook tanımlarını incele ve güven. Trust hashlerini elle yazma; kurulumda trust bypass kullanma. Claude için yeni oturum aç. Antigravity içinde vault klasörünü workspace olarak açıp klasöre güven; headless çalıştırırken `--add-dir "VAULT_YOLU"` kullan. Modelden, sentetik bir nottaki bilgiyi yalnız hook context üzerinden döndürmesini isteyerek bağlantıyı doğrula. Gerçek özel veriyi test çıktısına alma.
 6. Kurucu `beyin`, `beyin-doktor` ve `beyin-guncelle` başlangıç skill'lerini kurar. Skill'lerin ortak erişim noktası `.agents/skills/`; Claude karşılığı `.claude/skills/`. Mevcut skill'ler korunur. Ek skill için yalnız kullanıcının seçtiği dizini `skill-import --source "SKILL_DIZINI"` ile al. İki tarafta farklı değişiklik varsa kullanıcı metnini koruyup conflict bildir.
-7. İş bitince kullanıcıya yalnız vault yolu, çalışan istemci bağlantıları ve varsa tek sonraki adımı söyle. JSON/debug dökümü, global ayarlar veya kişisel bilgileri sohbet çıktısına taşıma.
+7. Mevcut companion kimliğini koru. Yeni kurulumdaki Core boşsa kısa konuşmayla hitap, çalışma alanı ve düşünme ortağından beklentileri öğren; beyin skill'inin kimlik/süreklilik protokolüyle notlara işle. Mevcut kullanıcıya yeniden onboarding yapma. Kurucu başlangıç notlarını yalnız bir kez oluşturur; bunlar kullanıcıya aittir ve güncellemede ezilmez.
+8. İş bitince kullanıcıya yalnız vault yolu, çalışan istemci bağlantıları ve varsa tek sonraki adımı söyle. JSON/debug dökümü, global ayarlar veya kişisel bilgileri sohbet çıktısına taşıma.
 
 ## Kullanıcıya açıklanacak sınır
 
