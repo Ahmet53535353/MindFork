@@ -6,6 +6,7 @@ import re
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -259,16 +260,49 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         hook = candidates[0]
         command = [hook['command']] + hook['args'] if hook.get('args') else hook['command']
-        result = subprocess.run(command, shell=isinstance(command, str), input=json.dumps(dict(self.payload, hook_event_name='SessionStart', prompt='Nebula calibration')),
-                                text=True, encoding='utf-8', capture_output=True, cwd=self.vault, env=self.env, timeout=20)
+        payload = json.dumps(dict(self.payload, hook_event_name='SessionStart', prompt='Nebula calibration'))
+        if os.name == 'nt':
+            bash = shutil.which('bash', path=os.environ.get('PATH'))
+            self.assertIsNotNone(bash, 'Native Claude Code on Windows requires Git Bash')
+            launcher = str(command).split(' -NoProfile ')[0]
+            probe = subprocess.run([bash, '-lc', launcher + " -NoProfile -NonInteractive -Command 'exit 0'"],
+                                   text=True, encoding='utf-8', capture_output=True,
+                                   cwd=self.vault, env=self.env, timeout=20)
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            result = subprocess.run(command, shell=True, input=payload, text=True, encoding='utf-8',
+                                    capture_output=True, cwd=self.vault, env=self.env, timeout=20)
+        else:
+            result = subprocess.run(command, shell=isinstance(command, str), input=payload,
+                                    text=True, encoding='utf-8', capture_output=True, cwd=self.vault, env=self.env, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Synthetic Reviewer', json.loads(result.stdout)['hookSpecificOutput']['additionalContext'])
         self.assertNotIn('pwsh', str(command).lower())
         if os.name == 'nt':
-            self.assertTrue(str(command).lower().split(' -noprofile ')[0].strip(chr(34)).endswith('\\windowspowershell\\v1.0\\powershell.exe'), 'Absolute native launcher must work with the minimal test PATH')
+            launcher = str(command).lower().split(' -noprofile ')[0].strip(chr(34))
+            self.assertTrue(launcher.endswith('/windowspowershell/v1.0/powershell.exe'))
+            self.assertNotIn('\\', launcher)
             self.assertIn('beyin_v3_hook.py', decoded_command(command))
+            self.assertEqual(hook['commandWindows'], command)
         else:
             self.assertNotIn('powershell', str(command).lower())
+
+    def test_session_start_pins_companion_continuity_sources(self):
+        companion = self.vault / '🔮 850-Companion'
+        companion.mkdir()
+        for name, body in {
+            'Last-Session.md': 'Previous verified outcome.',
+            'Threads.md': 'Active owner Synthetic Reviewer.',
+            'Kurallar.md': 'Always verify current source.',
+            'Journal.md': ('older\n' * 600) + 'LATEST_JOURNAL_SENTINEL',
+        }.items():
+            (companion / name).write_text(body, encoding='utf-8')
+        from beyin_v3_sync import SyncEngine
+        SyncEngine(self.vault, self.state).sync()
+        payload = {'hook_event_name': 'SessionStart', 'session_id': 'synthetic-start', 'event_id': 'start-pins'}
+        text = self.invoke(payload)['hookSpecificOutput']['additionalContext']
+        for name in ('Last-Session.md', 'Threads.md', 'Kurallar.md', 'Journal.md'):
+            self.assertIn(name, text)
+        self.assertIn('LATEST_JOURNAL_SENTINEL', text)
 
     def test_cli_unicode_json_with_non_utf8_redirected_environment(self):
         unicode_state = self.root / 'runtime-ölçüm-🔭'

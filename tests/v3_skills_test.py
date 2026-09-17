@@ -52,13 +52,33 @@ class SkillsTest(unittest.TestCase):
         (target/'SKILL.md').write_text('fallback edit')
         self.assertEqual(m.sync_skills(self.vault,self.state,mode="symlink")['conflicts'], [])
         self.assertEqual((self.vault/'.agents/skills/fallback/SKILL.md').read_text(),'fallback edit')
-    def test_external_symlink_not_imported(self):
+    def test_external_symlink_is_unmanaged_not_a_queue_blocking_conflict(self):
         outside=Path(self.tmp.name)/"external";outside.mkdir();(outside/"SKILL.md").write_text("PRIVATE_CANARY")
         p=self.vault/".claude/skills";p.mkdir(parents=True)
         try:(p/"external").symlink_to(outside,target_is_directory=True)
         except OSError:self.skipTest("symlink unavailable on host")
         result=module().sync_skills(self.vault,self.state,mode="copy")
-        self.assertIn("external",result["conflicts"]);self.assertFalse((self.vault/".agents/skills/external").exists())
+        self.assertEqual(result["conflicts"],[]);self.assertEqual(result["unmanaged"],["external"])
+        self.assertFalse((self.vault/".agents/skills/external").exists())
+
+    def test_matching_external_symlinks_on_both_harnesses_are_unmanaged(self):
+        outside=Path(self.tmp.name)/"external-dual";outside.mkdir();(outside/"SKILL.md").write_text("PRIVATE_CANARY")
+        left=self.vault/".agents/skills";right=self.vault/".claude/skills";left.mkdir(parents=True);right.mkdir(parents=True)
+        try:
+            (left/"external").symlink_to(outside,target_is_directory=True)
+            (right/"external").symlink_to(outside,target_is_directory=True)
+        except OSError:self.skipTest("symlink unavailable on host")
+        result=module().sync_skills(self.vault,self.state,mode="copy")
+        self.assertEqual(result["conflicts"],[]);self.assertEqual(result["unmanaged"],["external"])
+
+    def test_external_symlink_collision_remains_a_conflict(self):
+        outside=Path(self.tmp.name)/"external-collision";outside.mkdir();(outside/"SKILL.md").write_text("PRIVATE_CANARY")
+        left=self.vault/".agents/skills";left.mkdir(parents=True)
+        try:(left/"sample").symlink_to(outside,target_is_directory=True)
+        except OSError:self.skipTest("symlink unavailable on host")
+        self.write(".claude","sample","managed")
+        result=module().sync_skills(self.vault,self.state,mode="copy")
+        self.assertEqual(result["conflicts"],["sample"]);self.assertEqual(result["unmanaged"],[])
     def test_explicit_import_preserves_assets_and_rejects_overwrite(self):
         source=Path(self.tmp.name)/"my-skill";source.mkdir();(source/"SKILL.md").write_text("synthetic skill")
         (source/"asset.txt").write_text("asset")

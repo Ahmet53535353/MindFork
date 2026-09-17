@@ -195,6 +195,88 @@ class MemoryStore:
         return self._retrieve("", audience=audience, statuses=("active", "waiting"),
                               limit=limit, budget_chars=budget_chars, snapshot=True)
 
+    def source_snapshot(self, source_names, audience="internal", budget_chars=3000):
+        """Return a bounded, source-verified continuity set in requested order."""
+        if (not isinstance(source_names, (list, tuple)) or
+                not all(isinstance(name, str) and name and "/" not in name and "\\" not in name
+                        for name in source_names) or
+                type(budget_chars) is not int or budget_chars < 0):
+            raise ValueError("invalid source snapshot request")
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
+        with self._connect() as db:
+            records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
+        candidates = {name: [] for name in source_names}
+        stale_count = 0
+        for record in records:
+            if (record.get("visibility") not in allowed or record.get("trust") == "untrusted" or
+                    record.get("trusted") is False or record.get("status") == "untrusted" or
+                    record.get("kind") == "untrusted"):
+                continue
+            source = record.get("source", "")
+            name = Path(source).name
+            if name not in candidates:
+                continue
+            try:
+                self._source(source)
+                actual = hashlib.sha256((self.vault_root / source).read_bytes()).hexdigest()
+                if actual != record.get("source_sha256"):
+                    stale_count += 1
+                    continue
+            except (ValueError, OSError):
+                stale_count += 1
+                continue
+            preferred = 0 if any(part.casefold().endswith(("companion", "echo")) for part in Path(source).parts[:-1]) else 1
+            candidates[name].append((preferred, len(source), source, record))
+        chosen = []
+        missing = []
+        for name in source_names:
+            if not candidates[name]:
+                missing.append(name)
+                continue
+            record = min(candidates[name], key=lambda item: item[:3])[3]
+            chosen.append({key: record[key] for key in ("id", "source", "title", "kind", "status", "updated_at") if key in record})
+            chosen[-1]["text"] = record.get("text", "")
+        result = {"records": chosen, "citations": [{"id": record["id"], "source": record["source"]} for record in chosen],
+                  "requested_sources": list(source_names), "missing_sources": missing,
+                  "stale_excluded": stale_count, "truncated": False}
+        empty = json.loads(json.dumps(result))
+        for record in empty["records"]:
+            record["text"] = ""
+        available = budget_chars - len(_json(empty))
+        if available < 0:
+            return {"records": [], "citations": [], "requested_sources": list(source_names),
+                    "missing_sources": list(source_names), "stale_excluded": stale_count,
+                    "truncated": bool(chosen)}
+        share = available // max(1, len(chosen))
+        tail_names = {"Journal.md", "Kurallar.md"}
+        marker = "[truncated]"
+        for record in chosen:
+            text = record["text"]
+            if len(text) > share:
+                keep = max(0, share - len(marker) - 1)
+                if not keep:
+                    record["text"] = marker
+                elif Path(record["source"]).name in tail_names:
+                    record["text"] = marker + "\n" + text[-keep:]
+                else:
+                    record["text"] = text[:keep] + "\n" + marker
+                result["truncated"] = True
+        while len(_json(result)) > budget_chars and any(record["text"] for record in chosen):
+            record = max(chosen, key=lambda item: len(item["text"]))
+            text = record["text"]
+            prefix = marker + "\n"
+            suffix = "\n" + marker
+            if text.startswith(prefix) and len(text) > len(prefix):
+                record["text"] = prefix + text[len(prefix) + 1:]
+            elif text.endswith(suffix) and len(text) > len(suffix):
+                record["text"] = text[:-len(suffix) - 1] + suffix
+            else:
+                record["text"] = text[:-1]
+            result["truncated"] = True
+        return result
+
     def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")

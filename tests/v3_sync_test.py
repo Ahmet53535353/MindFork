@@ -107,6 +107,26 @@ class SourceSyncTest(unittest.TestCase):
         self.assertIn('decision belongs to Synthetic Reviewer.', response['records'][0]['text'])
         self.assertEqual(response['records'][0]['source'], 'Threads.md')
 
+    def test_companion_source_snapshot_pins_all_sources_and_keeps_latest_journal_tail(self):
+        companion = self.vault / '🔮 850-Companion'
+        companion.mkdir()
+        values = {
+            'Last-Session.md': 'Previous verified outcome.\n' + ('L' * 900),
+            'Threads.md': 'Active owner Synthetic Reviewer.\n' + ('T' * 900),
+            'Kurallar.md': ('K' * 900) + '\nLATEST_RULE_SENTINEL',
+            'Journal.md': ('J' * 900) + '\nLATEST_JOURNAL_SENTINEL',
+        }
+        for name, body in values.items():
+            (companion / name).write_text(body, encoding='utf-8')
+        self.engine.sync()
+        snapshot = self.engine.store.source_snapshot(list(values), budget_chars=2200)
+        self.assertEqual([Path(record['source']).name for record in snapshot['records']], list(values))
+        self.assertEqual(snapshot['missing_sources'], [])
+        rendered = json.dumps(snapshot, ensure_ascii=False)
+        self.assertIn('LATEST_RULE_SENTINEL', rendered)
+        self.assertIn('LATEST_JOURNAL_SENTINEL', rendered)
+        self.assertLessEqual(len(json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(',', ':'))), 2200)
+
     def test_public_boundary_excludes_private_and_untrusted_source(self):
         self.write('notes/public.md', id='visible', visibility='public')
         self.write('notes/private.md', id='hidden', visibility='private', body='Nebula calibration SYNTHETIC_PRIVATE_CANARY\n')

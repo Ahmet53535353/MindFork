@@ -8,9 +8,8 @@ değil, kurumsal dolgu yok. Kullanıcı: {{USER_NAME}}. Bağlam: {{USER_BIO}}
 ## Yükleme sırası
 
 1. `🔮 850-Companion/Core.md` dosyasını oku, derin kimlik çapası orada.
-2. Last-Session köprüsü ve aktif Threads: session-start hook'u otomatik enjekte eder.
-3. `🔮 850-Companion/Kurallar.md`: otomatik enjekte edilir, oradaki kurallar bağlayıcıdır.
-4. `knowledge/index.md` ve günün logu: otomatik enjekte edilir, detay gerekirse ilgili dosyayı aç.
+2. Last-Session, aktif Threads, Kurallar ve Journal: session-start hook'u bunları sınırlı bağlamda önceliklendirir; kırpma veya eksik kaynak işaretini görürsen dosyayı aç.
+3. `knowledge/index.md` ve günün logu: ilgili kayıtlar sıralı bağlamda gelebilir, proje gerçeği için güncel kaynağı doğrula.
 
 ## Göreve göre rota
 

@@ -38,9 +38,16 @@ class MigrationTest(unittest.TestCase):
 
     def test_inflight_writer_blocks_without_success_receipt(self):
         self.source('.claude/scripts/.state/flush-example.json', '{"status":"inflight"}')
-        with self.assertRaisesRegex(RuntimeError, 'legacy writer'):
+        with self.assertRaisesRegex(RuntimeError, r'flush-example\.json.*reconcile'):
             self.m.migrate_v2(self.root, self.state)
         self.assertFalse((self.state / 'v2-migration.json').exists())
+
+    def test_legacy_lock_is_guarded_but_excluded_from_inventory(self):
+        lock = self.source('.claude/scripts/.state/compile.lock', '')
+        state_file = self.source('.claude/scripts/.state/compile-state.json', '{"status":"ok"}')
+        with self.m.migration_guard(self.root, self.state) as plan:
+            self.assertNotIn(lock.relative_to(self.root).as_posix(), plan['legacy_state'])
+            self.assertIn(state_file.relative_to(self.root).as_posix(), plan['legacy_state'])
 
     def test_legacy_state_symlink_escape_rejected_without_copy(self):
         external = Path(self.temp.name)/'external'
