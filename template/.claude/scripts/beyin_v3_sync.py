@@ -17,6 +17,8 @@ if _MODULE_DIR not in sys.path:
 
 from beyin_v3 import MemoryStore, ReceiptConflict, RevisionConflict, _json
 from beyin_v3_projections import project_receipts
+from beyin_v3_preferences import read as read_preferences
+from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
 
 
 def _hash(data):
@@ -164,6 +166,21 @@ class SyncEngine:
     def snapshot_context(self, **kwargs):
         return self.store.snapshot_context(**kwargs)
 
+    def _protect(self, text):
+        if not read_preferences(self.root)['secret_filter']:
+            return text, 0
+        return redact_secrets(text, self.state)
+
+    def _record_redactions(self, count):
+        if count:
+            record_redactions(self.state, count)
+
+    @staticmethod
+    def _source_issues(result, source, record_id=None):
+        return [item for key in ('warnings', 'conflicts') for item in result.get(key, [])
+                if isinstance(item, dict) and (item.get('source') == source or
+                                               (record_id is not None and item.get('id') == record_id))]
+
     def _path(self, relative, existing=False):
         if not isinstance(relative, str) or Path(relative).is_absolute() or '..' in Path(relative).parts:
             raise ValueError('relative source required')
@@ -188,7 +205,7 @@ class SyncEngine:
                 if name.startswith('.') or not name.lower().endswith('.md') or name.casefold() in EXCLUDED_FILES or name.casefold().startswith('setup-'):
                     continue
                 path = Path(directory) / name
-                relative = str(path.relative_to(self.root))
+                relative = path.relative_to(self.root).as_posix()
                 try:
                     self._path(relative, existing=True)
                     raw = path.read_bytes()
@@ -341,20 +358,55 @@ class SyncEngine:
         if not source.startswith(('notes/', 'knowledge/')) or not source.endswith('.md'):
             raise ValueError('new semantic notes belong under notes/ or knowledge/')
         metadata = dict(metadata or {})
+        for field in ('project', 'kind', 'status', 'updated_at'):
+            if metadata.get(field) is None:
+                metadata.pop(field, None)
+            elif field in metadata and not isinstance(metadata[field], str):
+                raise ValueError(field + ' must be a string')
+        if 'id' in metadata and (not isinstance(metadata['id'], str) or not metadata['id'].strip()):
+            raise ValueError('record id must be nonempty text')
+        if 'facts' in metadata and not isinstance(metadata['facts'], dict):
+            raise ValueError('facts must be an object')
+        if 'revision' in metadata and (type(metadata['revision']) is not int or metadata['revision'] < 1):
+            raise ValueError('positive revision required')
+        if metadata.get('visibility', 'internal') not in ('public', 'internal', 'private'):
+            raise ValueError('invalid visibility')
+        supersedes = metadata.get('supersedes', [])
+        if isinstance(supersedes, str):
+            supersedes = [supersedes]
+        if not isinstance(supersedes, list) or not all(isinstance(value, str) for value in supersedes):
+            raise ValueError('supersedes must contain record ids')
+        if metadata.get('id') in supersedes:
+            raise ValueError('record cannot supersede itself')
         if metadata.get('kind') == 'task':
             raise ValueError('use task-create for new tasks')
         if metadata.get('generated') or metadata.get('kind') == 'receipt':
             raise ValueError('managed note kinds require their dedicated command')
+        text, redacted = self._protect(text)
         path = self._path(source)
+        intended = render(metadata, text+'\n')
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             if path.exists():
                 raise ValueError('source exists; preserve and edit deliberately')
-            self._intent(source, None, render(metadata, text+'\n'), 'note')
+            self._intent(source, None, intended, 'note')
         result = self.sync()
-        if result['conflicts'] or result['warnings']:
+        record_id = metadata.get('id', 'md-' + _hash(source)[:24])
+        if self._source_issues(result, source, record_id):
             raise RevisionConflict('note requires projection review')
-        return {'status': 'succeeded', 'source': source}
+        with self.store._connect() as db:
+            row = db.execute('SELECT payload FROM records WHERE id=?', (record_id,)).fetchone()
+        if not row:
+            raise RevisionConflict('created note missing from projection')
+        record = json.loads(row[0])
+        if record.get('source') != source or record.get('source_sha256') != _hash(intended) or path.read_bytes() != intended.encode('utf-8'):
+            raise RevisionConflict('created note source readback mismatch')
+        self._record_redactions(redacted)
+        return {'status': 'succeeded', 'source': source, 'redacted': redacted,
+                'secrets_redacted': redacted, 'warnings': result['warnings'],
+                'conflicts': result['conflicts'],
+                'source_sync': {'status': result['status'], 'warnings': result['warnings'],
+                                'conflicts': result['conflicts']}}
 
     def task_create(self, source, text, metadata):
         if not isinstance(source, str) or not source.startswith('tasks/') or not source.endswith('.md'):
@@ -367,6 +419,7 @@ class SyncEngine:
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
+        text, redacted = self._protect(text)
         if not isinstance(metadata.get('id'), str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}', metadata['id']):
             raise ValueError('stable task id required')
         if not isinstance(metadata.get('owner'), str) or not metadata['owner'].strip():
@@ -391,7 +444,7 @@ class SyncEngine:
                 raise ValueError('task source or id exists; use task-update')
             self._intent(source, None, intended, 'task')
         result = self.sync()
-        if result['conflicts'] or result['warnings']:
+        if self._source_issues(result, source, metadata['id']):
             raise RevisionConflict('task-create projection requires review')
         with self.store._connect() as db:
             row = db.execute('SELECT payload FROM records WHERE id=?', (metadata['id'],)).fetchone()
@@ -400,13 +453,18 @@ class SyncEngine:
         record = json.loads(row[0])
         if any(record.get(key) != value for key, value in metadata.items()) or record['source_sha256'] != _hash(intended) or path.read_bytes() != intended.encode('utf-8'):
             raise RevisionConflict('created task metadata or source readback mismatch')
-        return record
+        self._record_redactions(redacted)
+        return dict(record, redacted=redacted, secrets_redacted=redacted,
+                    warnings=result['warnings'], conflicts=result['conflicts'],
+                    source_sync={'status': result['status'], 'warnings': result['warnings'],
+                                 'conflicts': result['conflicts']})
 
     def receipt(self, event_id, summary, refs, harness, session=None):
         if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
             raise ValueError('event id and summary required')
         if harness not in ('codex', 'claude', 'antigravity', 'manual') or not isinstance(refs, list) or not refs:
             raise ValueError('harness and refs required')
+        summary, redacted = self._protect(summary)
         refs = [self.store._source(ref) for ref in refs]
         source = 'receipts/' + _hash(event_id) + '.md'
         event = {'event_id': event_id, 'summary': summary, 'refs': refs, 'harness': harness, 'created_at': datetime.now(timezone.utc).isoformat()}
@@ -440,4 +498,6 @@ class SyncEngine:
         if self._path(source, existing=True).read_text(encoding='utf-8') != content:
             raise ReceiptConflict('receipt source changed before readback')
         self.store.submit_receipt(event_id, summary, refs, event['harness'])
-        return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source}
+        self._record_redactions(redacted)
+        return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
+                'redacted': redacted, 'secrets_redacted': redacted}

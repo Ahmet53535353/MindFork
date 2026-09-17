@@ -71,6 +71,7 @@ def parser():
     settings.add_argument("--interval-minutes", type=int)
     settings.add_argument("--context-mode", choices=("turn", "session", "off"))
     settings.add_argument("--context-chars", type=int)
+    settings.add_argument("--secret-filter", choices=("on", "off"))
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
     skill.add_argument("--source", type=Path, required=True)
     skill.add_argument("--name")
@@ -122,6 +123,8 @@ def main(argv=None):
             changes = {key: getattr(args, key) for key in ('interval_minutes', 'context_mode', 'context_chars') if getattr(args, key) is not None}
             if args.auto_sync is not None:
                 changes['auto_sync'] = args.auto_sync == 'on'
+            if args.secret_filter is not None:
+                changes['secret_filter'] = args.secret_filter == 'on'
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
                       'model_calls': False, 'timer_installed': False}
@@ -141,6 +144,9 @@ def main(argv=None):
             load_sync()
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)
+            from beyin_v3_secrets import health as secret_filter_health
+            result['secret_filter'] = secret_filter_health(state)
+            result['secrets_redacted'] = result['secret_filter']['total']
             result['automatic_model_calls'] = False
             health = result['hook-health.json'] or {}
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook-error.json'] else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')

@@ -8,9 +8,9 @@ import tempfile
 import time
 
 PROFILES = {
-    'normal': dict(auto_sync=True, interval_minutes=0, context_mode='turn', context_chars=5000),
-    'economical': dict(auto_sync=True, interval_minutes=15, context_mode='session', context_chars=2000),
-    'manual': dict(auto_sync=False, interval_minutes=15, context_mode='off', context_chars=2000),
+    'normal': dict(auto_sync=True, interval_minutes=0, context_mode='turn', context_chars=5000, secret_filter=False),
+    'economical': dict(auto_sync=True, interval_minutes=15, context_mode='session', context_chars=2000, secret_filter=False),
+    'manual': dict(auto_sync=False, interval_minutes=15, context_mode='off', context_chars=2000, secret_filter=False),
 }
 
 
@@ -20,6 +20,8 @@ def validate(value):
     result = dict(PROFILES['normal'], **value)
     if type(result['auto_sync']) is not bool:
         raise ValueError('auto_sync must be boolean')
+    if type(result['secret_filter']) is not bool:
+        raise ValueError('secret_filter must be boolean')
     for key, low, high in [('interval_minutes', 0, 1440), ('context_chars', 1000, 12000)]:
         if type(result[key]) is not int or not low <= result[key] <= high:
             raise ValueError(f'{key} must be an integer between {low} and {high}')
@@ -43,7 +45,10 @@ def read(vault):
 def save(vault, changes, profile=None):
     # Validate the existing file too: malformed user settings must not be overwritten.
     current = read(vault)
-    result = validate(dict(PROFILES[profile] if profile else current, **changes))
+    # The secret filter is an independent safety choice; changing performance
+    # profiles must not silently enable or disable it.
+    base = dict(PROFILES[profile], secret_filter=current['secret_filter']) if profile else current
+    result = validate(dict(base, **changes))
     path = preferences_path(vault)
     fd, temporary = tempfile.mkstemp(prefix='.beyin-preferences-', dir=path.parent)
     try:

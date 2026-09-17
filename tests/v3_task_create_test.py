@@ -45,6 +45,18 @@ class TaskCreateTest(unittest.TestCase):
             self.engine.note_create('notes/bad.md', 'Task body', {'kind': 'task'})
         self.assertFalse((self.vault/'notes/bad.md').exists())
 
+    def test_unrelated_bad_source_does_not_turn_new_note_or_task_into_false_failure(self):
+        (self.vault/'unrelated.md').write_text('---\nproject: []\n---\nUnrelated malformed metadata.\n')
+        note = self.engine.note_create('notes/good.md', 'Usable note', {'project': None})
+        self.assertEqual(note['status'], 'succeeded')
+        self.assertEqual(note['source_sync']['status'], 'degraded')
+        self.assertTrue(note['warnings'])
+        task = self.engine.task_create('tasks/good.md', 'Usable task', self.metadata)
+        self.assertEqual(task['source_sync']['status'], 'degraded')
+        self.assertTrue(task['warnings'])
+        self.assertTrue((self.vault/'notes/good.md').is_file())
+        self.assertTrue((self.vault/'tasks/good.md').is_file())
+
     def test_invalid_required_task_metadata_never_writes(self):
         for patch in ({'id': ''}, {'owner': ''}, {'status': 'almost-done'}, {'revision': 2}):
             with self.subTest(patch=patch):

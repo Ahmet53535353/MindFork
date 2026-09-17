@@ -19,13 +19,18 @@ sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 START, END = "<!-- beyin-v3:start -->", "<!-- beyin-v3:end -->"
-LEGACY = tuple(".claude/hooks/" + name + suffix for name in ("session-start", "session-end", "pre-compact", "prompt-counter") for suffix in (".sh", ".ps1"))
+LEGACY_HOOK_FILES = tuple(name + suffix for name in ("session-start", "session-end", "pre-compact", "prompt-counter") for suffix in (".sh", ".ps1"))
+LEGACY = tuple(".claude/hooks/" + name for name in LEGACY_HOOK_FILES)
+OLDER_STOCK_DOCTOR_HASH = "1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8"
 
 
 def managed_handler(handler, previous):
     command = handler.get("command", "")
     serialized = command + " " + " ".join(str(arg) for arg in handler.get("args", []))
-    return command in previous or "beyin_v3_hook.py" in command or any(name in serialized.replace("\\", "/") for name in LEGACY)
+    normalized = serialized.replace("\\", "/")
+    legacy = any(re.search(r'(?:^|/)\.(?:claude|codex|agents)/hooks/' + re.escape(name) +
+                           r'(?=$|[\s"\';&|])', normalized) for name in LEGACY_HOOK_FILES)
+    return command in previous or "beyin_v3_hook.py" in command or legacy
 
 
 def atomic(path, data):
@@ -96,7 +101,8 @@ def semantic_unchanged(name, baseline, current, previous):
     return False
 
 
-def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", legacy_hashes=None, migration=None, migration_plan=None):
+def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", legacy_hashes=None,
+             legacy_skill_hashes=None, migration=None, migration_plan=None):
     vault, state = vault.resolve(), state.resolve()
     if not vault.is_dir() or state == vault or vault in state.parents:
         raise ValueError("Existing vault and state outside vault required")
@@ -123,6 +129,16 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         legacy_sources = [ROOT/'template/.claude/scripts'/name for name in ('flush.py','compile.py')] + [ROOT/'template/.claude/hooks'/(name+suffix) for name in ('session-start','session-end','pre-compact','prompt-counter') for suffix in ('.sh','.ps1')]
         for source in legacy_sources:
             if source.exists(): legacy_hashes[source.relative_to(ROOT/'template').as_posix()] = digest(source.read_bytes())
+    if legacy_skill_hashes is None:
+        legacy_skill_hashes = {'.claude/skills/beyin-doktor/SKILL.md': [OLDER_STOCK_DOCTOR_HASH]}
+        source = ROOT / 'template/.claude/skills/beyin-doktor/SKILL.md'
+        if source.exists():
+            legacy_skill_hashes['.claude/skills/beyin-doktor/SKILL.md'].append(digest(source.read_bytes()))
+    if not isinstance(legacy_skill_hashes, dict) or any(
+            name != '.claude/skills/beyin-doktor/SKILL.md' or not isinstance(values, list) or
+            not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in values)
+            for name, values in legacy_skill_hashes.items()):
+        raise ValueError('invalid legacy skill hashes')
 
     def add(name, content):
         path = (vault / name).resolve()
@@ -265,7 +281,7 @@ reflection and knowledge synthesis. Receipt indexes alone are not knowledge synt
                 raise ValueError("Reinstall conflict: managed file changed " + name)
         elif not item and current is not None and current != planned[name]:
             semantic = name in ("AGENTS.md", "CLAUDE.md", ".claude/settings.local.json", ".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json", ".codex/config.toml", ".beyin-version")
-            legacy = (name.endswith("/beyin-doktor/SKILL.md") and digest(current) == "1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8") or legacy_hashes.get(name) == digest(current)
+            legacy = digest(current) in legacy_skill_hashes.get(name, []) or legacy_hashes.get(name) == digest(current)
             if not semantic and not legacy:
                 raise ValueError("Unmanaged file conflict " + name)
     next_manifest = json.loads(json.dumps(manifest))
@@ -341,7 +357,8 @@ def package_defaults():
     return updater.validate_package(archive)[0]
 
 
-def install(vault, state, uninstall=False, plan_only=False, version=None, legacy_hashes=None):
+def install(vault, state, uninstall=False, plan_only=False, version=None, legacy_hashes=None,
+            legacy_skill_hashes=None):
     package = package_defaults()
     if package is not None:
         if version is not None and version != package['version']:
@@ -349,11 +366,14 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
         version = package['version']
         if legacy_hashes is not None and legacy_hashes != package.get('legacy_hashes', {}):
             raise ValueError('Legacy hashes differ from extracted release')
+        if legacy_skill_hashes is not None and legacy_skill_hashes != package.get('legacy_skill_hashes', {}):
+            raise ValueError('Legacy skill hashes differ from extracted release')
         legacy_hashes = package.get('legacy_hashes', {})
+        legacy_skill_hashes = package.get('legacy_skill_hashes', {})
     else:
         version = version or '3.0.0'
     if plan_only or uninstall:
-        return _install(vault, state, uninstall, plan_only, version, legacy_hashes)
+        return _install(vault, state, uninstall, plan_only, version, legacy_hashes, legacy_skill_hashes)
     directory = ROOT / 'template/.claude/scripts'
     if (Path(state).resolve() / 'update-journal.json').exists():
         spec = importlib.util.spec_from_file_location('beyin_install_recovery', directory / 'beyin_v3_update.py')
@@ -365,7 +385,8 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
         spec = importlib.util.spec_from_file_location('beyin_install_migration', directory / 'beyin_v3_migrate.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with module.migration_guard(vault, state) as plan:
-            return _install(vault, state, version=version, legacy_hashes=legacy_hashes, migration=module, migration_plan=plan)
+            return _install(vault, state, version=version, legacy_hashes=legacy_hashes,
+                            legacy_skill_hashes=legacy_skill_hashes, migration=module, migration_plan=plan)
     finally:
         sys.path.remove(str(directory))
 
