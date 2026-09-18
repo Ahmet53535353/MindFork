@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in, local-only CLI for the shared V3 memory foundation."""
+"""Local-first CLI for the shared V3 memory foundation."""
 from __future__ import annotations
 
 import argparse
@@ -90,6 +90,10 @@ def parser():
     context.add_argument("--status", action="append", dest="statuses")
     context.add_argument("--limit", type=int, default=5)
     context.add_argument("--budget-chars", type=int, default=8000)
+    context.add_argument("--jev", action="store_true", help="Explicit optional remote advisor; requires state/jev.json and --project")
+    review = sub.add_parser("jev-review", help="Advisory source review; never saves or approves a candidate")
+    review.add_argument("--file", required=True, help="JSON proposal (maximum 24,000 characters)")
+    review.add_argument("--project", required=True)
     receipt = sub.add_parser("receipt", help="Submit an idempotent source-linked receipt")
     receipt.add_argument("--file", default="-", help="JSON input path, or - for stdin")
     receipt.add_argument("--harness", choices=("codex", "claude", "antigravity"), default="codex")
@@ -113,7 +117,7 @@ def main(argv=None):
             raise ValueError("--state must be outside the vault")
         engine = load_engine()
         store = engine.MemoryStore(state, vault)
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context") else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review") else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -179,7 +183,11 @@ def main(argv=None):
             if refreshed.get('status') == 'conflict':
                 raise RuntimeError('Context blocked: source sync '+str(refreshed.get('status', 'failed'))+'. Run sync with the same vault/state to inspect and reconcile source issues, then retry context.')
             # Harness selection deliberately does not change retrieval semantics.
-            result = sync.store.context_for(args.harness, **params)
+            if args.jev:
+                from beyin_v3_jev import advise_context
+                result = advise_context(sync.store, **params)
+            else:
+                result = sync.store.context_for(args.harness, **params)
             if refreshed.get('status') == 'degraded':
                 warnings = refreshed.get('warnings', [])
                 result['partial'] = True
@@ -189,6 +197,20 @@ def main(argv=None):
                     'warnings': warnings[:20],
                     'truncated': len(warnings) > 20,
                 }
+        elif args.command == "jev-review":
+            from beyin_v3_jev import review_candidate
+            # Bounded read also applies to stdin; never echo raw proposal errors.
+            if args.file == "-":
+                raw = sys.stdin.read(24001)
+            else:
+                with Path(args.file).open(encoding="utf-8") as handle:
+                    raw = handle.read(24001)
+            if len(raw) > 24000:
+                raise ValueError("proposal_too_large")
+            refreshed = sync.sync()
+            if refreshed.get('status') != 'succeeded':
+                raise ValueError("proposal_source_sync_incomplete")
+            result = review_candidate(sync.store, json.loads(raw), project=args.project)
         elif args.command == "receipt":
             payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],
