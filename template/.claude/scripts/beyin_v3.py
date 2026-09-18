@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import sqlite3
@@ -187,8 +188,8 @@ class MemoryStore:
             db.execute("INSERT OR IGNORE INTO receipts VALUES (?,?)", (event_id, payload))
         return dict(event, id=event_id, status="succeeded")
 
-    def retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000):
-        return self._retrieve(query, project, audience, statuses, limit, budget_chars)
+    def retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, strict=False):
+        return self._retrieve(query, project, audience, statuses, limit, budget_chars, strict=strict)
 
     def snapshot_context(self, audience="internal", budget_chars=6000, limit=5):
         """Explicit bounded current-state snapshot; normal empty queries abstain."""
@@ -280,7 +281,39 @@ class MemoryStore:
             result["truncated"] = True
         return result
 
-    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False):
+    def _strict_rank(self, ranked, terms, vocabularies):
+        """Keep only meaningful lexical matches; see STRICT_* for the calibrated rules."""
+        frequency = {}
+        for vocabulary in vocabularies.values():
+            for token in vocabulary:
+                frequency[token] = frequency.get(token, 0) + 1
+        total = max(1, len(vocabularies))
+        idf_max = math.log((total + 1) / 2) + 1
+        weighted = []
+        for shared_count, record in ranked:
+            if shared_count < self.STRICT_MIN_SHARED:
+                continue
+            vocabulary = vocabularies[record["id"]]
+            weight = sum(math.log((total + 1) / (frequency.get(token, 0) + 1)) + 1 for token in terms & vocabulary)
+            weight = weight / idf_max / math.log(10 + len(vocabulary))
+            if weight >= self.STRICT_MIN_WEIGHT:
+                weighted.append((weight, record))
+        weighted.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
+        weighted.sort(key=lambda item: -item[0])
+        return weighted
+
+    # Strict automatic context: used by the per-turn hook so that a single shared common
+    # word never pulls an unrelated note into the prompt. Weight = sum of relative idf over
+    # shared terms, divided by log(10 + note vocabulary size). Relative idf (idf / idf of a
+    # term seen in exactly one note) keeps the scale independent of vault size, so the
+    # threshold works for a 20-note vault and a 300-note vault alike.
+    # Calibration (real vault, 265 notes, 16 prompts): irrelevant prompts scored 0.19-0.37,
+    # relevant 0.33-1.21; 0.30 silenced 6/7 irrelevant and kept 7/7 relevant.
+    STRICT_MIN_SHARED = 2
+    STRICT_MIN_WEIGHT = 0.30
+    STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
+
+    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
@@ -313,18 +346,25 @@ class MemoryStore:
         terms = query_tokens - STOPWORDS - project_tokens
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
         ranked = []
+        vocabularies = {}
         for record in eligible:
             if record["id"] in superseded:
                 continue
             statusless_note = snapshot and "status" not in record and record.get("kind", "note") != "task"
             if statuses is not None and record.get("status") not in statuses and not statusless_note:
                 continue
+            if strict and str(record.get("source", "")).startswith(self.STRICT_EXCLUDE):
+                continue
             vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", ""))) - STOPWORDS
+            vocabularies[record["id"]] = vocabulary
             score = len(terms & vocabulary)
             if score or scoped_listing or snapshot:
                 ranked.append((score, record))
-        ranked.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
-        ranked.sort(key=lambda item: -item[0])
+        if strict and not snapshot:
+            ranked = self._strict_rank(ranked, terms, vocabularies)
+        else:
+            ranked.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
+            ranked.sort(key=lambda item: -item[0])
         selected, citations = [], []
         used = 0
         clipped_any = False
