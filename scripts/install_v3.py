@@ -174,6 +174,13 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         for name, content in module.plan_launchers(vault, state).items():
             add(name, content)
             if name.endswith((".command", ".sh", ".desktop")): modes[name] = 0o755
+    opencode = ROOT / "template/.claude/scripts/beyin_v3_opencode.py"
+    if opencode.exists():
+        # OpenCode has no hook JSON; it loads <project>/.opencode/plugins/*.js on start.
+        spec = importlib.util.spec_from_file_location("beyin_release_opencode", opencode)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        for name, content in module.plan_plugin(vault, state).items():
+            add(name, content)
     add(".claude/scripts/beyin_v3_cli.py", (ROOT / "scripts/beyin_v3.py").read_bytes())
     hook = vault / ".claude/scripts/beyin_v3_hook.py"
     for harness, name in (("claude", ".claude/settings.local.json"), ("codex", ".codex/hooks.json")):

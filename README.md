@@ -40,6 +40,8 @@ Kurulum üç istemci için proje bağlantılarını, ortak motoru, üç başlang
 
 Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başlat**. Codex'te `/hooks` ekranında yeni hook tanımlarını inceleyip güven; diğer istemcilerde workspace güvenini tamamla. İstemci güvenini kurucu senin adına uydurmaz. Agent ile kurulum yapmak istersen [SETUP-V3.md](SETUP-V3.md) rehberini takip etmesini iste.
 
+OpenCode için ek adım yok: installer vault içine eklentisini yazar, OpenCode vault klasöründe açılınca aynı motora bağlanır. Adımlar: [docs/v3/OPENCODE.md](docs/v3/OPENCODE.md).
+
 ## İlk konuşma
 
 `main` dalındaki kişilik/süreklilik düzeltmesi: yeni kurulum düşünme ortağı kimliğini
