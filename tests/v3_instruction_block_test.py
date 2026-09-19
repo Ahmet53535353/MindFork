@@ -77,6 +77,15 @@ class InstructionBlockTest(unittest.TestCase):
             self.assertIn(' '.join(ENGLISH.split()), ' '.join(self.block(name).split()))
         self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
 
+    def test_crlf_router_with_user_text_outside_the_block_still_reinstalls(self):
+        self.install()
+        self.downgrade()
+        path = self.vault / 'AGENTS.md'
+        path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+        self.install()
+        self.assertIn(' '.join(ENGLISH.split()), ' '.join(self.block().split()))
+        self.assertIn(NOTE.strip(), path.read_text(encoding='utf-8'))
+
     def test_update_and_rollback_over_previous_block_keep_working(self):
         self.install()
         self.downgrade()

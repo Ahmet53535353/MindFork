@@ -96,6 +96,9 @@ def conflict_case(current):
 def semantic_unchanged(name, baseline, current, previous):
     if baseline is None or current is None: return False
     if line_endings_only(baseline, current): return True
+    # The owned-region comparisons below must not see line endings either: a CRLF rewrite
+    # plus a user paragraph outside the marker block is still an unchanged block.
+    baseline, current = baseline.replace(b"\r\n", b"\n"), current.replace(b"\r\n", b"\n")
     try:
         if name in ("AGENTS.md", "CLAUDE.md"):
             pattern = re.escape(START) + r".*?" + re.escape(END)
