@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
+FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
 DEFAULT_DIRECTORY = '🔮 850-Companion'
 STARTERS = {
     'Core.md': '# Düşünme ortağı\n\nKullanıcının düşünme ortağı ve ikinci beyniyim. Kimliğimi ve çalışma biçimimi birlikte belirleriz.\n\n## Kullanıcı ve ortak çalışma biçimi\nHenüz kişiselleştirilmedi. Kullanıcının adı, tercih ettiği hitap, çalışma alanı ve beklentilerini konuşarak öğren. Bilinmeyen geçmişi uydurma.\n\n## Kalıcı tercihler\nKullanıcının açıkça belirttiği tercihleri ve dayandıkları kaynağı burada tut.\n',
@@ -102,9 +103,32 @@ def excerpt(name, text):
     return text
 
 
-def clip(text, budget, tail=False):
+def ends(text, budget):
+    """Opening plus closing lines of a rule set, with the omitted amount named.
+
+    The first marker is sized with the whole length, so the final one, counting only
+    what was really dropped, can never be longer and the result stays inside budget.
+    """
+    gap = f'\n[truncated: {len(text)} characters omitted here; read source]\n'
+    keep = budget - len(gap)
+    if keep < 80:
+        return None
+    # Cut on line boundaries so neither end is a half rule; the closing part also takes
+    # whatever the opening gave back.
+    head = text[:keep - keep // 2]
+    head = head[:head.rfind('\n') + 1] or head
+    closing = text[len(text) - (keep - len(head)):]
+    closing = closing[closing.find('\n') + 1:] or closing
+    return head + f'\n[truncated: {len(text) - len(head) - len(closing)} characters omitted here; read source]\n' + closing
+
+
+def clip(text, budget, tail=False, both=False):
     if len(text) <= budget:
         return text
+    if both:
+        kept = ends(text, budget)
+        if kept:
+            return kept
     marker = '\n[truncated: read source]\n'
     if budget <= len(marker):
         return marker.strip()[:budget]
@@ -131,34 +155,49 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
     sections = [(f'\n[{r["source"]}]\n', r['text'], Path(r['source']).name)
                 for r in records]
     fixed = len(header) + len(notice) + sum(len(label) for label, _, _ in sections)
-    available = max(0, int(budget * .83) - fixed)
-    # Water-fill: small identity/rule files return their unused share to long histories.
-    lengths = [0] * len(sections)
-    while available and any(lengths[i] < len(item[1]) for i, item in enumerate(sections)):
-        for i, (_, body, _) in enumerate(sections):
-            if available and lengths[i] < len(body):
-                lengths[i] += 1
-                available -= 1
     if fixed > budget:
         return clip(header + notice + 'Read companion files: ' + ', '.join(r['source'] for r in records), budget)
-    text = header + notice
-    for i, (label, body, name) in enumerate(sections):
-        text += label + clip(body, lengths[i], tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
+
+    def companion(available):
+        # Rules and the handoff get a floor first: an even split leaves the two continuity
+        # sources the same share as a one-line style note. The rest water-fills, so small
+        # identity files still return their unused share to long histories.
+        lengths = [min(len(body), int(available * FLOORS.get(name, 0))) for _, body, name in sections]
+        spare = available - sum(lengths)
+        while spare and any(lengths[i] < len(item[1]) for i, item in enumerate(sections)):
+            for i, (_, body, _) in enumerate(sections):
+                if spare and lengths[i] < len(body):
+                    lengths[i] += 1
+                    spare -= 1
+        rendered = header + notice
+        for i, (label, body, name) in enumerate(sections):
+            rendered += label + clip(body, lengths[i], both=name == 'Kurallar.md',
+                                     tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
+        return rendered
+
+    available = max(0, int(budget * .83) - fixed)
+    text = companion(available)
+    extra = ''
     index = store.source_snapshot(['index.md'], source_directory='knowledge', budget_chars=4000)
     if index['records']:
         label = '\n[Knowledge map: knowledge/index.md]\n'
         allowance = min(600, (budget - len(text)) // 3)
         if allowance > len(label) + 40:
-            text += label + clip(index['records'][0]['text'], allowance - len(label))
-    remaining = budget - len(text)
+            extra += label + clip(index['records'][0]['text'], allowance - len(label))
+    remaining = budget - len(text) - len(extra)
     ranked = store.context_for(harness, query, budget_chars=max(0, remaining - 100)) if query else store.snapshot_context(budget_chars=max(0, remaining - 100))
     used = {r['source'] for r in records}
     for record in ranked.get('records', []):
         if record['source'] in used:
             continue
         label = f'\n[Related source: {record["source"]}]\n'
-        if len(text) + len(label) + 40 < budget:
-            text += label + clip(record['text'], budget - len(text) - len(label))
-    if receipt and len(text) + 80 < budget:
-        text += clip(receipt, budget - len(text))
-    return text
+        if len(text) + len(extra) + len(label) + 40 < budget:
+            extra += label + clip(record['text'], budget - len(text) - len(extra) - len(label))
+    if receipt and len(text) + len(extra) + 80 < budget:
+        extra += clip(receipt, budget - len(text) - len(extra))
+    # Retrieval takes its share first; every character it did not use goes back to the
+    # clipped companion sources instead of being dropped.
+    regained = companion(budget - fixed - len(extra))
+    if len(text) < len(regained) <= budget - len(extra):
+        text = regained
+    return text + extra
