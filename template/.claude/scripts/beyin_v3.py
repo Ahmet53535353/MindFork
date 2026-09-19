@@ -12,7 +12,7 @@ import unicodedata
 
 
 # Every supported client. "manual" is accepted for receipts only.
-HARNESSES = ("codex", "claude", "antigravity", "hermes")
+HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode")
 
 
 class RevisionConflict(ValueError):
