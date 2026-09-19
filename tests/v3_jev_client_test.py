@@ -2,6 +2,7 @@
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -72,11 +73,14 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(j._environment(j.load_config(self.vault))['TYPESAFE_API_KEY'],'$(touch nope)')
         self.assertFalse((self.vault/'nope').exists())
     def test_deadline(self):
-        self.config(timeout=0.02)
-        def slow(*args): time.sleep(0.1); return {}
+        # The transport blocks far longer than the deadline, so a loaded CI runner
+        # cannot blur "returned at the deadline" into "waited for the transport".
+        self.config(timeout=0.05)
+        release=threading.Event();self.addCleanup(release.set)
+        def slow(*args): release.wait(10); return {}
         start=time.monotonic()
         result=j.evaluate(self.vault,'q',self.cards,transport=slow)
-        self.assertLess(time.monotonic()-start,0.09)
+        self.assertLess(time.monotonic()-start,5)
         self.assertIn('deadline_exceeded',result['diagnostics'])
     def test_bad_distribution(self):
         self.config()
