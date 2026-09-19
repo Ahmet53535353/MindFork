@@ -76,10 +76,16 @@ def sync_skills(vault, state, mode=None):
                         result['unmanaged'].append(name)
                         continue
                     raise ValueError('external skill collides with managed skill')
-                ah=_tree(a,vault) if a.exists() or a.is_symlink() else None
-                bh=_tree(b,vault) if b.exists() or b.is_symlink() else None
                 old=db.execute('SELECT hash FROM skills WHERE name=?',(name,)).fetchone()
                 previous=old[0] if old else None
+                if not previous and not any((p.is_dir() and (p/'SKILL.md').is_file()) for p in (a,b)):
+                    # Licenses, shared helper folders and caches live beside skills.
+                    # Never owned, so never a conflict; a skill that LOST its
+                    # SKILL.md still has a row and stays a conflict below.
+                    result['unmanaged'].append(name)
+                    continue
+                ah=_tree(a,vault) if a.exists() or a.is_symlink() else None
+                bh=_tree(b,vault) if b.exists() or b.is_symlink() else None
                 if ah and bh and a.resolve()==b.resolve():h=ah
                 elif ah==bh:h=ah
                 elif not ah or not bh:

@@ -169,6 +169,13 @@ POSIX defaults to symlinks and Windows to tracked copies. Copy reconciliation
 preserves simultaneous conflicting changes and reports them. `skill-import`
 imports only the explicitly selected directory; no global skill scan occurs.
 Uninstall preserves canonical skills and skill mirror state as user content.
+Entries beside the skills that are not skill directories, such as a license file
+or a shared helper folder, are never owned: `doctor` lists them under
+`skill_unmanaged` as information. A skill that was mirrored before and then lost
+its `SKILL.md` stays a conflict, because that is a removal signal. Skill
+conflicts appear in `doctor` under `skill_conflicts` and in session context as a
+warning, but they no longer stop queued event metadata from being processed;
+only source synchronization failures do that.
 
 Hooks enqueue only event metadata, never raw prompts or transcripts. They start
 an opportunistic detached Python worker. Startup waits at most 1.5 seconds for
