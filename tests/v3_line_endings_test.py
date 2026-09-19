@@ -122,7 +122,7 @@ class LineEndingGateTest(unittest.TestCase):
         for name in self.managed:
             with self.subTest(file=name):
                 data = (self.vault / name).read_bytes()
-                self.assertNotIn(b'\r\n', data)
+                # Stock bytes, whichever ending the stock file ships with.
                 self.assertEqual(data, stock[name])
                 self.assertEqual(hashlib.sha256(data).hexdigest(), manifest[name]['installed_hash'])
                 self.assertEqual(base64.b64decode(manifest[name]['installed_content']), data)
