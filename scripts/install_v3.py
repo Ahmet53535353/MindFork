@@ -21,7 +21,23 @@ ROOT = Path(__file__).resolve().parents[1]
 START, END = "<!-- beyin-v3:start -->", "<!-- beyin-v3:end -->"
 LEGACY_HOOK_FILES = tuple(name + suffix for name in ("session-start", "session-end", "pre-compact", "prompt-counter") for suffix in (".sh", ".ps1"))
 LEGACY = tuple(".claude/hooks/" + name for name in LEGACY_HOOK_FILES)
-OLDER_STOCK_DOCTOR_HASH = "1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8"
+STARTER_SKILLS = ("beyin", "beyin-doktor", "beyin-guncelle")
+SKILL_ROOTS = (".agents", ".claude")
+# The planner mirrors the .agents template bytes into both roots, so a vault installed by any
+# released tag holds those bytes twice. Without its state manifest the reinstall sees plain
+# unmanaged files, which is why every (root, skill) pair carries the released digests.
+MANAGED_SKILL_PATHS = tuple(root + "/skills/" + name + "/SKILL.md"
+                            for root in SKILL_ROOTS for name in STARTER_SKILLS)
+RELEASED_SKILL_HASHES = {
+    "beyin": ("91bfb90440ea4b727e6b579fe0d6bb156124343b9704f1180cd4659da4ebe59f",   # v3.0.0
+              "7e13537cebaa001d7eb8e2b814b400e1ec6d898df3194bac789a12a2f1aa877f"),  # v3.0.1, v3.0.2
+    "beyin-doktor": ("53ce40e622c22d0869fcd064f5bd9cfc75d8de0b666b992ab31f5722b611117b",),  # v3.0.0-v3.0.2
+    "beyin-guncelle": ("21f6e3f0427fcca81e0f114009b805133731d79f4ffc6bd793ab555a8823b0e3",),  # v3.0.0-v3.0.2
+}
+# template/.claude/skills/beyin-doktor/SKILL.md: shipped in the tree but never written by the
+# planner, so an upgraded vault can still hold it at the .claude path.
+OLDER_STOCK_DOCTOR_HASH = "1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8"  # v3.0.0, v3.0.1
+STOCK_DOCTOR_HASH = "fd7919c86d140314de82660b2b6f428e2804c4e4d5df35e68d9904dc0ab50df5"  # v3.0.2
 
 
 def managed_handler(handler, previous):
@@ -49,6 +65,18 @@ def atomic(path, data):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def default_skill_hashes():
+    """Exempt only the starter-skill bytes released tags actually left at each managed path."""
+    hashes = {root + "/skills/" + name + "/SKILL.md": list(RELEASED_SKILL_HASHES[name])
+              for root in SKILL_ROOTS for name in STARTER_SKILLS}
+    doctor = hashes[".claude/skills/beyin-doktor/SKILL.md"]
+    doctor += [OLDER_STOCK_DOCTOR_HASH, STOCK_DOCTOR_HASH]
+    source = ROOT / "template/.claude/skills/beyin-doktor/SKILL.md"
+    if source.exists():
+        doctor.append(digest(source.read_bytes()))
+    return {name: sorted(set(values)) for name, values in hashes.items()}
 
 
 def encode(data):
@@ -147,12 +175,9 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         for source in legacy_sources:
             if source.exists(): legacy_hashes[source.relative_to(ROOT/'template').as_posix()] = digest(source.read_bytes())
     if legacy_skill_hashes is None:
-        legacy_skill_hashes = {'.claude/skills/beyin-doktor/SKILL.md': [OLDER_STOCK_DOCTOR_HASH]}
-        source = ROOT / 'template/.claude/skills/beyin-doktor/SKILL.md'
-        if source.exists():
-            legacy_skill_hashes['.claude/skills/beyin-doktor/SKILL.md'].append(digest(source.read_bytes()))
+        legacy_skill_hashes = default_skill_hashes()
     if not isinstance(legacy_skill_hashes, dict) or any(
-            name != '.claude/skills/beyin-doktor/SKILL.md' or not isinstance(values, list) or
+            name not in MANAGED_SKILL_PATHS or not isinstance(values, list) or
             not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in values)
             for name, values in legacy_skill_hashes.items()):
         raise ValueError('invalid legacy skill hashes')
