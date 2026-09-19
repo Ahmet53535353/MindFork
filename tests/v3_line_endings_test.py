@@ -53,8 +53,10 @@ class LineEndingGateTest(unittest.TestCase):
     def crlf(self, name):
         path = self.vault / name
         data = path.read_bytes()
-        self.assertNotIn(b'\r\n', data, name + ' is already CRLF in the stock install')
-        path.write_bytes(data.replace(b'\n', b'\r\n'))
+        # The Windows launcher ships as CRLF, so there the rewrite goes the other way.
+        flipped = data.replace(b'\r\n', b'\n') if b'\r\n' in data else data.replace(b'\n', b'\r\n')
+        self.assertNotEqual(flipped, data, name + ' has no line endings to rewrite')
+        path.write_bytes(flipped)
 
     def mutate(self, name, case):
         path = self.vault / name
@@ -120,7 +122,7 @@ class LineEndingGateTest(unittest.TestCase):
         for name in self.managed:
             with self.subTest(file=name):
                 data = (self.vault / name).read_bytes()
-                self.assertNotIn(b'\r\n', data)
+                # Stock bytes, whichever ending the stock file ships with.
                 self.assertEqual(data, stock[name])
                 self.assertEqual(hashlib.sha256(data).hexdigest(), manifest[name]['installed_hash'])
                 self.assertEqual(base64.b64decode(manifest[name]['installed_content']), data)
