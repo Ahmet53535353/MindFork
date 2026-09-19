@@ -69,6 +69,13 @@ def jbytes(value):
     return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode()
 
 
+def unchanged(actual, *expected):
+    """Managed files are UTF-8 text, so a CRLF rewrite by git autocrlf or an editor is not an edit."""
+    return any(actual == value or (actual is not None and value is not None and
+                                   actual.replace(b'\r\n', b'\n') == value.replace(b'\r\n', b'\n'))
+               for value in expected)
+
+
 def roots(vault, state):
     vault, state = Path(vault).resolve(), Path(state).resolve()
     if not vault.is_dir() or state.is_relative_to(vault):
@@ -375,11 +382,12 @@ def rollback(vault, state):
             path = _destination(vault, state, item)
             actual = path.read_bytes() if path.exists() else None
             restore = decode(item['old'])
-            if actual not in (decode(item['new']), restore):
-                if item['name'] in ('.claude/settings.local.json', '.claude/settings.json', '.codex/hooks.json', '.agents/hooks.json') and restore is not None:
+            if not unchanged(actual, decode(item['new']), restore):
+                if actual is not None and restore is not None and item['name'] in ('.claude/settings.local.json', '.claude/settings.json', '.codex/hooks.json', '.agents/hooks.json'):
                     restore = _merge_json(decode(item['new']), actual, restore)
                 else:
-                    raise ValueError('rollback conflict: changed managed file ' + item['name'])
+                    raise ValueError('rollback conflict: changed managed file ' + item['name'] +
+                                     (' (deleted)' if actual is None else ' (content differs)'))
             operations.append(dict(item, old=encode(actual), new=encode(restore), old_mode=item.get('new_mode'), new_mode=item.get('old_mode')))
         if 'migration_result' in original:
             marker = state / 'v2-migration.json'
