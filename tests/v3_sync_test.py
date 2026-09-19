@@ -271,6 +271,11 @@ class SourceSyncTest(unittest.TestCase):
             ('kaynak: "a # b"', {'kaynak': 'a # b'}),
             ("note: 'it'quote'", {'note': "it'quote"}),
             ('aliases: ["", \'\', " # literal"]', {'aliases': ['', '', ' # literal']}),
+            # A trailing comment never changes the type the bare value would have had.
+            ('seviye: 2 # yuksek', {'seviye': 2}),
+            ('acik: true # evet', {'acik': True}),
+            ('bos: null # yok', {'bos': None}),
+            ('adres: https://example.com/#bolum', {'adres': 'https://example.com/#bolum'}),
         ]
         source = self.vault / 'comments.md'
         body = 'Nebula calibration comment fixture.\n'

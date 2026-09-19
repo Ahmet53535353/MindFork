@@ -78,6 +78,12 @@ def _plain_scalar(value):
     scalar = re.split(r'(?:^|\s)#', value, maxsplit=1)[0].rstrip()
     if not scalar:
         raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    if scalar != value.rstrip():
+        # A trailing comment must not change the type: `priority: 2 # high` stays a number.
+        try:
+            return json.loads(scalar)
+        except json.JSONDecodeError:
+            pass
     return scalar
 
 
