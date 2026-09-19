@@ -24,6 +24,36 @@ inert shims, so a cached old hook cannot start the retired writer afterward.
 Custom-modified runner files require explicit reconciliation. Finalization refuses
 a legacy runner without the retirement marker.
 
+## Reviewing and accepting a customized legacy runner
+
+`--plan` reports what an install would write, retire and preserve, and changes
+nothing in the vault or the state directory:
+
+```text
+python3 scripts/install_v3.py --vault "/absolute/path/to/vault" --plan
+```
+
+A runner you edited yourself stops the install with
+`Customized legacy runner requires review <path>`. Read the file, keep a copy of
+anything you still need, then retire that one file by name:
+
+```text
+python3 scripts/install_v3.py --vault "/absolute/path/to/vault" \
+  --accept-customized-legacy .claude/scripts/flush.py
+```
+
+The flag is repeatable, takes vault-relative paths, and only accepts the known
+legacy runner paths (`.claude/scripts/flush.py`, `.claude/scripts/compile.py` and
+the `.claude/hooks/` V2 handlers). Accepting one path does not accept any other;
+there is no blanket override. The pre-install bytes go into the install manifest
+as the file's `original`, so `--uninstall` and `rollback` put your version back.
+
+Retiring a runner only replaces that one file. Helper modules it imported stay on
+disk, now uncalled: `_portalock.py` here, and in older vaults files such as
+`autopush.py`. They are left alone because they are not hash-recognized project
+files and may be yours. Nothing invokes them after cutover; delete them yourself
+once you have confirmed no external schedule still calls them.
+
 External cron jobs, LaunchAgents, scheduled tasks and already-running clients
 are not silently stopped. Review custom schedules before cutover; schedules
 calling other copies of old code are outside the project-local guard. Unknown

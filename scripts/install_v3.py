@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 START, END = "<!-- beyin-v3:start -->", "<!-- beyin-v3:end -->"
 LEGACY_HOOK_FILES = tuple(name + suffix for name in ("session-start", "session-end", "pre-compact", "prompt-counter") for suffix in (".sh", ".ps1"))
 LEGACY = tuple(".claude/hooks/" + name for name in LEGACY_HOOK_FILES)
+LEGACY_RUNNERS = LEGACY + (".claude/scripts/flush.py", ".claude/scripts/compile.py")
 STARTER_SKILLS = ("beyin", "beyin-doktor", "beyin-guncelle")
 SKILL_ROOTS = (".agents", ".claude")
 # The planner mirrors the .agents template bytes into both roots, so a vault installed by any
@@ -38,6 +39,7 @@ RELEASED_SKILL_HASHES = {
 # planner, so an upgraded vault can still hold it at the .claude path.
 OLDER_STOCK_DOCTOR_HASH = "1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8"  # v3.0.0, v3.0.1
 STOCK_DOCTOR_HASH = "fd7919c86d140314de82660b2b6f428e2804c4e4d5df35e68d9904dc0ab50df5"  # v3.0.2
+RETIRED_STUB = b"# BEYIN_V3_LEGACY_RETIRED: canonical source runtime owns new outcomes.\n"
 
 
 def managed_handler(handler, previous):
@@ -144,7 +146,7 @@ def semantic_unchanged(name, baseline, current, previous):
 
 
 def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", legacy_hashes=None,
-             legacy_skill_hashes=None, migration=None, migration_plan=None):
+             legacy_skill_hashes=None, migration=None, migration_plan=None, accept_customized=()):
     vault, state = vault.resolve(), state.resolve()
     if not vault.is_dir() or state == vault or vault in state.parents:
         raise ValueError("Existing vault and state outside vault required")
@@ -181,6 +183,15 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in values)
             for name, values in legacy_skill_hashes.items()):
         raise ValueError('invalid legacy skill hashes')
+    # An accepted path only supplies its own file's digest, so every other runner still needs review.
+    if accept_customized:
+        legacy_hashes = dict(legacy_hashes)
+    for name in accept_customized:
+        if name not in LEGACY_RUNNERS:
+            raise ValueError('unsupported legacy managed path ' + str(name))
+        path = vault / name
+        if path.exists():
+            legacy_hashes[name] = digest(path.read_bytes())
 
     def add(name, content):
         path = (vault / name).resolve()
@@ -189,14 +200,13 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         planned[path.relative_to(vault).as_posix()] = content
 
     for name, expected in legacy_hashes.items():
-        if name not in tuple(LEGACY) + ('.claude/scripts/flush.py', '.claude/scripts/compile.py'):
+        if name not in LEGACY_RUNNERS:
             raise ValueError('unsupported legacy managed path')
         path = vault / name
         if path.exists() and name not in manifest['files']:
             if digest(path.read_bytes()) != expected:
                 raise ValueError('Customized legacy runner requires review ' + name)
-            stub = b'# BEYIN_V3_LEGACY_RETIRED: canonical source runtime owns new outcomes.\n'
-            stub += b'raise SystemExit(0)\n' if name.endswith('.py') else b'exit 0\n'
+            stub = RETIRED_STUB + (b'raise SystemExit(0)\n' if name.endswith('.py') else b'exit 0\n')
             if name.endswith('.sh'): stub = b'#!/bin/sh\n' + stub
             add(name, stub)
     for source in sorted((ROOT / "template/.claude/scripts").glob("beyin_v3*.py")):
@@ -420,7 +430,7 @@ def package_defaults():
 
 
 def install(vault, state, uninstall=False, plan_only=False, version=None, legacy_hashes=None,
-            legacy_skill_hashes=None):
+            legacy_skill_hashes=None, accept_customized=()):
     package = package_defaults()
     if package is not None:
         if version is not None and version != package['version']:
@@ -435,7 +445,8 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
     else:
         version = version or '3.0.0'
     if plan_only or uninstall:
-        return _install(vault, state, uninstall, plan_only, version, legacy_hashes, legacy_skill_hashes)
+        return _install(vault, state, uninstall, plan_only, version, legacy_hashes, legacy_skill_hashes,
+                        accept_customized=accept_customized)
     directory = ROOT / 'template/.claude/scripts'
     if (Path(state).resolve() / 'update-journal.json').exists():
         spec = importlib.util.spec_from_file_location('beyin_install_recovery', directory / 'beyin_v3_update.py')
@@ -448,23 +459,40 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with module.migration_guard(vault, state) as plan:
             return _install(vault, state, version=version, legacy_hashes=legacy_hashes,
-                            legacy_skill_hashes=legacy_skill_hashes, migration=module, migration_plan=plan)
+                            legacy_skill_hashes=legacy_skill_hashes, migration=module, migration_plan=plan,
+                            accept_customized=accept_customized)
     finally:
         sys.path.remove(str(directory))
+
+
+def plan_report(plan):
+    retire = sorted(name for name, content in plan["planned"].items() if content.startswith(RETIRED_STUB))
+    files = plan["manifest"]["files"]
+    return {"status": "plan", "version": plan["manifest"]["version"],
+            "write": sorted(name for name in plan["planned"] if name not in retire),
+            "retire": retire,
+            "preserve": sorted(name for name in plan["planned"] if files[name]["original"] is not None)}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vault", required=True, type=Path)
     parser.add_argument("--state", type=Path)
-    parser.add_argument("--uninstall", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--uninstall", action="store_true")
+    mode.add_argument("--plan", action="store_true", help="report what an install would do; change nothing")
+    parser.add_argument("--accept-customized-legacy", action="append", default=[], metavar="PATH",
+                        help="retire one named customized legacy runner (vault-relative); repeatable")
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location("beyin_cli_defaults", ROOT / "scripts/beyin_v3.py")
     defaults = importlib.util.module_from_spec(spec); spec.loader.exec_module(defaults)
     default_state = defaults.default_state
     os.umask(0o077)
     try:
-        print(json.dumps(install(args.vault, args.state or default_state(args.vault.resolve()), args.uninstall)))
+        accepted = tuple(name.replace("\\", "/") for name in args.accept_customized_legacy)
+        result = install(args.vault, args.state or default_state(args.vault.resolve()), args.uninstall,
+                         plan_only=args.plan, accept_customized=accepted)
+        print(json.dumps(plan_report(result) if args.plan else result))
     except Exception as exc:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}), file=sys.stderr)
         return 1
