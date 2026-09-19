@@ -14,6 +14,9 @@ import unicodedata
 # Every supported client. "manual" is accepted for receipts only.
 HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode")
 
+# Frontmatter keys other tools write instead of updated_at, in precedence order.
+RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")
+
 
 class RevisionConflict(ValueError):
     pass
@@ -107,6 +110,16 @@ class MemoryStore:
             raise ValueError("record text required")
         record["source"] = self._source(record.get("source"))
         record["source_sha256"] = hashlib.sha256((self.vault_root / record["source"]).read_bytes()).hexdigest()
+        current = record.get("updated_at")
+        if current is None or (isinstance(current, str) and not current.strip()):
+            # Obsidian templates date notes as updated/modified, so without these the
+            # recency tie-break is empty for every note. Non-ISO text would sort as ancient,
+            # and file mtime is not a date: synced vaults rewrite it.
+            for alias in RECENCY_ALIASES:
+                value = record.get(alias)
+                if isinstance(value, str) and re.match(r"\d{4}-\d{2}-\d{2}", value.strip()):
+                    record["updated_at"] = value.strip()
+                    break
         for field in ("project", "kind", "status", "updated_at"):
             if field in record and not isinstance(record[field], str):
                 raise ValueError(field + " must be a string")
