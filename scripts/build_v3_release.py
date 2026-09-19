@@ -2,12 +2,19 @@
 """Build a minimal checksum-listed portable release from this checkout."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def installer():
+    spec = importlib.util.spec_from_file_location('beyin_release_installer', ROOT / 'scripts/install_v3.py')
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
 
 
 def build(output, version='3.0.0'):
@@ -20,10 +27,8 @@ def build(output, version='3.0.0'):
     manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     legacy = [ROOT/'template/.claude/scripts'/name for name in ('flush.py','compile.py')] + [ROOT/'template/.claude/hooks'/(name+suffix) for name in ('session-start','session-end','pre-compact','prompt-counter') for suffix in ('.sh','.ps1')]
     manifest['legacy_hashes'] = {p.relative_to(ROOT/'template').as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy if p.exists()}
-    legacy_doctor = ROOT / 'template/.claude/skills/beyin-doktor/SKILL.md'
-    doctor_hashes = {'1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8'}
-    if legacy_doctor.exists(): doctor_hashes.add(hashlib.sha256(legacy_doctor.read_bytes()).hexdigest())
-    manifest['legacy_skill_hashes'] = {'.claude/skills/beyin-doktor/SKILL.md': sorted(doctor_hashes)}
+    # One source for the exemption map, so a release install trusts exactly what the tree does.
+    manifest['legacy_skill_hashes'] = installer().default_skill_hashes()
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:

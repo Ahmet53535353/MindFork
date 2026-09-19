@@ -17,6 +17,10 @@ import zipfile
 
 OFFICIAL = 'https://api.github.com/repos/avenoxai/avenoxbeyin/releases/latest'
 MAX_PACKAGE = 32 * 1024 * 1024
+# The installer mirrors each starter skill into both roots, so a package may carry an
+# exemption for either copy. Mirrors install_v3.MANAGED_SKILL_PATHS.
+MANAGED_SKILL_PATHS = frozenset(root + '/skills/' + name + '/SKILL.md' for root in ('.agents', '.claude')
+                                for name in ('beyin', 'beyin-doktor', 'beyin-guncelle'))
 
 
 def transaction_hook(phase, index=None):
@@ -110,7 +114,7 @@ def validate_package(package):
             raise ValueError('unsupported migration')
         legacy_skill_hashes = manifest.get('legacy_skill_hashes', {})
         if not isinstance(legacy_skill_hashes, dict) or any(
-                name != '.claude/skills/beyin-doktor/SKILL.md' or not isinstance(values, list) or
+                name not in MANAGED_SKILL_PATHS or not isinstance(values, list) or
                 not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in values)
                 for name, values in legacy_skill_hashes.items()):
             raise ValueError('invalid legacy skill hashes')
