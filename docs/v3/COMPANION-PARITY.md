@@ -47,6 +47,13 @@ bağlamda bütün dosyanın sığacağı iddia edilmez: kırpılan kaynağa okum
 Private/untrusted ve indekslendikten sonra değişmiş kayıtlar otomatik bağlamdan dışlanır.
 `no_memory` olayları bağlam enjekte etmez ve kuyruğa yazılmaz.
 
+Bütçe paylaşımı ([#45](https://github.com/avenoxai/avenoxbeyin/issues/45)): `Kurallar.md`
+ve `Last-Session.md` eşit paylaşımdan önce bir taban pay alır; kurallar dosyası sığmadığında
+yalnız sonu değil, başı ve sonu birlikte gelir ve aradaki işaret kaç karakterin atlandığını
+ve dosyayı okumak gerektiğini söyler. Kesme satır sınırındadır, yarım kural gelmez. Bilgi
+haritası ve ilişkili kaynaklar payını aldıktan sonra artan bütçe kırpılmış companion
+bölümlerine geri verilir; sınır hiçbir durumda aşılmaz.
+
 ## Doğrulama
 
 `tests/v3_companion_test.py` sentetik verilerle temiz ZIP kurulumu, üç istemcide aynı
