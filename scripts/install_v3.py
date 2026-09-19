@@ -83,8 +83,19 @@ def commands(argv):
     return posix, windows
 
 
+def line_endings_only(baseline, current):
+    """Managed files are UTF-8 text, so a CRLF rewrite by git autocrlf or an editor is not an edit."""
+    if baseline is None or current is None: return False
+    return baseline.replace(b"\r\n", b"\n") == current.replace(b"\r\n", b"\n")
+
+
+def conflict_case(current):
+    return "deleted" if current is None else "content differs"
+
+
 def semantic_unchanged(name, baseline, current, previous):
     if baseline is None or current is None: return False
+    if line_endings_only(baseline, current): return True
     try:
         if name in ("AGENTS.md", "CLAUDE.md"):
             pattern = re.escape(START) + r".*?" + re.escape(END)
@@ -113,7 +124,10 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             path = vault / name
             current = path.read_bytes() if path.exists() else None
             if current is None or digest(current) != item["installed_hash"]:
-                raise ValueError("Uninstall conflict: managed file changed; preserve and reconcile " + name)
+                baseline = base64.b64decode(item["installed_content"]) if item.get("installed_content") else None
+                if not line_endings_only(baseline, current):
+                    raise ValueError("Uninstall conflict: managed file changed; preserve and reconcile " + name +
+                                     " (" + conflict_case(current) + ")")
         for name, item in manifest["files"].items():
             path = vault / name
             if item["original"] is None:
@@ -293,8 +307,9 @@ reflection and knowledge synthesis. Receipt indexes alone are not knowledge synt
         if item and (current is None or digest(current) != item["installed_hash"]):
             baseline = base64.b64decode(item["installed_content"]) if item.get("installed_content") else None
             if not semantic_unchanged(name, baseline, current, manifest.get("commands", [])):
-                raise ValueError("Reinstall conflict: managed file changed " + name)
-        elif not item and current is not None and current != planned[name]:
+                raise ValueError("Reinstall conflict: managed file changed " + name +
+                                 " (" + conflict_case(current) + ")")
+        elif not item and current is not None and not line_endings_only(planned[name], current):
             semantic = name in ("AGENTS.md", "CLAUDE.md", ".claude/settings.local.json", ".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json", ".codex/config.toml", ".beyin-version")
             legacy = digest(current) in legacy_skill_hashes.get(name, []) or legacy_hashes.get(name) == digest(current)
             if not semantic and not legacy:
