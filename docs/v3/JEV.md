@@ -56,3 +56,86 @@ Forn Hafıza OS `524fd07` sürümünden bütçeli istemci, kaynak/scope bağlı 
 Önbellek yalnız doğrulanmış puanları ve sınırlı metaveriyi state dizininde saklar; sorgu, kaynak metni ve anahtar saklamaz. Cache anahtarı kaynak sürümü, proje, amaç, model, endpoint ve rubriğe bağlıdır. Token sayaçları sağlayıcıdan gelirse raporlanır; karakter bütçesi token/fatura değildir. İstemcide özel 400 çağrı sınırı yoktur; önceki deney köprüsünün sayacı sağlayıcı hesap kotası değildi.
 
 Öğrenme değişikliklerini ölçerken kaynakları ve soruları yazımdan önce dondurun. Aynı kod/yönlendirmeyle önce/sonra nihai bağlam teslimini ve proje dışına taşmayı ölçün; model açık/kapalı karşılaştırmasını ayrı yapın. Özel kasadaki kartlar ve deney sonuçları bu depoya taşınmadı. Buradaki sentetik offline testler genel anlamsal başarı veya canlı Jev bağlantısı kanıtı değildir.
+
+## Cevaptaki iddiaları kaynaklarıyla denetleme
+
+`jev-answer`, hazırlanmış bir cevaptaki 1–20 iddiayı ayrı ayrı değerlendirir.
+Forn Hafıza OS yerel `jev_answer.py` akışındaki kaynak kapısı ve destek/çelişki
+ayrımı V3 kayıt kimliği, proje kapsamı ve revizyon sözleşmesine uyarlandı.
+Kişisel kayıtlar ve diğer hafıza sistemi güncellemeleri aktarılmadı.
+
+Önce `context` çıktısından kayıt kimliğini ve güncel hash'i alın. `claims.json`:
+
+```json
+[
+  {
+    "text": "Demo projesinde kısa notlar tercih ediliyor.",
+    "citations": [
+      {
+        "record_id": "demo-notlar",
+        "source_sha256": "KAYNAK_DOSYANIN_GUNCEL_SHA256_DEGERI",
+        "quote": "Demo için kısa notlar kullanalım."
+      }
+    ]
+  }
+]
+```
+
+```sh
+python beyin.py jev-answer --project demo --file claims.json --json
+```
+
+Kaynak depodan kullanım:
+
+```sh
+python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state jev-answer --project demo --file claims.json
+```
+
+İddia başına en fazla 8 atıf, toplam 32.000 giriş karakteri kabul edilir.
+Her iddia sağlayıcıya ayrı bir istekle gider (aynı anda en fazla 4 istek). Aynı
+istekte birden çok iddia puanlandığında canlı Jev'de puanlar birbirine
+karışıyordu; ayrıca tek istek, varsayılan `max_input_chars` ile 12 kısa iddiada
+bütün sonucu `degraded` yapıyordu. Bir isteğin bütçeyi aşması veya hata vermesi
+yalnız o iddiayı `degraded` yapar. Süre, iddia sayısıyla birlikte artar.
+Boş atıf veya eşleşmeyen hash/alıntı `insufficient` döndürür ve o iddia
+sağlayıcıya gönderilmez. Alıntı hem indeks kaydında hem gerçek kaynakta aynen
+bulunmalıdır. Diğer Jev komutlarındaki proje, görünürlük, güven ve sır
+kontrolleri geçerlidir. Bu açık komut `internal` kayıt alıntılarını sağlayıcıya
+gönderebilir; `private` kayıtlar elenir. Normal bağlam ve hook akışı değişmez.
+
+`mechanical_verified`, yalnız çağrı öncesindeki kaynak/alıntı eşleşmesini
+bildirir; anlamsal doğrulama değildir. `off` ve `shadow` modlarında anlamsal
+sonuç `uncertain` kalır. `on` modunda destek ve çelişki ayrı sorulur. Çelişki,
+"alıntı ile iddia aynı anda doğru olabilir mi" ölçeğiyle puanlanır (0 uyumlu,
+1 gerilim, 2 bağdaşmaz); "çelişki ilişkisi destekleniyor mu" biçimindeki soru
+canlı Jev'de çelişkiyi değil desteği puanlıyordu.
+
+| Destek | Çelişki | Sonuç |
+|---|---|---|
+| ≥ 1,5 | < 1,0 | `supported` |
+| < 1,0 | ≥ 1,5 | `contradicted` |
+| ikisinden biri ≥ 1,0 ve yukarıdakiler değil | | `uncertain` |
+| < 1,0 | < 1,0 | `insufficient` |
+
+Aynı istek tekrarlandığında puan yaklaşık 0,2 oynayabildiği için net bir sonuç,
+karşı ilişkinin 1,0 altında kalmasını da ister; 1,0 ile 1,5 arası bant hiçbir
+zaman `supported` veya `contradicted` üretmez.
+
+Bu eşikler mevcut yerel akıştan aktarılmış danışman kurallarıdır; kalibre
+edilmiş doğruluk olasılığı veya genel başarı ölçümü değildir. Çağrıdan sonra
+kaynak, indeks revizyonu, erişim koşulları veya yapılandırma değişirse sonuç
+`degraded` olur. Servis hataları da doğrulanmış sonuç üretmez. Komut cevabı
+yeniden yazmaz, aday onaylamaz veya kanonik hafıza kaydı oluşturmaz;
+`approved`, `memory_written` ve `rewrites` daima `false` olur. CLI'nin normal
+kaynak senkronizasyonu yerel indeksi yenileyebilir; Jev puan önbelleği de
+state dizininde güncellenebilir.
+
+Testler sentetik kaynaklar ve offline transport ile çalışır. Soru metni ve
+eşikler 2026-09-20'de canlı `jev-1.13.0` üzerinde sentetik Türkçe/İngilizce
+iddialarla (olumsuzluk eki, farklı sayı/gün, kapsam genişletme, ilgisiz alıntı)
+seçildi. Uçtan uca 22 iddia üçer kez çalıştırıldı: 66 sonucun 60'ı beklenen
+etiketi verdi, kalan 6'sı kapsamı genişleten iki iddiada `uncertain` oldu;
+yanlış `supported` veya `contradicted` çıkmadı. Önceki tek istekli sürüm aynı
+türden 10 iddiada 5 çelişkinin hiçbirini yakalamamıştı. Bu küçük bir
+yapılandırma denemesidir; gerçek kasalarda genel doğruluk, maliyet avantajı
+veya kullanıcı kabulü iddia edilmez.

@@ -143,6 +143,18 @@ class ClientTests(unittest.TestCase):
         self.assertIn('exact evidence quotes',self.calls[2]['questions']['f0_c0']['instructions'])
         self.assertNotEqual(self.calls[1]['questions'],self.calls[2]['questions'])
 
+    def test_answer_check_is_positional_and_needs_both_facets(self):
+        self.config()
+        result=self.run_client(purpose='answer_check',facets=['Support?','Conflict?'])
+        self.assertFalse(result['degraded'])
+        questions=self.calls[0]['questions']
+        self.assertEqual(questions['f0_c0']['criteria'],j.REVIEW_CRITERIA)
+        self.assertEqual(questions['f1_c0']['criteria'],j.CONFLICT_CRITERIA)
+        for facets in (['Only one'],['One','Two','Three']):
+            result=self.run_client(purpose='answer_check',facets=facets)
+            self.assertTrue(result['degraded']);self.assertIn('payload_invalid',result['diagnostics'])
+        self.assertEqual(len(self.calls),1)
+
     def test_unknown_purpose_rejected_before_network(self):
         self.config()
         for purpose in ('raw_prompt',None,[]):
