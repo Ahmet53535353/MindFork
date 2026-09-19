@@ -72,6 +72,13 @@ def relevant(query):
     return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|nerede kal|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query))
 
 
+def stamp(header):
+    """Sortable (date, time) of a Journal header; an untimed entry sorts before timed ones."""
+    date = re.search(r'\d{4}-\d{2}-\d{2}', header)
+    clock = re.search(r'(?<!\d)([01]?\d|2[0-3]):[0-5]\d(?!\d)', header)
+    return (date[0], clock[0].rjust(5, '0') if clock else '') if date else None
+
+
 def excerpt(name, text):
     if name == 'Threads.md':
         match = re.search(r'(?im)^## (?:Active(?: Threads)?|Aktif[^\n]*)\s*$', text)
@@ -81,10 +88,12 @@ def excerpt(name, text):
             return body[:closed.start()] if closed else body
     if name == 'Journal.md':
         entries = list(re.finditer(r'(?m)^## ([^\n]+)', text))
-        dated = [(re.search(r'\d{4}-\d{2}-\d{2}', item[1]), i) for i, item in enumerate(entries)]
-        dated = [(date[0], i) for date, i in dated if date]
+        dated = [(moment, i) for i, item in enumerate(entries) if (moment := stamp(item[1]))]
         if entries:
-            index = max(dated)[1] if dated else len(entries) - 1
+            # Equal timestamps follow the file's own direction: a newest-first journal keeps
+            # the latest entry at the top, an append-ordered one at the bottom.
+            newest_first = all(b <= a for (a, _), (b, _) in zip(dated, dated[1:]))
+            index = max(dated, key=lambda item: (item[0], -item[1] if newest_first else item[1]))[1] if dated else len(entries) - 1
             return text[entries[index].start():entries[index + 1].start() if index + 1 < len(entries) else len(text)]
     if name == 'Last-Session.md':
         previous = re.search(r'(?im)^## (?:Previous|Önceki)', text)
