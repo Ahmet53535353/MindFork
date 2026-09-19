@@ -65,6 +65,22 @@ def _yaml_scalar(value):
     raise ValueError('unsupported YAML metadata; use JSON frontmatter')
 
 
+def _quoted_scalar(value):
+    """A quoted scalar ends at its closing quote; only a comment may follow it."""
+    match = re.match(r'"(?:[^"\\]|\\.)*"|\'(?:[^\']|\'\')*\'', value)
+    if not match or not re.fullmatch(r'\s+#.*', value[match.end():]):
+        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    return _yaml_scalar(match[0])
+
+
+def _plain_scalar(value):
+    """A plain scalar ends at an unquoted `#` that follows whitespace or opens the value."""
+    scalar = re.split(r'(?:^|\s)#', value, maxsplit=1)[0].rstrip()
+    if not scalar:
+        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    return scalar
+
+
 def _yaml_sequence(value):
     if not value.endswith(']'):
         raise ValueError('unsupported YAML metadata; use JSON frontmatter')
@@ -135,10 +151,15 @@ def parse(text):
                 metadata[key] = value[1:-1].replace("''", "'")
             elif value.startswith('['):
                 metadata[key] = _yaml_sequence(value.rstrip())
-            elif value[0] in '{"\'' or ' #' in value:
+            elif re.fullmatch(r'\{\{[^{}\n]*\}\}', value.rstrip()):
+                # A Templater placeholder is literal text until Obsidian expands it.
+                metadata[key] = value.rstrip()
+            elif value[0] == '{':
                 raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+            elif value[0] in '"\'':
+                metadata[key] = _quoted_scalar(value)
             else:
-                metadata[key] = value
+                metadata[key] = _plain_scalar(value)
     return metadata, body
 
 
