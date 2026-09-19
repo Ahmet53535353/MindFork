@@ -56,3 +56,68 @@ Forn Hafıza OS `524fd07` sürümünden bütçeli istemci, kaynak/scope bağlı 
 Önbellek yalnız doğrulanmış puanları ve sınırlı metaveriyi state dizininde saklar; sorgu, kaynak metni ve anahtar saklamaz. Cache anahtarı kaynak sürümü, proje, amaç, model, endpoint ve rubriğe bağlıdır. Token sayaçları sağlayıcıdan gelirse raporlanır; karakter bütçesi token/fatura değildir. İstemcide özel 400 çağrı sınırı yoktur; önceki deney köprüsünün sayacı sağlayıcı hesap kotası değildi.
 
 Öğrenme değişikliklerini ölçerken kaynakları ve soruları yazımdan önce dondurun. Aynı kod/yönlendirmeyle önce/sonra nihai bağlam teslimini ve proje dışına taşmayı ölçün; model açık/kapalı karşılaştırmasını ayrı yapın. Özel kasadaki kartlar ve deney sonuçları bu depoya taşınmadı. Buradaki sentetik offline testler genel anlamsal başarı veya canlı Jev bağlantısı kanıtı değildir.
+
+## Cevaptaki iddiaları kaynaklarıyla denetleme
+
+`jev-answer`, hazırlanmış bir cevaptaki 1–20 iddiayı ayrı ayrı değerlendirir.
+Forn Hafıza OS yerel `jev_answer.py` akışındaki kaynak kapısı ve destek/çelişki
+ayrımı V3 kayıt kimliği, proje kapsamı ve revizyon sözleşmesine uyarlandı.
+Kişisel kayıtlar ve diğer hafıza sistemi güncellemeleri aktarılmadı.
+
+Önce `context` çıktısından kayıt kimliğini ve güncel hash'i alın. `claims.json`:
+
+```json
+[
+  {
+    "text": "Demo projesinde kısa notlar tercih ediliyor.",
+    "citations": [
+      {
+        "record_id": "demo-notlar",
+        "source_sha256": "KAYNAK_DOSYANIN_GUNCEL_SHA256_DEGERI",
+        "quote": "Demo için kısa notlar kullanalım."
+      }
+    ]
+  }
+]
+```
+
+```sh
+python beyin.py jev-answer --project demo --file claims.json --json
+```
+
+Kaynak depodan kullanım:
+
+```sh
+python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state jev-answer --project demo --file claims.json
+```
+
+İddia başına en fazla 8 atıf, toplam 32.000 giriş karakteri kabul edilir.
+Jev istemcisinin ayrıca uyguladığı istek bütçesi aşılırsa sonuç `degraded` olur.
+Boş atıf veya eşleşmeyen hash/alıntı `insufficient` döndürür ve o iddia
+sağlayıcıya gönderilmez. Alıntı hem indeks kaydında hem gerçek kaynakta aynen
+bulunmalıdır. Diğer Jev komutlarındaki proje, görünürlük, güven ve sır
+kontrolleri geçerlidir. Bu açık komut `internal` kayıt alıntılarını sağlayıcıya
+gönderebilir; `private` kayıtlar elenir. Normal bağlam ve hook akışı değişmez.
+
+`mechanical_verified`, yalnız çağrı öncesindeki kaynak/alıntı eşleşmesini
+bildirir; anlamsal doğrulama değildir. `off` ve `shadow` modlarında anlamsal
+sonuç `uncertain` kalır. `on` modunda destek ve çelişki ayrı puanlanır:
+
+| Destek ≥ 1,5 | Çelişki ≥ 1,5 | Sonuç |
+|---|---|---|
+| Evet | Hayır | `supported` |
+| Hayır | Evet | `contradicted` |
+| Evet | Evet | `uncertain` |
+| Hayır | Hayır | `insufficient` |
+
+Bu eşikler mevcut yerel akıştan aktarılmış danışman kurallarıdır; kalibre
+edilmiş doğruluk olasılığı veya genel başarı ölçümü değildir. Çağrıdan sonra
+kaynak, indeks revizyonu, erişim koşulları veya yapılandırma değişirse sonuç
+`degraded` olur. Servis hataları da doğrulanmış sonuç üretmez. Komut cevabı
+yeniden yazmaz, aday onaylamaz veya kanonik hafıza kaydı oluşturmaz;
+`approved`, `memory_written` ve `rewrites` daima `false` olur. CLI'nin normal
+kaynak senkronizasyonu yerel indeksi yenileyebilir; Jev puan önbelleği de
+state dizininde güncellenebilir.
+
+Doğrulama sentetik kaynaklar ve offline transport ile yapılır; canlı Jev
+başarısı, maliyet avantajı veya gerçek kullanıcı kabulü iddia edilmez.

@@ -184,6 +184,14 @@ class InstalledAdvisorTest(unittest.TestCase):
             self.assertFalse(review['memory_written'])
             self.assertFalse(review['approved'])
             self.assertEqual(source.read_bytes(), before)
+            claims = root / 'claims.json'
+            claims.write_text(json.dumps([dict(text='Use short demo notes.', citations=[dict(
+                record_id=rec['id'], source_sha256=rec['source_sha256'], quote='Use short demo notes.')])]), encoding='utf-8')
+            checked = run('jev-answer', '--project', 'demo', '--file', str(claims), '--json')
+            self.assertEqual(checked['claims'][0]['verdict'], 'uncertain')
+            self.assertTrue(checked['claims'][0]['mechanical_verified'])
+            self.assertFalse(checked['memory_written'])
+            self.assertEqual(source.read_bytes(), before)
 
 
 if __name__ == '__main__':

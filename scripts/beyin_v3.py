@@ -94,6 +94,9 @@ def parser():
     review = sub.add_parser("jev-review", help="Advisory source review; never saves or approves a candidate")
     review.add_argument("--file", required=True, help="JSON proposal (maximum 24,000 characters)")
     review.add_argument("--project", required=True)
+    answer = sub.add_parser("jev-answer", help="Advisory answer claim verification against exact source quotes")
+    answer.add_argument("--file", required=True, help="JSON list of claims (maximum 32,000 characters)")
+    answer.add_argument("--project", required=True)
     receipt = sub.add_parser("receipt", help="Submit an idempotent source-linked receipt")
     receipt.add_argument("--file", default="-", help="JSON input path, or - for stdin")
     receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode"), default="codex")
@@ -117,7 +120,7 @@ def main(argv=None):
             raise ValueError("--state must be outside the vault")
         engine = load_engine()
         store = engine.MemoryStore(state, vault)
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review") else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer") else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -197,20 +200,22 @@ def main(argv=None):
                     'warnings': warnings[:20],
                     'truncated': len(warnings) > 20,
                 }
-        elif args.command == "jev-review":
-            from beyin_v3_jev import review_candidate
+        elif args.command in ("jev-review", "jev-answer"):
+            from beyin_v3_jev import review_candidate, verify_answer
+            max_chars = 32000 if args.command == "jev-answer" else 24000
             # Bounded read also applies to stdin; never echo raw proposal errors.
             if args.file == "-":
-                raw = sys.stdin.read(24001)
+                raw = sys.stdin.read(max_chars + 1)
             else:
                 with Path(args.file).open(encoding="utf-8") as handle:
-                    raw = handle.read(24001)
-            if len(raw) > 24000:
+                    raw = handle.read(max_chars + 1)
+            if len(raw) > max_chars:
                 raise ValueError("proposal_too_large")
             refreshed = sync.sync()
             if refreshed.get('status') != 'succeeded':
                 raise ValueError("proposal_source_sync_incomplete")
-            result = review_candidate(sync.store, json.loads(raw), project=args.project)
+            handler = verify_answer if args.command == "jev-answer" else review_candidate
+            result = handler(sync.store, json.loads(raw), project=args.project)
         elif args.command == "receipt":
             payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],

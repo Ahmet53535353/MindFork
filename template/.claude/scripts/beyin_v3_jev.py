@@ -72,6 +72,29 @@ def advise_context(store, query, *, project, audience='internal', statuses=None,
     return result
 
 
+def _verified_evidence(store, evidence, project):
+    # Existing runtime gates enforce scope, visibility, trust, freshness and supersession.
+    eligible = store._retrieve('', project=project, audience='internal',
+                               limit=100000, budget_chars=10000000, snapshot=True)['records']
+    by_id = {r['id']: r for r in eligible if not r.get('text_truncated')}
+    refs = []
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {'record_id', 'source_sha256', 'quote'}:
+            raise ValueError('invalid_evidence_fields')
+        record = by_id.get(item['record_id'])
+        quote = item['quote']
+        if (record is None or item['source_sha256'] != record['source_sha256']
+                or not isinstance(quote, str) or not quote.strip() or quote not in record['text']):
+            raise ValueError('evidence_not_current_or_exact')
+        raw = (store.vault_root / store._source(record['source'])).read_text(encoding='utf-8')
+        if quote not in raw:
+            raise ValueError('evidence_not_in_source')
+        refs.append(record)
+    if not _fresh(store, refs):
+        raise ValueError('evidence_changed')
+    return refs
+
+
 def review_candidate(store, proposal, *, project, transport=None):
     """Judge exact source evidence, without ingesting or approving a proposal."""
     if not isinstance(proposal, dict) or set(proposal) != {'status', 'project', 'claim', 'evidence'}:
@@ -87,29 +110,7 @@ def review_candidate(store, proposal, *, project, transport=None):
     if not isinstance(evidence, list) or not 1 <= len(evidence) <= 8:
         raise ValueError('proposal_requires_evidence')
 
-    def verified():
-        # Existing runtime gates enforce scope, visibility, trust, freshness and supersession.
-        eligible = store._retrieve('', project=project, audience='internal',
-                                   limit=100000, budget_chars=10000000, snapshot=True)['records']
-        by_id = {r['id']: r for r in eligible if not r.get('text_truncated')}
-        refs = []
-        for item in evidence:
-            if not isinstance(item, dict) or set(item) != {'record_id', 'source_sha256', 'quote'}:
-                raise ValueError('invalid_evidence_fields')
-            record = by_id.get(item['record_id'])
-            quote = item['quote']
-            if (record is None or item['source_sha256'] != record['source_sha256']
-                    or not isinstance(quote, str) or not quote.strip() or quote not in record['text']):
-                raise ValueError('evidence_not_current_or_exact')
-            raw = (store.vault_root / store._source(record['source'])).read_text(encoding='utf-8')
-            if quote not in raw:
-                raise ValueError('evidence_not_in_source')
-            refs.append(record)
-        if not _fresh(store, refs):
-            raise ValueError('evidence_changed')
-        return refs
-
-    refs = verified()
+    refs = _verified_evidence(store, evidence, project)
     _safe(store, proposal)
     versions = {r['id']: [r['source_sha256'], r['revision']] for r in refs}
     mode = client.inspect_config(store.state_dir)
@@ -121,7 +122,7 @@ def review_candidate(store, proposal, *, project, transport=None):
                              facets=['Do the exact quotes support the entire claim in its original scope?'],
                              transport=transport)
     try:
-        now = verified()
+        now = _verified_evidence(store, evidence, project)
         if versions != {r['id']: [r['source_sha256'], r['revision']] for r in now}:
             raise ValueError('evidence_changed')
         if client.inspect_config(store.state_dir) != mode:
@@ -129,3 +130,76 @@ def review_candidate(store, proposal, *, project, transport=None):
     except (ValueError, OSError):
         result = _clear(result, 'source_or_configuration_changed')
     return dict(status='advisory_only', approved=False, memory_written=False, jev=result)
+
+
+def verify_answer(store, claims, *, project, transport=None):
+    """Advisory claim checks; exact local evidence gates precede remote scoring."""
+    if not isinstance(project, str) or not project.strip():
+        raise ValueError('advisor_requires_explicit_project')
+    if not isinstance(claims, list) or not 1 <= len(claims) <= 20:
+        raise ValueError('claims_limit_1_20')
+    raw = json.dumps(claims, ensure_ascii=False)
+    if len(raw) > 32000:
+        raise ValueError('claims_too_large')
+    claims = json.loads(raw)
+    _safe(store, claims)
+    # Validate the whole request before any network call.
+    for claim in claims:
+        if (not isinstance(claim, dict) or set(claim) != {'text', 'citations'}
+                or not isinstance(claim['text'], str) or not claim['text'].strip()
+                or not isinstance(claim['citations'], list) or len(claim['citations']) > 8):
+            raise ValueError('invalid_claim')
+        for cite in claim['citations']:
+            if (not isinstance(cite, dict) or set(cite) != {'record_id', 'source_sha256', 'quote'}
+                    or any(not isinstance(v, str) or not v.strip() for v in cite.values())):
+                raise ValueError('invalid_citation')
+    results, cards, snapshots = [], [], {}
+    for index, claim in enumerate(claims):
+        item = dict(index=index, verdict='insufficient', mechanical_verified=False, diagnostics=[])
+        results.append(item)
+        if not claim['citations']:
+            item['diagnostics'] = ['citation_missing']
+            continue
+        try:
+            refs = _verified_evidence(store, claim['citations'], project)
+        except (ValueError, OSError):
+            item['diagnostics'] = ['citation_not_current_or_exact']
+            continue
+        item['mechanical_verified'] = True
+        snapshots[index] = {r['id']: [r['source_sha256'], r['revision']] for r in refs}
+        cards.append(dict(id='claim-' + str(index), title='Answer claim', scope='project:' + project,
+                          domains=[], statement=json.dumps(dict(stored_claim=claim['text'],
+                          evidence_quotes=[c['quote'] for c in claim['citations']]), ensure_ascii=False)))
+    if cards:
+        mode = client.inspect_config(store.state_dir)
+        advice = client.evaluate(store.state_dir, 'Evaluate each claim only against its attached exact quotes.',
+                                 cards, scope='project:' + project, source_versions=snapshots,
+                                 purpose='evidence_review', facets=[
+                                     'Do the quotes support the entire claim in its original scope, conditions and exceptions?',
+                                     'Do the quotes contradict the claim in its original scope, conditions and exceptions?'],
+                                 transport=transport)
+        for index, versions in snapshots.items():
+            item = results[index]
+            try:
+                refs = _verified_evidence(store, claims[index]['citations'], project)
+                if versions != {r['id']: [r['source_sha256'], r['revision']] for r in refs}:
+                    raise ValueError('evidence_changed')
+                if client.inspect_config(store.state_dir) != mode:
+                    raise ValueError('configuration_changed')
+            except (ValueError, OSError):
+                item.update(verdict='degraded', diagnostics=['source_or_configuration_changed'])
+                continue
+            if advice.get('degraded'):
+                item.update(verdict='degraded', diagnostics=advice.get('diagnostics', []))
+            elif advice.get('mode') != 'on':
+                item.update(verdict='uncertain', diagnostics=['semantic_' + advice.get('mode', 'unavailable')])
+            else:
+                scores = advice.get('facet_scores', {})
+                ident = 'claim-' + str(index)
+                yes = (scores.get(0) or scores.get('0') or {}).get(ident, 0)
+                no = (scores.get(1) or scores.get('1') or {}).get(ident, 0)
+                item['verdict'] = ('uncertain' if yes >= 1.5 and no >= 1.5 else
+                                   'supported' if yes >= 1.5 else
+                                   'contradicted' if no >= 1.5 else 'insufficient')
+    return dict(status='advisory_only', claims=results, approved=False,
+                memory_written=False, rewrites=False)

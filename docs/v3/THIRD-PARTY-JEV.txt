@@ -1,5 +1,8 @@
 beyin_v3_jev_client.py and client tests adapted from https://github.com/fornhere/hafiza-os commit 524fd070446ff2122af7293b82972eb2c10993fb
 
+Answer evidence verification in beyin_v3_jev.py is adapted from Forn Hafıza OS
+local jev_answer.py (2026-09-19 working version), under the same MIT license.
+
 MIT License
 
 Copyright (c) 2026 Forn
