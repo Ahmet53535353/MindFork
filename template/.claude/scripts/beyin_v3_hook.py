@@ -74,15 +74,19 @@ def drain_queue(vault, state):
             result['potential_missing_receipts'] = json.loads(gap_path.read_text(encoding='utf-8'))['potential_missing_receipts']
         from beyin_v3_skills import sync_skills
         skills = sync_skills(vault, state)
+        # Skill mirroring owns no queued event, so its outcome is reported for
+        # attention but never withholds acknowledgement of drained source events.
         if skills.get("conflicts"):
-            result = dict(result, status="conflict", skill_conflicts=skills["conflicts"])
+            result = dict(result, skill_conflicts=skills["conflicts"])
+        if skills.get("unmanaged"):
+            result = dict(result, skill_unmanaged=skills["unmanaged"])
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         return {"processed": 0, "failed": len(pending), "pending": len(pending)}
     atomic(state / "hook-health.json", {"at": time.time(), "sync": result})
     # A degraded scan is complete but excluded one or more invalid sources. The
-    # fresh healthy subset may be injected with an explicit warning. Conflicts
-    # still block acknowledgement because ownership is ambiguous.
+    # fresh healthy subset may be injected with an explicit warning. Source
+    # conflicts still block acknowledgement because ownership is ambiguous.
     if result.get("status") in ("ok", "succeeded", "synced", "degraded") and not result.get("conflicts"):
         (state / "hook-error.json").unlink(missing_ok=True)
         processed = 0
@@ -186,6 +190,8 @@ def main():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
                 if sync.get("status") not in ("ok", "succeeded", "synced"):
                     warning += "V3 sync needs attention; consult current sources and doctor.\n"
+                if sync.get('skill_conflicts'):
+                    warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
                     warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
             from beyin_v3_companion import context as companion_context, relevant

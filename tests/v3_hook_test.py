@@ -129,6 +129,45 @@ class HookInstallerTest(unittest.TestCase):
             ('notes', 'broken.md'),
         )
 
+    def test_non_skill_entries_beside_skills_do_not_block_the_queue(self):
+        self.seed()
+        skills = self.vault / '.claude/skills'
+        skills.mkdir(parents=True)
+        (skills / 'LICENSE-upstream.txt').write_text('upstream license', encoding='utf-8')
+        shared = self.vault / '.agents/skills/shared_utils'
+        shared.mkdir(parents=True)
+        (shared / 'helper.py').write_text('pass', encoding='utf-8')
+        self.hook.enqueue_event(self.vault, self.state, self.payload, 'codex')
+        result = self.hook.drain_queue(self.vault, self.state)
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['pending'], 0)
+        health = json.loads((self.state / 'hook-health.json').read_text(encoding='utf-8'))
+        self.assertEqual(health['sync']['status'], 'succeeded')
+        self.assertNotIn('skill_conflicts', health['sync'])
+        self.assertEqual(sorted(health['sync']['skill_unmanaged']), ['LICENSE-upstream.txt', 'shared_utils'])
+
+    def test_skill_conflict_is_reported_without_blocking_the_queue(self):
+        self.seed()
+        for side, body in (('.agents', 'codex edit'), ('.claude', 'claude edit')):
+            path = self.vault / side / 'skills/sample/SKILL.md'
+            path.parent.mkdir(parents=True)
+            path.write_text(body, encoding='utf-8')
+        self.hook.enqueue_event(self.vault, self.state, self.payload, 'codex')
+        result = self.hook.drain_queue(self.vault, self.state)
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['pending'], 0)
+        health = json.loads((self.state / 'hook-health.json').read_text(encoding='utf-8'))
+        self.assertEqual(health['sync']['skill_conflicts'], ['sample'])
+        self.assertEqual((self.vault / '.agents/skills/sample/SKILL.md').read_text(encoding='utf-8'), 'codex edit')
+        self.assertEqual((self.vault / '.claude/skills/sample/SKILL.md').read_text(encoding='utf-8'), 'claude edit')
+        doctor = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'doctor'], capture_output=True, text=True,
+                                encoding='utf-8', cwd=self.vault, env=self.env, timeout=20)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        report = json.loads(doctor.stdout)
+        self.assertEqual(report['skill_conflicts'], ['sample'])
+        self.assertEqual(report['status'], 'needs_attention')
+
     def test_queue_crash_after_sync_before_ack_retries_without_extra_revision(self):
         engine = self.seed()
         source = self.vault / 'notes/task.md'

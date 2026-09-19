@@ -79,6 +79,29 @@ class SkillsTest(unittest.TestCase):
         self.write(".claude","sample","managed")
         result=module().sync_skills(self.vault,self.state,mode="copy")
         self.assertEqual(result["conflicts"],["sample"]);self.assertEqual(result["unmanaged"],[])
+    def test_non_skill_entries_are_unmanaged_not_conflicts(self):
+        self.write(".agents","sample","one")
+        (self.vault/".claude/skills").mkdir(parents=True,exist_ok=True)
+        (self.vault/".claude/skills/LICENSE-upstream.txt").write_text("upstream license")
+        shared=self.vault/".agents/skills/shared_utils";shared.mkdir(parents=True)
+        (shared/"helper.py").write_text("pass")
+        result=module().sync_skills(self.vault,self.state,mode="copy")
+        self.assertEqual(result["conflicts"],[])
+        self.assertEqual(result["unmanaged"],["LICENSE-upstream.txt","shared_utils"])
+        self.assertEqual(result["synced"],["sample"])
+        self.assertEqual((self.vault/".claude/skills/sample/SKILL.md").read_text(),"one")
+        self.assertFalse((self.vault/".agents/skills/LICENSE-upstream.txt").exists())
+        self.assertFalse((self.vault/".claude/skills/shared_utils").exists())
+
+    def test_managed_skill_losing_skill_md_stays_a_conflict(self):
+        self.write(".agents","sample","one")
+        m=module();self.assertEqual(m.sync_skills(self.vault,self.state,mode="copy")["synced"],["sample"])
+        for side in (".agents",".claude"):
+            (self.vault/side/"skills/sample/SKILL.md").unlink()
+            (self.vault/side/"skills/sample/leftover.txt").write_text("leftover")
+        result=m.sync_skills(self.vault,self.state,mode="copy")
+        self.assertEqual(result["conflicts"],["sample"]);self.assertEqual(result["unmanaged"],[])
+
     def test_explicit_import_preserves_assets_and_rejects_overwrite(self):
         source=Path(self.tmp.name)/"my-skill";source.mkdir();(source/"SKILL.md").write_text("synthetic skill")
         (source/"asset.txt").write_text("asset")
