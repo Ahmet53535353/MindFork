@@ -1,6 +1,7 @@
 """Synthetic evidence checks with the real client and an offline transport."""
 import json
 import unittest
+from unittest.mock import patch
 import v3_jev_test as fixtures
 
 
@@ -13,31 +14,57 @@ class AnswerTest(unittest.TestCase):
     def claims(self):
         return [dict(text='Use short notes for Quartz.', citations=self.proposal()['evidence'])]
 
-    def verify(self, claims=None, scores=(2, 0), mutate=None):
+    def answer(self, relation):
+        choice, confidence = relation
+        rest = round((1 - confidence) / 2, 4)
+        return dict(type='choice', choice=choice, confidence=confidence,
+                    probabilities={k: confidence if k == choice else rest
+                                   for k in ('supports', 'contradicts', 'says_nothing')})
+
+    def verify(self, claims=None, relation=('supports', 0.95), mutate=None):
         import beyin_v3_jev as advisor
         def transport(url, body, key, timeout):
             self.calls.append(body)
             if mutate:
                 mutate()
-            return {'answers': {q: {'type': 'score', 'score': scores[int(q[1])]}
-                                for q in body['questions']}}
+            return {'answers': {q: self.answer(relation) for q in body['questions']}}
         return advisor.verify_answer(self.store, self.claims() if claims is None else claims,
                                      project='quartz', transport=transport)
+
+    def note(self, ident, text):
+        path = self.vault / (ident + '.md')
+        path.write_text(text, encoding='utf-8')
+        return self.store.ingest(dict(id=ident, text=text, source=path.name, project='quartz'))
+
+    def many(self, count):
+        return [dict(text='Use short notes for Quartz, variant %d.' % i,
+                     citations=self.proposal()['evidence']) for i in range(count)]
 
     def test_real_client_verdicts_and_no_canonical_writes(self):
         self.config('on')
         before = self.store.database.read_bytes()
-        for scores, expected in [((2, 0), 'supported'), ((0, 2), 'contradicted'),
-                                 ((0, 0), 'insufficient'), ((2, 2), 'uncertain')]:
+        for relation, expected in [(('supports', 0.95), 'supported'), (('contradicts', 0.95), 'contradicted'),
+                                   (('says_nothing', 0.95), 'insufficient'), (('supports', 0.8), 'supported')]:
             claims = self.claims()
-            claims[0]['text'] += str(scores)  # separate cache keys
-            result = self.verify(claims, scores)
+            claims[0]['text'] += str(relation)  # separate cache keys
+            result = self.verify(claims, relation)
             self.assertEqual(result['claims'][0]['verdict'], expected)
+            self.assertEqual(result['claims'][0]['relation'], relation[0])
+            self.assertEqual(result['claims'][0]['confidence'], relation[1])
             self.assertTrue(result['claims'][0]['mechanical_verified'])
             self.assertFalse(result['approved'])
             self.assertFalse(result['memory_written'])
             self.assertFalse(result['rewrites'])
         self.assertEqual(before, self.store.database.read_bytes())
+
+    def test_low_confidence_never_becomes_a_clear_verdict(self):
+        self.config('on')
+        for number, choice in enumerate(('supports', 'contradicts', 'says_nothing')):
+            claims = self.claims()
+            claims[0]['text'] += ' case %d' % number
+            item = self.verify(claims, (choice, 0.79))['claims'][0]
+            self.assertEqual((item['verdict'], item['relation'], item['diagnostics']),
+                             ('uncertain', choice, ['low_confidence']))
 
     def test_off_and_shadow_cannot_verify_semantics(self):
         self.assertEqual(self.verify()['claims'][0]['verdict'], 'uncertain')
@@ -82,7 +109,7 @@ class AnswerTest(unittest.TestCase):
         result = self.verify(mutate=lambda: (self.vault / 'a.md').write_text('changed', encoding='utf-8'))
         self.assertEqual(result['claims'][0]['verdict'], 'degraded')
         self.record('a')
-        result = self.verify(mutate=lambda: self.config('off'), scores=(0, 2),
+        result = self.verify(mutate=lambda: self.config('off'), relation=('contradicts', 0.95),
                              claims=[dict(text='Different claim.', citations=self.proposal()['evidence'])])
         self.assertEqual(result['claims'][0]['verdict'], 'degraded')
 
@@ -104,51 +131,67 @@ class AnswerTest(unittest.TestCase):
         claims = [dict(text='No citation.', citations=[])] + self.claims()
         result = self.verify(claims)
         self.assertEqual([r['verdict'] for r in result['claims']], ['insufficient', 'supported'])
-        self.assertEqual(self.calls[0]['state']['candidates'][0]['id'], 'claim-1')
+        self.assertEqual(list(self.calls[0]['state']['items']), ['k1'])
         self.verify(claims)
         self.assertEqual(len(self.calls), 1)
 
-    def many(self, count):
-        return [dict(text='Use short notes for Quartz, variant %d.' % i,
-                     citations=self.proposal()['evidence']) for i in range(count)]
-
-    def test_each_claim_travels_alone_so_twenty_fit_the_default_budget(self):
+    def test_twenty_claims_fit_in_batches_of_eight(self):
         self.config('on')
         result = self.verify(self.many(20))
         self.assertEqual([r['verdict'] for r in result['claims']], ['supported'] * 20)
-        self.assertEqual(len(self.calls), 20)
+        self.assertEqual(sorted(len(body['questions']) for body in self.calls), [4, 8, 8])
         for body in self.calls:
-            self.assertEqual(len(body['state']['candidates']), 1)
-            self.assertEqual(sorted(body['questions']), ['f0_c0', 'f1_c0'])
+            self.assertEqual(set(body['questions']), set(body['state']['items']))
 
-    def test_conflict_is_asked_on_its_own_compatibility_scale(self):
-        import beyin_v3_jev_client as client
+    def test_text_around_the_quote_travels_with_it(self):
         self.config('on')
-        self.verify()
-        support, conflict = (self.calls[0]['questions'][k] for k in ('f0_c0', 'f1_c0'))
-        self.assertEqual(support['criteria'], client.REVIEW_CRITERIA)
-        self.assertEqual(conflict['criteria'], client.CONFLICT_CRITERIA)
-        self.assertIn('both be true', conflict['instructions'])
-        self.assertIn('negation', conflict['instructions'])
+        row = self.note('plan', 'Old plan: the newsletter goes out on Monday. That plan was cancelled in March.')
+        claims = [dict(text='The newsletter goes out on Monday.', citations=[dict(
+            record_id='plan', source_sha256=row['source_sha256'], quote='the newsletter goes out on Monday')])] + self.claims()
+        self.verify(claims)
+        sent = self.calls[0]['state']['items']
+        self.assertEqual(sent['k0']['evidence']['quotes'], ['the newsletter goes out on Monday'])
+        self.assertIn('cancelled in March', sent['k0']['evidence']['source_context'][0])
+        # A quote that is the whole record has nothing around it to add.
+        self.assertNotIn('source_context', sent['k1']['evidence'])
 
-    def test_middle_band_scores_never_become_a_clear_verdict(self):
+    def test_long_sources_send_a_window_not_the_note(self):
         self.config('on')
-        for number, (scores, expected) in enumerate([((1.6, 1.2), 'uncertain'), ((1.2, 1.6), 'uncertain'),
-                                                     ((1.2, 0), 'uncertain'), ((0.4, 1.4), 'uncertain'),
-                                                     ((0.9, 0.9), 'insufficient'), ((1.5, 0.99), 'supported'),
-                                                     ((0.99, 1.5), 'contradicted')]):
-            claims = self.claims()
-            claims[0]['text'] += ' case %d' % number  # separate cache keys
-            self.assertEqual(self.verify(claims, scores)['claims'][0]['verdict'], expected, scores)
+        row = self.note('long', 'START ' + 'filler words ' * 200 + 'Quartz keeps notes short. ' + 'more filler ' * 200 + 'END')
+        self.verify([dict(text='Quartz notes are short.', citations=[dict(
+            record_id='long', source_sha256=row['source_sha256'], quote='Quartz keeps notes short.')])])
+        window = self.calls[0]['state']['items']['k0']['evidence']['source_context'][0]
+        self.assertLessEqual(len(window), 2 * 400 + len('Quartz keeps notes short.'))
+        self.assertNotIn('START', window)
+        self.assertNotIn('END', window)
 
-    def test_one_failed_request_degrades_only_its_own_claim(self):
+    def test_sensitive_text_around_a_quote_is_never_sent(self):
+        self.config('on')
+        row = self.note('keys', 'Quartz keeps notes short. password=123456789012')
+        claims = [dict(text='Quartz notes are short.', citations=[dict(
+            record_id='keys', source_sha256=row['source_sha256'], quote='Quartz keeps notes short.')])] + self.claims()
+        result = self.verify(claims)
+        self.assertEqual([(r['verdict'], r['diagnostics']) for r in result['claims']],
+                         [('degraded', ['context_sensitive']), ('supported', [])])
+        self.assertNotIn('password', json.dumps(self.calls))
+        self.assertEqual(list(self.calls[0]['state']['items']), ['k1'])
+
+    def test_a_batch_over_the_input_budget_is_halved_not_dropped(self):
+        (self.store.state_dir / 'jev.json').write_text(json.dumps({'mode': 'on', 'max_input_chars': 2600}), encoding='utf-8')
+        result = self.verify(self.many(8))
+        self.assertEqual([r['verdict'] for r in result['claims']], ['supported'] * 8)
+        self.assertGreater(len(self.calls), 1)
+        self.assertEqual(sum(len(body['questions']) for body in self.calls), 8)
+
+    def test_one_failed_request_degrades_only_its_own_batch(self):
         import beyin_v3_jev as advisor
         self.config('on')
         def transport(url, body, key, timeout):
-            if 'variant 1.' in body['state']['candidates'][0]['statement']:
+            if 'k1' in body['questions']:
                 raise TimeoutError('PRIVATE provider error')
-            return {'answers': {q: {'type': 'score', 'score': (2, 0)[int(q[1])]} for q in body['questions']}}
-        result = advisor.verify_answer(self.store, self.many(3), project='quartz', transport=transport)
+            return {'answers': {q: self.answer(('supports', 0.95)) for q in body['questions']}}
+        with patch.object(advisor, 'BATCH', 1):
+            result = advisor.verify_answer(self.store, self.many(3), project='quartz', transport=transport)
         self.assertEqual([r['verdict'] for r in result['claims']], ['supported', 'degraded', 'supported'])
         self.assertNotIn('PRIVATE', json.dumps(result))
 

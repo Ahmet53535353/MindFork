@@ -137,14 +137,24 @@ def review_candidate(store, proposal, *, project, transport=None):
     return dict(status='advisory_only', approved=False, memory_written=False, jev=result)
 
 
-def _verdict(yes, no):
-    # Repeated identical calls move a score by up to ~0.2, so a clear verdict needs the
-    # opposite relation to stay below the 1.0-1.5 middle band, not just below 1.5.
-    if yes >= 1.5 and no < 1.0:
-        return 'supported'
-    if no >= 1.5 and yes < 1.0:
-        return 'contradicted'
-    return 'uncertain' if yes >= 1.0 or no >= 1.0 else 'insufficient'
+BATCH = 8            # claims per request; hard items weaken late in a longer list
+CONTEXT_CHARS = 400  # source text kept on each side of a quote
+CONTEXT_LIMIT = 4000
+CONFIDENCE_GATE = 0.8
+VERDICTS = dict(supports='supported', contradicts='contradicted', says_nothing='insufficient')
+
+
+def _context(refs, citations):
+    """Text around each quote. A literal quote can sit in a plan its own note cancels."""
+    windows, used = [], 0
+    for record, cite in zip(refs, citations):
+        text, quote = record['text'], cite['quote']
+        at = text.index(quote)
+        window = text[max(0, at - CONTEXT_CHARS):at + len(quote) + CONTEXT_CHARS].strip()
+        if window != quote.strip() and window not in windows and used + len(window) <= CONTEXT_LIMIT:
+            windows.append(window)
+            used += len(window)
+    return windows
 
 
 def verify_answer(store, claims, *, project, transport=None):
@@ -168,7 +178,7 @@ def verify_answer(store, claims, *, project, transport=None):
             if (not isinstance(cite, dict) or set(cite) != {'record_id', 'source_sha256', 'quote'}
                     or any(not isinstance(v, str) or not v.strip() for v in cite.values())):
                 raise ValueError('invalid_citation')
-    results, cards, snapshots = [], {}, {}
+    results, items, snapshots = [], {}, {}
     by_id = _eligible(store, project)  # one full-index pass per phase, not per claim
     for index, claim in enumerate(claims):
         item = dict(index=index, verdict='insufficient', mechanical_verified=False, diagnostics=[])
@@ -182,24 +192,33 @@ def verify_answer(store, claims, *, project, transport=None):
             item['diagnostics'] = ['citation_not_current_or_exact']
             continue
         item['mechanical_verified'] = True
+        context = _context(refs, claim['citations'])
+        try:
+            _safe(store, context)
+        except ValueError:
+            # The surrounding text goes to the provider too, so it passes the same gate.
+            item.update(verdict='degraded', diagnostics=['context_sensitive'])
+            continue
         snapshots[index] = {r['id']: [r['source_sha256'], r['revision']] for r in refs}
-        cards[index] = dict(id='claim-' + str(index), title='Answer claim', scope='project:' + project,
-                            domains=[], statement=json.dumps(dict(stored_claim=claim['text'],
-                            evidence_quotes=[c['quote'] for c in claim['citations']]), ensure_ascii=False))
-    if cards:
+        items[index] = dict(id='k' + str(index), claim=claim['text'],
+                            quotes=[c['quote'] for c in claim['citations']], context=context)
+    if items:
         mode = client.inspect_config(store.state_dir)
 
-        def ask(index):
-            # One claim per request. Measured against live Jev, scores of candidates that share
-            # a request bleed into each other; a batch also fails as a whole on the input budget.
-            return client.evaluate(store.state_dir, 'Evaluate the claim only against its attached exact quotes.',
-                                   [cards[index]], scope='project:' + project,
-                                   source_versions=snapshots[index], purpose='answer_check', facets=[
-                                       'Do the quotes support the entire claim in its original scope, conditions and exceptions?',
-                                       'Do the quotes contradict the claim in its original scope, conditions and exceptions?'],
-                                   transport=transport)
+        def ask(indexes):
+            advice = client.evaluate(store.state_dir, '', [items[i] for i in indexes], scope='project:' + project,
+                                     source_versions={str(i): snapshots[i] for i in indexes},
+                                     purpose='answer_check', transport=transport)
+            if 'budget_exceeded' in advice.get('diagnostics', []) and len(indexes) > 1:
+                # The budget is checked before any network call; halve and retry.
+                half = len(indexes) // 2
+                return {**ask(indexes[:half]), **ask(indexes[half:])}
+            return {i: advice for i in indexes}
+        order = list(items)
         with ThreadPoolExecutor(max_workers=4) as pool:
-            advices = dict(zip(cards, pool.map(ask, cards)))
+            advices = {}
+            for part in pool.map(ask, [order[i:i + BATCH] for i in range(0, len(order), BATCH)]):
+                advices.update(part)
         try:
             by_id = _eligible(store, project)
         except (ValueError, OSError):
@@ -220,8 +239,11 @@ def verify_answer(store, claims, *, project, transport=None):
             elif advice.get('mode') != 'on':
                 item.update(verdict='uncertain', diagnostics=['semantic_' + advice.get('mode', 'unavailable')])
             else:
-                scores = advice.get('facet_scores', {})
-                ident = 'claim-' + str(index)
-                item['verdict'] = _verdict((scores.get(0) or {}).get(ident, 0), (scores.get(1) or {}).get(ident, 0))
+                relation = advice['relations']['k' + str(index)]
+                item.update(relation=relation['choice'], confidence=relation['confidence'])
+                if relation['confidence'] >= CONFIDENCE_GATE:
+                    item['verdict'] = VERDICTS[relation['choice']]
+                else:
+                    item.update(verdict='uncertain', diagnostics=['low_confidence'])
     return dict(status='advisory_only', claims=results, approved=False,
                 memory_written=False, rewrites=False)

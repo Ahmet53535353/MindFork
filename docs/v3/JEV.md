@@ -92,37 +92,44 @@ python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state jev-ans
 ```
 
 İddia başına en fazla 8 atıf, toplam 32.000 giriş karakteri kabul edilir.
-Her iddia sağlayıcıya ayrı bir istekle gider (aynı anda en fazla 4 istek). Aynı
-istekte birden çok iddia puanlandığında canlı Jev'de puanlar birbirine
-karışıyordu; ayrıca tek istek, varsayılan `max_input_chars` ile 12 kısa iddiada
-bütün sonucu `degraded` yapıyordu. Bir isteğin bütçeyi aşması veya hata vermesi
-yalnız o iddiayı `degraded` yapar. Süre, iddia sayısıyla birlikte artar.
+İddialar sağlayıcıya 8'li paketlerle gider (aynı anda en fazla 4 istek). Paket
+içinde her iddia kendi anahtarıyla durur (`items.k3`) ve sorusu o yolu
+backtick içinde adresler; liste sırası ve dolaylı atıfla adreslemede canlı
+Jev'de puanlar komşu iddialara sızıyordu. Bir paket `max_input_chars` sınırını
+aşarsa ağ çağrısı yapılmadan ikiye bölünür. Hata veren bir istek yalnız kendi
+paketindeki iddiaları `degraded` yapar.
+
+Alıntıyla birlikte kaynak kaydında alıntının iki yanındaki en fazla 400'er
+karakter de gönderilir (iddia başına toplam 4.000 karakter). Alıntı birebir
+doğru olup notun devamı tersini söyleyebilir ("eski plan ... bu plan iptal
+edildi"); yalnız alıntı gönderildiğinde böyle iddialar `supported` çıkıyordu.
+Bu pencere de aynı sır taramasından geçer; eşleşme varsa o iddia gönderilmez ve
+`context_sensitive` ile `degraded` olur.
+
 Boş atıf veya eşleşmeyen hash/alıntı `insufficient` döndürür ve o iddia
 sağlayıcıya gönderilmez. Alıntı hem indeks kaydında hem gerçek kaynakta aynen
 bulunmalıdır. Diğer Jev komutlarındaki proje, görünürlük, güven ve sır
-kontrolleri geçerlidir. Bu açık komut `internal` kayıt alıntılarını sağlayıcıya
-gönderebilir; `private` kayıtlar elenir. Normal bağlam ve hook akışı değişmez.
+kontrolleri geçerlidir. Bu açık komut `internal` kayıt alıntılarını ve çevresindeki
+metni sağlayıcıya gönderebilir; `private` kayıtlar elenir. Normal bağlam ve hook akışı değişmez.
 
 `mechanical_verified`, yalnız çağrı öncesindeki kaynak/alıntı eşleşmesini
 bildirir; anlamsal doğrulama değildir. `off` ve `shadow` modlarında anlamsal
-sonuç `uncertain` kalır. `on` modunda destek ve çelişki ayrı sorulur. Çelişki,
-"alıntı ile iddia aynı anda doğru olabilir mi" ölçeğiyle puanlanır (0 uyumlu,
-1 gerilim, 2 bağdaşmaz); "çelişki ilişkisi destekleniyor mu" biçimindeki soru
-canlı Jev'de çelişkiyi değil desteği puanlıyordu.
+sonuç `uncertain` kalır. `on` modunda her iddia için tek bir seçim sorusu
+sorulur: kanıt iddiayı destekliyor mu, iddiayla çelişiyor mu, yoksa iddia
+hakkında bir şey söylemiyor mu. Bu, sağlayıcının kendi atıf denetimi tarifidir.
 
-| Destek | Çelişki | Sonuç |
+| Seçim | Güven ≥ 0,8 | Güven < 0,8 |
 |---|---|---|
-| ≥ 1,5 | < 1,0 | `supported` |
-| < 1,0 | ≥ 1,5 | `contradicted` |
-| ikisinden biri ≥ 1,0 ve yukarıdakiler değil | | `uncertain` |
-| < 1,0 | < 1,0 | `insufficient` |
+| `supports` | `supported` | `uncertain` |
+| `contradicts` | `contradicted` | `uncertain` |
+| `says_nothing` | `insufficient` | `uncertain` |
 
-Aynı istek tekrarlandığında puan yaklaşık 0,2 oynayabildiği için net bir sonuç,
-karşı ilişkinin 1,0 altında kalmasını da ister; 1,0 ile 1,5 arası bant hiçbir
-zaman `supported` veya `contradicted` üretmez.
+Sonuçta `relation` ve `confidence` alanları da döner; `uncertain` sonuçlarda
+teşhis `low_confidence` olur. Güven, sağlayıcının seçenek olasılıklarından
+türettiği değerdir; doğruluk olasılığı değildir.
 
-Bu eşikler mevcut yerel akıştan aktarılmış danışman kurallarıdır; kalibre
-edilmiş doğruluk olasılığı veya genel başarı ölçümü değildir. Çağrıdan sonra
+0,8 eşiği sağlayıcı tarifindeki başlangıç değeridir; kalibre edilmiş doğruluk
+olasılığı veya genel başarı ölçümü değildir. Çağrıdan sonra
 kaynak, indeks revizyonu, erişim koşulları veya yapılandırma değişirse sonuç
 `degraded` olur. Servis hataları da doğrulanmış sonuç üretmez. Komut cevabı
 yeniden yazmaz, aday onaylamaz veya kanonik hafıza kaydı oluşturmaz;
@@ -130,12 +137,15 @@ yeniden yazmaz, aday onaylamaz veya kanonik hafıza kaydı oluşturmaz;
 kaynak senkronizasyonu yerel indeksi yenileyebilir; Jev puan önbelleği de
 state dizininde güncellenebilir.
 
-Testler sentetik kaynaklar ve offline transport ile çalışır. Soru metni ve
-eşikler 2026-09-20'de canlı `jev-1.13.0` üzerinde sentetik Türkçe/İngilizce
-iddialarla (olumsuzluk eki, farklı sayı/gün, kapsam genişletme, ilgisiz alıntı)
-seçildi. Uçtan uca 22 iddia üçer kez çalıştırıldı: 66 sonucun 60'ı beklenen
-etiketi verdi, kalan 6'sı kapsamı genişleten iki iddiada `uncertain` oldu;
-yanlış `supported` veya `contradicted` çıkmadı. Önceki tek istekli sürüm aynı
-türden 10 iddiada 5 çelişkinin hiçbirini yakalamamıştı. Bu küçük bir
-yapılandırma denemesidir; gerçek kasalarda genel doğruluk, maliyet avantajı
-veya kullanıcı kabulü iddia edilmez.
+Testler sentetik kaynaklar ve offline transport ile çalışır. Tasarım
+2026-09-20'de canlı `jev-1.13.0` üzerinde 26 sentetik Türkçe/İngilizce iddiayla
+(olumsuzluk eki, farklı sayı/gün, kapsam genişletme, ilgisiz alıntı, birebir
+alıntı ama notun devamı tersini söylüyor) seçildi. Uçtan uca, iki sıralama ve
+üçer tekrarla 156 sonuç: 138 beklenen net etiket, 18 `uncertain`, yanlış net
+etiket yok; 26 iddia 4 istek ve iddia başına yaklaşık 250 giriş token'ı. İki
+Score sorulu ve yalnız alıntı gönderen önceki hal iddia başına yaklaşık 750
+token harcıyor ve iptal edilmiş plandan alıntı içeren 4 iddianın 3'ünü
+kaçırıyordu. Paketleme bedelsiz değildir: zor iddialar paketin sonlarında
+güven kaybedip `uncertain` olabiliyor (iddia başına tek istekte 24/24, pakette
+18-21/24). Bu küçük bir yapılandırma denemesidir; gerçek kasalarda genel
+doğruluk, maliyet avantajı veya kullanıcı kabulü iddia edilmez.
