@@ -143,17 +143,52 @@ class ClientTests(unittest.TestCase):
         self.assertIn('exact evidence quotes',self.calls[2]['questions']['f0_c0']['instructions'])
         self.assertNotEqual(self.calls[1]['questions'],self.calls[2]['questions'])
 
-    def test_answer_check_is_positional_and_needs_both_facets(self):
+    def answer_items(self):
+        return [dict(id='k0',claim='Notes are short.',quotes=['prefers short notes'],context=['Quartz prefers short notes. Agreed in March.']),
+                dict(id='k1',claim='Notes are long.',quotes=['prefers short notes'],context=[])]
+    def choice(self,choice='supports',confidence=.93,**changes):
+        rest=round((1-confidence)/2,4)
+        return dict(dict(type='choice',choice=choice,confidence=confidence,
+                         probabilities={k:confidence if k==choice else rest for k in j.RELATIONS}),**changes)
+    def answer_client(self,answer=None,items=None,**kw):
+        def transport(url,body,key,timeout):
+            self.calls.append(body)
+            return dict(answers={q:answer or self.choice() for q in body['questions']})
+        return j.evaluate(self.vault,'',self.answer_items() if items is None else items,purpose='answer_check',transport=transport,**kw)
+    def test_answer_check_keys_items_and_asks_one_backticked_choice_each(self):
         self.config()
-        result=self.run_client(purpose='answer_check',facets=['Support?','Conflict?'])
+        result=self.answer_client()
         self.assertFalse(result['degraded'])
-        questions=self.calls[0]['questions']
-        self.assertEqual(questions['f0_c0']['criteria'],j.REVIEW_CRITERIA)
-        self.assertEqual(questions['f1_c0']['criteria'],j.CONFLICT_CRITERIA)
-        for facets in (['Only one'],['One','Two','Three']):
-            result=self.run_client(purpose='answer_check',facets=facets)
-            self.assertTrue(result['degraded']);self.assertIn('payload_invalid',result['diagnostics'])
+        self.assertEqual(result['relations']['k1'],dict(choice='supports',confidence=.93,probabilities=self.choice()['probabilities']))
+        body=self.calls[0]
+        self.assertEqual(body['state'],dict(items=dict(
+            k0=dict(claim='Notes are short.',evidence=dict(quotes=['prefers short notes'],source_context=['Quartz prefers short notes. Agreed in March.'])),
+            k1=dict(claim='Notes are long.',evidence=dict(quotes=['prefers short notes'])))))
+        self.assertEqual(set(body['questions']),{'k0','k1'})
+        self.assertEqual(body['questions']['k1']['criteria'],j.RELATIONS)
+        self.assertIn('`items.k1.evidence`',body['questions']['k1']['instructions'])
+        self.assertIn('`items.k1.claim`',body['questions']['k1']['instructions'])
+        self.assertTrue(self.answer_client()['cache_hit'])
+        self.assertEqual(self.answer_client()['relations'],result['relations'])
         self.assertEqual(len(self.calls),1)
+    def test_answer_check_rejects_bad_payloads_before_network(self):
+        self.config()
+        item=self.answer_items()[0]
+        for items in ([dict(item,id='K0')],[dict(item,id='a.b')],[item,item],[dict(item,quotes=[])],[dict(item,claim=' ')],
+                      [dict(item,context=[''])],[dict(item,extra='x')],[{k:v for k,v in item.items() if k!='context'}]):
+            result=self.answer_client(items=items)
+            self.assertTrue(result['degraded']);self.assertIn('payload_invalid',result['diagnostics'])
+        self.assertIn('payload_invalid',self.answer_client(facets=['Caller question'])['diagnostics'])
+        self.assertFalse(self.calls)
+    def test_answer_check_bad_choices_do_not_cache(self):
+        self.config()
+        good=self.choice()['probabilities']
+        for answer in (self.choice(type='score'),dict(self.choice(),choice='maybe'),dict(self.choice(),choice='contradicts'),
+                       self.choice(confidence=1.2),self.choice(confidence=True),self.choice(probabilities=dict(good,supports=.5)),
+                       self.choice(probabilities={k:v for k,v in good.items() if k!='says_nothing'}),self.choice(probabilities=[.9,.05,.05])):
+            result=self.answer_client(answer=answer)
+            self.assertTrue(result['degraded']);self.assertEqual(result['relations'],{})
+        self.assertFalse(list((self.vault/'.cache/jev').glob('*.json')))
 
     def test_unknown_purpose_rejected_before_network(self):
         self.config()
