@@ -11,6 +11,10 @@ import sqlite3
 import unicodedata
 
 
+# Every supported client. "manual" is accepted for receipts only.
+HARNESSES = ("codex", "claude", "antigravity", "hermes")
+
+
 class RevisionConflict(ValueError):
     pass
 
@@ -171,7 +175,7 @@ class MemoryStore:
             raise ValueError("event_id required")
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("summary required")
-        if harness not in ("codex", "claude", "antigravity", "manual"):
+        if harness not in HARNESSES + ("manual",):
             raise ValueError("unsupported harness")
         if not isinstance(refs, list) or not refs:
             raise ValueError("source refs required")
@@ -397,7 +401,7 @@ class MemoryStore:
 
 def shared_context(store, harness, query, **kwargs):
     """Both harnesses call the same source-backed retrieval function."""
-    if harness not in ("codex", "claude", "antigravity"):
+    if harness not in HARNESSES:
         raise ValueError("unsupported harness")
     return store.retrieve(query, **kwargs)
 

@@ -15,7 +15,7 @@ _MODULE_DIR = str(Path(__file__).resolve().parent)
 if _MODULE_DIR not in sys.path:
     sys.path.insert(0, _MODULE_DIR)
 
-from beyin_v3 import MemoryStore, ReceiptConflict, RevisionConflict, _json
+from beyin_v3 import HARNESSES, MemoryStore, ReceiptConflict, RevisionConflict, _json
 from beyin_v3_projections import project_receipts
 from beyin_v3_preferences import read as read_preferences
 from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
@@ -462,7 +462,7 @@ class SyncEngine:
     def receipt(self, event_id, summary, refs, harness, session=None):
         if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
             raise ValueError('event id and summary required')
-        if harness not in ('codex', 'claude', 'antigravity', 'manual') or not isinstance(refs, list) or not refs:
+        if harness not in HARNESSES + ('manual',) or not isinstance(refs, list) or not refs:
             raise ValueError('harness and refs required')
         summary, redacted = self._protect(summary)
         refs = [self.store._source(ref) for ref in refs]

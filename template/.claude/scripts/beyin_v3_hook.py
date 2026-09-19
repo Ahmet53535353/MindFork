@@ -102,7 +102,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
-    parser.add_argument("--harness", choices=("codex", "claude", "antigravity"), required=True)
+    parser.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes"), required=True)
     parser.add_argument("--event")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--drain-queue", action="store_true")
@@ -124,6 +124,11 @@ def main():
     try:
         payload = json.loads(sys.stdin.read(1_000_000) or "{}")
         event = payload.get("hook_event_name", args.event)
+        if args.harness == "hermes":
+            # Hermes plugin hooks: pre_llm_call (first turn -> SessionStart, later ->
+            # UserPromptSubmit), on_session_finalize -> SessionEnd. The plugin sends
+            # the Claude-shaped payload, so only the session field needs mapping.
+            payload["session_id"] = payload.get("session_id") or payload.get("conversationId", "unknown")
         if args.harness == "antigravity":
             if event == "PreInvocation":
                 if payload.get("invocationNum") != 0:

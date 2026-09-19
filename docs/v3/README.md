@@ -1,6 +1,6 @@
 # İkinci Beyin V3
 
-V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity ise aynı motora bağlanan istemcilerdir. Python 3.11+ dışında ek Python paketi gerekmez. Mem0, API anahtarı, daemon veya ayrı sunucu kurulmaz.
+V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity ve [Hermes Agent](HERMES.md) ise aynı motora bağlanan istemcilerdir. Python 3.11+ dışında ek Python paketi gerekmez. Mem0, API anahtarı, daemon veya ayrı sunucu kurulmaz.
 
 [Yeni kullanıcı başlangıcı](../../README.md) · [Ajanla kurulum](../../SETUP-V3.md) · [Güncelleme/geri alma](UPDATE.md) · [Kaynak şeması](MARKDOWN.md) · [Runtime](RUNTIME.md)
 
