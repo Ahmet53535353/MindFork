@@ -108,6 +108,61 @@ class AnswerTest(unittest.TestCase):
         self.verify(claims)
         self.assertEqual(len(self.calls), 1)
 
+    def many(self, count):
+        return [dict(text='Use short notes for Quartz, variant %d.' % i,
+                     citations=self.proposal()['evidence']) for i in range(count)]
+
+    def test_each_claim_travels_alone_so_twenty_fit_the_default_budget(self):
+        self.config('on')
+        result = self.verify(self.many(20))
+        self.assertEqual([r['verdict'] for r in result['claims']], ['supported'] * 20)
+        self.assertEqual(len(self.calls), 20)
+        for body in self.calls:
+            self.assertEqual(len(body['state']['candidates']), 1)
+            self.assertEqual(sorted(body['questions']), ['f0_c0', 'f1_c0'])
+
+    def test_conflict_is_asked_on_its_own_compatibility_scale(self):
+        import beyin_v3_jev_client as client
+        self.config('on')
+        self.verify()
+        support, conflict = (self.calls[0]['questions'][k] for k in ('f0_c0', 'f1_c0'))
+        self.assertEqual(support['criteria'], client.REVIEW_CRITERIA)
+        self.assertEqual(conflict['criteria'], client.CONFLICT_CRITERIA)
+        self.assertIn('both be true', conflict['instructions'])
+        self.assertIn('negation', conflict['instructions'])
+
+    def test_middle_band_scores_never_become_a_clear_verdict(self):
+        self.config('on')
+        for number, (scores, expected) in enumerate([((1.6, 1.2), 'uncertain'), ((1.2, 1.6), 'uncertain'),
+                                                     ((1.2, 0), 'uncertain'), ((0.4, 1.4), 'uncertain'),
+                                                     ((0.9, 0.9), 'insufficient'), ((1.5, 0.99), 'supported'),
+                                                     ((0.99, 1.5), 'contradicted')]):
+            claims = self.claims()
+            claims[0]['text'] += ' case %d' % number  # separate cache keys
+            self.assertEqual(self.verify(claims, scores)['claims'][0]['verdict'], expected, scores)
+
+    def test_one_failed_request_degrades_only_its_own_claim(self):
+        import beyin_v3_jev as advisor
+        self.config('on')
+        def transport(url, body, key, timeout):
+            if 'variant 1.' in body['state']['candidates'][0]['statement']:
+                raise TimeoutError('PRIVATE provider error')
+            return {'answers': {q: {'type': 'score', 'score': (2, 0)[int(q[1])]} for q in body['questions']}}
+        result = advisor.verify_answer(self.store, self.many(3), project='quartz', transport=transport)
+        self.assertEqual([r['verdict'] for r in result['claims']], ['supported', 'degraded', 'supported'])
+        self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_eligibility_is_read_once_per_phase_not_per_claim(self):
+        self.config('on')
+        seen = []
+        original = self.store._retrieve
+        def counting(*args, **kwargs):
+            seen.append(1)
+            return original(*args, **kwargs)
+        self.store._retrieve = counting
+        self.verify(self.many(8))
+        self.assertEqual(len(seen), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

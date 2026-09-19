@@ -1,4 +1,5 @@
 """Explicit optional advisor; local retrieval and source authority remain in V3."""
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 
@@ -72,11 +73,15 @@ def advise_context(store, query, *, project, audience='internal', statuses=None,
     return result
 
 
-def _verified_evidence(store, evidence, project):
+def _eligible(store, project):
     # Existing runtime gates enforce scope, visibility, trust, freshness and supersession.
     eligible = store._retrieve('', project=project, audience='internal',
                                limit=100000, budget_chars=10000000, snapshot=True)['records']
-    by_id = {r['id']: r for r in eligible if not r.get('text_truncated')}
+    return {r['id']: r for r in eligible if not r.get('text_truncated')}
+
+
+def _verified_evidence(store, evidence, project, by_id=None):
+    by_id = _eligible(store, project) if by_id is None else by_id
     refs = []
     for item in evidence:
         if not isinstance(item, dict) or set(item) != {'record_id', 'source_sha256', 'quote'}:
@@ -132,6 +137,16 @@ def review_candidate(store, proposal, *, project, transport=None):
     return dict(status='advisory_only', approved=False, memory_written=False, jev=result)
 
 
+def _verdict(yes, no):
+    # Repeated identical calls move a score by up to ~0.2, so a clear verdict needs the
+    # opposite relation to stay below the 1.0-1.5 middle band, not just below 1.5.
+    if yes >= 1.5 and no < 1.0:
+        return 'supported'
+    if no >= 1.5 and yes < 1.0:
+        return 'contradicted'
+    return 'uncertain' if yes >= 1.0 or no >= 1.0 else 'insufficient'
+
+
 def verify_answer(store, claims, *, project, transport=None):
     """Advisory claim checks; exact local evidence gates precede remote scoring."""
     if not isinstance(project, str) or not project.strip():
@@ -153,7 +168,8 @@ def verify_answer(store, claims, *, project, transport=None):
             if (not isinstance(cite, dict) or set(cite) != {'record_id', 'source_sha256', 'quote'}
                     or any(not isinstance(v, str) or not v.strip() for v in cite.values())):
                 raise ValueError('invalid_citation')
-    results, cards, snapshots = [], [], {}
+    results, cards, snapshots = [], {}, {}
+    by_id = _eligible(store, project)  # one full-index pass per phase, not per claim
     for index, claim in enumerate(claims):
         item = dict(index=index, verdict='insufficient', mechanical_verified=False, diagnostics=[])
         results.append(item)
@@ -161,27 +177,37 @@ def verify_answer(store, claims, *, project, transport=None):
             item['diagnostics'] = ['citation_missing']
             continue
         try:
-            refs = _verified_evidence(store, claim['citations'], project)
+            refs = _verified_evidence(store, claim['citations'], project, by_id)
         except (ValueError, OSError):
             item['diagnostics'] = ['citation_not_current_or_exact']
             continue
         item['mechanical_verified'] = True
         snapshots[index] = {r['id']: [r['source_sha256'], r['revision']] for r in refs}
-        cards.append(dict(id='claim-' + str(index), title='Answer claim', scope='project:' + project,
-                          domains=[], statement=json.dumps(dict(stored_claim=claim['text'],
-                          evidence_quotes=[c['quote'] for c in claim['citations']]), ensure_ascii=False)))
+        cards[index] = dict(id='claim-' + str(index), title='Answer claim', scope='project:' + project,
+                            domains=[], statement=json.dumps(dict(stored_claim=claim['text'],
+                            evidence_quotes=[c['quote'] for c in claim['citations']]), ensure_ascii=False))
     if cards:
         mode = client.inspect_config(store.state_dir)
-        advice = client.evaluate(store.state_dir, 'Evaluate each claim only against its attached exact quotes.',
-                                 cards, scope='project:' + project, source_versions=snapshots,
-                                 purpose='evidence_review', facets=[
-                                     'Do the quotes support the entire claim in its original scope, conditions and exceptions?',
-                                     'Do the quotes contradict the claim in its original scope, conditions and exceptions?'],
-                                 transport=transport)
+
+        def ask(index):
+            # One claim per request. Measured against live Jev, scores of candidates that share
+            # a request bleed into each other; a batch also fails as a whole on the input budget.
+            return client.evaluate(store.state_dir, 'Evaluate the claim only against its attached exact quotes.',
+                                   [cards[index]], scope='project:' + project,
+                                   source_versions=snapshots[index], purpose='answer_check', facets=[
+                                       'Do the quotes support the entire claim in its original scope, conditions and exceptions?',
+                                       'Do the quotes contradict the claim in its original scope, conditions and exceptions?'],
+                                   transport=transport)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            advices = dict(zip(cards, pool.map(ask, cards)))
+        try:
+            by_id = _eligible(store, project)
+        except (ValueError, OSError):
+            by_id = {}
         for index, versions in snapshots.items():
-            item = results[index]
+            item, advice = results[index], advices[index]
             try:
-                refs = _verified_evidence(store, claims[index]['citations'], project)
+                refs = _verified_evidence(store, claims[index]['citations'], project, by_id)
                 if versions != {r['id']: [r['source_sha256'], r['revision']] for r in refs}:
                     raise ValueError('evidence_changed')
                 if client.inspect_config(store.state_dir) != mode:
@@ -196,10 +222,6 @@ def verify_answer(store, claims, *, project, transport=None):
             else:
                 scores = advice.get('facet_scores', {})
                 ident = 'claim-' + str(index)
-                yes = (scores.get(0) or scores.get('0') or {}).get(ident, 0)
-                no = (scores.get(1) or scores.get('1') or {}).get(ident, 0)
-                item['verdict'] = ('uncertain' if yes >= 1.5 and no >= 1.5 else
-                                   'supported' if yes >= 1.5 else
-                                   'contradicted' if no >= 1.5 else 'insufficient')
+                item['verdict'] = _verdict((scores.get(0) or {}).get(ident, 0), (scores.get(1) or {}).get(ident, 0))
     return dict(status='advisory_only', claims=results, approved=False,
                 memory_written=False, rewrites=False)
