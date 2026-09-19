@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import functools
 import hashlib
 import json
 import math
@@ -30,13 +31,85 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+# Turkish is agglutinative, so exact token intersection loses "fark" against "farki" and
+# "not" against "notlar". Every token is replaced by ONE canonical stem, with the same
+# function on the query and the document side. Replacement, not expansion: the score stays
+# "how many query words matched", which STRICT_MIN_SHARED and the idf weight depend on.
+# Input reaches the stemmer already ASCII folded, so the table is written folded too.
+_VOWELS = frozenset("aeiou")
+_VOICELESS = frozenset("cfhkpst")
+# (suffix, minimum stem length, what the character before the suffix must be). Longest
+# first, peeled to a fixpoint: a fixed pass count breaks query/document symmetry, because
+# "kutuphanesi" needs one more pass than "kutuphane" to reach the same stem.
+# The n-buffered forms carry a stem floor of 5 because their n only ever follows a
+# possessive vowel, so "cobanin" reads as coban+in while "arabanin" reads as araba+n+in.
+_SUFFIXES = (
+    ("imiz", 4, "consonant"), ("umuz", 4, "consonant"), ("iniz", 4, "consonant"), ("unuz", 4, "consonant"),
+    ("nden", 5, "vowel"), ("ndan", 5, "vowel"),
+    ("ten", 4, "voiceless"), ("tan", 4, "voiceless"), ("den", 4, "voiced"), ("dan", 4, "voiced"),
+    ("nin", 5, "vowel"), ("nun", 5, "vowel"), ("nde", 5, "vowel"), ("nda", 5, "vowel"),
+    ("miz", 4, "vowel"), ("muz", 4, "vowel"), ("niz", 4, "vowel"), ("nuz", 4, "vowel"),
+    ("yla", 4, "vowel"), ("yle", 4, "vowel"),
+    ("ler", 3, "any"), ("lar", 3, "any"),
+    ("te", 4, "voiceless"), ("ta", 4, "voiceless"), ("de", 4, "voiced"), ("da", 4, "voiced"),
+    ("si", 4, "vowel"), ("su", 4, "vowel"), ("ya", 4, "vowel"), ("ye", 4, "vowel"),
+    ("yi", 4, "vowel"), ("yu", 4, "vowel"),
+    ("in", 4, "consonant"), ("un", 4, "consonant"), ("im", 4, "consonant"), ("um", 4, "consonant"),
+    ("le", 4, "consonant"), ("la", 4, "consonant"),
+    ("i", 4, "consonant"), ("u", 4, "consonant"), ("e", 4, "consonant"), ("a", 4, "consonant"),
+)
+
+
+def _attaches(previous, gate):
+    if gate == "vowel":
+        return previous in _VOWELS
+    if gate == "consonant":
+        return previous not in _VOWELS
+    if gate == "voiceless":
+        return previous in _VOICELESS
+    if gate == "voiced":
+        return previous not in _VOICELESS
+    return True
+
+
+def _harmonizes(stem, suffix):
+    """Weak vowel harmony: folding hides o/u/i fronting, so only a and e can decide."""
+    tone = next((c for c in suffix if c in _VOWELS), "")
+    if tone not in ("a", "e"):
+        return True
+    for character in reversed(stem):
+        if character in _VOWELS:
+            return character not in ("a", "e") or character == tone
+    return True
+
+
+@functools.lru_cache(maxsize=16384)
+def _stem(word):
+    # Words under 5 characters are already stems; peeling them merges unrelated roots.
+    while len(word) >= 5:
+        for suffix, floor, gate in _SUFFIXES:
+            if not word.endswith(suffix):
+                continue
+            stem = word[:-len(suffix)]
+            if len(stem) < floor or not _attaches(stem[-1], gate) or not _harmonizes(stem, suffix):
+                continue
+            word = stem
+            break
+        else:
+            break
+    return word
+
+
 def _tokens(text):
     text = unicodedata.normalize("NFKD", str(text).casefold())
     text = "".join(c for c in text if not unicodedata.combining(c)).replace("ı", "i")
-    return set(re.findall(r"[a-z0-9]+", text))
+    return {_stem(word) for word in re.findall(r"[a-z0-9]+", text)}
 
 
-STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim neden nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel proje projesi projesinde karar karari durumu soyle getir bul yok say ignore disregard not no")
+# Stopwords are matched against stems, so Turkish content words had to leave the list:
+# "notlar", "kararlari", "projede", "nedenleri" and "durumu" all stem onto entries that
+# used to be here, which emptied the query instead of widening it.
+STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel soyle getir bul yok say ignore disregard no")
 
 
 class MemoryStore:
