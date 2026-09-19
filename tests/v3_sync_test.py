@@ -256,6 +256,41 @@ class SourceSyncTest(unittest.TestCase):
                     'title': 'Karar: V3', 'note': "it'quote"}
         self.assertEqual(self.module.parse('---\n' + header + '\n---\n' + body), (expected, body))
 
+    def test_inline_comments_and_template_placeholders_are_indexed(self):
+        cases = [
+            ('kaynak: olcum   # not', {'kaynak': 'olcum'}),
+            ('kaynak: olcum\t# not', {'kaynak': 'olcum'}),
+            ('kaynak: Karar: V3 # not', {'kaynak': 'Karar: V3'}),
+            ('created: {{TODAY}}', {'created': '{{TODAY}}'}),
+            ('created: {{date:YYYY-MM-DD}}', {'created': '{{date:YYYY-MM-DD}}'}),
+            ('created: {{}}', {'created': '{{}}'}),
+            ('kaynak: "olcum" # not', {'kaynak': 'olcum'}),
+            ("kaynak: 'olcum' # not", {'kaynak': 'olcum'}),
+            ('kaynak: "a # b" # not', {'kaynak': 'a # b'}),
+            ('kaynak: c#sharp', {'kaynak': 'c#sharp'}),
+            ('kaynak: "a # b"', {'kaynak': 'a # b'}),
+            ("note: 'it'quote'", {'note': "it'quote"}),
+            ('aliases: ["", \'\', " # literal"]', {'aliases': ['', '', ' # literal']}),
+            # A trailing comment never changes the type the bare value would have had.
+            ('seviye: 2 # yuksek', {'seviye': 2}),
+            ('acik: true # evet', {'acik': True}),
+            ('bos: null # yok', {'bos': None}),
+            ('adres: https://example.com/#bolum', {'adres': 'https://example.com/#bolum'}),
+        ]
+        source = self.vault / 'comments.md'
+        body = 'Nebula calibration comment fixture.\n'
+        for header, expected in cases:
+            with self.subTest(header=header):
+                metadata = dict(expected, id='comment-note', project='nebula')
+                source.write_text('---\nid: comment-note\nproject: nebula\n' + header + '\n---\n' + body, encoding='utf-8')
+                self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'succeeded', report)
+                self.assertEqual(report['warnings'], [])
+                record = self.records()[0]
+                for key, value in expected.items():
+                    self.assertEqual(record[key], value)
+
     def test_unicode_property_keys_may_start_with_localized_letters(self):
         header = ('özet: karar\nşirket: Avenox\nüberblick: bereit\n'
                   'étiquette: memoire\nключ: значение\n_internal: true')
@@ -305,6 +340,10 @@ class SourceSyncTest(unittest.TestCase):
             'field: ["a" trailing]', "field: ['unclosed]", 'field: ["unclosed]',
             r'field: ["bad\q"]', "field: ['bad'quote']",
             'field: [a: b]', 'field: [a:]', 'field: [? a]', 'field: [- a]',
+            'field: # comment', 'field: {{a}} {{b}}', 'field: {{a}}}',
+            'field: {{nested: {value}}}', 'field: "unclosed # comment',
+            "field: 'unclosed # comment", 'field: "a" trailing # comment',
+            'field: [a, b] # comment',
         ]
         source = self.vault / 'unsupported.md'
         for header in headers:
