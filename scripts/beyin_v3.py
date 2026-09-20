@@ -46,8 +46,8 @@ def load_sync():
 # Mirrors beyin_v3_jev_client.FEATURES; duplicated so argument parsing never imports
 # the optional client. tests/v3_jev_toggle_test.py pins the two lists together.
 JEV_FEATURES = ("context", "review", "answer", "auto_context")
-JEV_NOTICE = ("auto_context is on: every turn sends the prompt and excerpts of the matched "
-              "internal/public notes to the provider. Private notes are never sent.")
+JEV_NOTICE = ("auto_context is on: every turn sends the prompt plus the title and first 600 characters of up to 8 "
+              "candidate internal/public notes to the provider. Private notes are never sent.")
 JEV_WARNING = "TYPESAFE_API_KEY is not set; calls degrade to local results."
 
 

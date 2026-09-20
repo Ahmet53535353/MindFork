@@ -11,6 +11,7 @@ import time
 import uuid
 
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
+HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
 
 
 def atomic(path, data):
@@ -102,6 +103,7 @@ def drain_queue(vault, state):
 
 
 def main():
+    started = time.monotonic()
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
@@ -203,6 +205,16 @@ def main():
                 # injected, and an empty match injects nothing at all instead of a receipt
                 # header plus the newest unrelated notes.
                 context = store.context_for(args.harness, query, budget_chars=settings['context_chars'], strict=True) if query else {"records": []}
+                # Optional remote advisor. Without a jev.json its module is never even imported.
+                if query and (state / 'jev.json').exists():
+                    remaining = HOOK_BUDGET - (time.monotonic() - started)
+                    if remaining >= 0.8:
+                        try:
+                            from beyin_v3_jev import auto_context
+                            context = auto_context(store, args.harness, query, context, budget_chars=settings['context_chars'],
+                                                   timeout_cap=min(2.0, remaining))
+                        except Exception:
+                            pass  # an advisor failure must never cost the local context
                 if not context.get("records"):
                     print("{}")
                     return
