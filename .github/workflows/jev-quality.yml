@@ -1,0 +1,44 @@
+name: Jev decision quality evidence
+
+on:
+  push:
+    branches: ['codex/jev-decision-quality']
+  pull_request:
+    paths:
+      - 'template/.claude/scripts/beyin_v3*.py'
+      - 'tests/v3_*.py'
+      - 'tests/fixtures/v3/**'
+      - 'scripts/evaluate_v3*.py'
+      - '.github/workflows/jev-quality.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONIOENCODING: utf-8
+      BEYIN_V3_NO_SPAWN: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Capture exact source for reproducible offline verification
+        run: |
+          mkdir -p evidence-artifacts
+          git rev-parse HEAD > evidence-artifacts/source-commit.txt
+          git archive --format=zip HEAD -o evidence-artifacts/source.zip
+      - name: Offline contracts
+        run: python -m unittest discover -s tests -p 'v3_*test.py'
+      - name: Frozen retrieval gates
+        run: python scripts/evaluate_v3.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jev-quality-source-${{ github.sha }}
+          path: evidence-artifacts/
+          retention-days: 14
