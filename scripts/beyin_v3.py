@@ -102,6 +102,7 @@ def parser():
     settings.add_argument("--context-mode", choices=("turn", "session", "off"))
     settings.add_argument("--context-chars", type=int)
     settings.add_argument("--secret-filter", choices=("on", "off"))
+    settings.add_argument("--update-notifications", choices=("on", "off"))
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
     skill.add_argument("--source", type=Path, required=True)
     skill.add_argument("--name")
@@ -178,6 +179,10 @@ def main(argv=None):
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
                       'model_calls': False, 'timer_installed': False}
+            import beyin_v3_releases as releases
+            result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
+            if args.update_notifications is not None:
+                result['status'] = 'saved'
         elif args.command == "jev":
             if args.mode == "status":
                 if args.enable or args.disable:
@@ -202,6 +207,8 @@ def main(argv=None):
             load_sync()
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)
+            import beyin_v3_releases as releases
+            result['updates'] = releases.status(vault, state)
             from beyin_v3_secrets import health as secret_filter_health
             result['secret_filter'] = secret_filter_health(state)
             result['secrets_redacted'] = result['secret_filter']['total']

@@ -136,28 +136,30 @@ def validate_package(package):
 
 
 def _download(directory):
-    request = urllib.request.Request(OFFICIAL, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'avenoxbeyin-updater'})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        release = json.loads(response.read(2 * 1024 * 1024))
-    if release.get('draft') or release.get('prerelease'):
-        raise ValueError('no stable release available')
-    tag = release.get('tag_name', '').removeprefix('v')
-    version(tag)
-    expected = 'beyin-v3-' + tag + '.zip'
-    asset = next((a for a in release.get('assets', []) if a.get('name') == expected), None)
-    if not asset:
-        raise ValueError('stable release has no V3 package')
-    url = asset.get('browser_download_url', '')
-    prefix = 'https://github.com/avenoxai/avenoxbeyin/releases/download/'
-    if not url.startswith(prefix):
-        raise ValueError('release asset is not official')
-    path = Path(directory) / expected
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read(MAX_PACKAGE + 1)
-    if len(data) > MAX_PACKAGE:
-        raise ValueError('download exceeds package limit')
+    import beyin_v3_releases as releases
+    metadata, _ = releases.fetch_metadata()
+    if metadata is None: raise ValueError('release metadata missing')
+    data, _ = releases.request_bytes(metadata['asset_url'], MAX_PACKAGE)
+    if data is None or len(data) != metadata['asset_size']:
+        raise ValueError('release asset size mismatch')
+    actual = digest(data)
+    expected = metadata['asset_sha256']
+    if expected and actual != expected:
+        raise ValueError('release asset checksum mismatch')
+    if metadata['checksum_url']:
+        checksum, _ = releases.request_bytes(metadata['checksum_url'], 1024)
+        try:
+            line = checksum.decode('ascii').strip()
+        except (AttributeError, UnicodeError):
+            raise ValueError('invalid release checksum file') from None
+        match = re.fullmatch(r'([a-f0-9]{64})  ' + re.escape(metadata['asset_name']), line)
+        if not match or match[1] != actual:
+            raise ValueError('release checksum file mismatch')
+    elif not expected:
+        raise ValueError('release package has no external checksum')
+    path = Path(directory) / metadata['asset_name']
     path.write_bytes(data)
-    return path, tag
+    return path, metadata['version']
 
 
 @contextmanager

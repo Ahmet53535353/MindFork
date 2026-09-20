@@ -123,3 +123,5 @@ Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 50
 Aralık bir zamanlayıcı değildir: süre dolduktan sonraki istemci olayında kontrol yapılır. Uygulamalar kapalıyken çalışmaz. Seyrek kontrol veya manuel modda bilgi gerektiğinde `context` komutuyla kaynağı tazele; eski oturum bağlamını güncel varsayma. Önceden başlamış iş bitmiş olabilir; kapatma sonraki işleri durdurur.
 
 Bu V3 motoru Luna, Sonnet veya başka bir modele otomatik çağrı yapmaz. Yerel kontrol token tüketmez; ajanın yazdığı sonuçlar ve okuduğu/eklenen bağlam istemcinin kullanımına girer. Karakter sınırı token sayısı veya ücret garantisi değildir. Kullanıcının ayrıca kurduğu 15 dakikalık ajan otomasyonu bu ayarla yönetilmez; onu ayrı incele. İstek olmadan ücretli zamanlayıcı, model runner veya yeni bağımlılık ekleme.
+
+V3.1: `doctor` içindeki `updates` en son sürüm kontrolünü gösterir; ağ hatası güncel olunduğunu kanıtlamaz. Yalnız sürüm sorusunda `beyin.py update --check --metadata-only` kullan. Güncelleme talebini beyin-guncelle skill'ine yönlendir.

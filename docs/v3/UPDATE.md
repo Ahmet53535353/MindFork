@@ -4,7 +4,7 @@ Vault içindeki `beyin.py` tek giriş noktasıdır. Komutları vault klasöründ
 
 ## Git kullanmadan ilk kurulum
 
-[V3.0.2 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.2) `beyin-v3-3.0.2.zip` indirip aç. Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
+[V3.1.0 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.1.0) `beyin-v3-3.1.0.zip` indirip aç. Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
 
 Bir vault klasörü seç veya oluştur. Açılan paketin içinde:
 
@@ -39,8 +39,8 @@ Varsayılan indirme kaynağı `avenoxai/avenoxbeyin` deposunun resmi GitHub stab
 Yerel, önceden indirilmiş ZIP ile ağ gerekmez:
 
 ```sh
-python3 beyin.py update --check --package "/indirilen/beyin-v3-3.0.2.zip"
-python3 beyin.py update --package "/indirilen/beyin-v3-3.0.2.zip"
+python3 beyin.py update --check --package "/indirilen/beyin-v3-3.1.0.zip"
+python3 beyin.py update --package "/indirilen/beyin-v3-3.1.0.zip"
 ```
 
 Yerel paketi yalnız güvendiğin kaynaktan al: checksum bütünlüğü kontrol eder; bağımsız bir imza veya kaynak güveninin yerine geçmez.
@@ -89,7 +89,23 @@ Bu kontroller dağıtık cloud kilidi veya bütün harici uygulamalar için atom
 Repo kökünde:
 
 ```sh
-python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.0.2.zip" --version 3.0.2
+python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.1.0.zip" --version 3.1.0
 ```
 
 Bu komut yalnız yerel ZIP oluşturur, GitHub'a yayınlamaz. Paket `manifest.json`, izin verilen installer/giriş dosyaları, runtime modülleri ve üç skill'i içerir. Manifest sürüm, schema/runtime schema, minimum Python, dosya hashleri ve tanınan legacy hashlerini taşır. Release yayınlama ve final platform CI ayrı işlemlerdir.
+
+## V3.1 sürüm bildirimleri
+
+V3.0.2 kurulumunu bir kere `python3 beyin.py update` ile güncelle. Yeni bildirim kodu bu ilk geçişten sonra çalışır. Windows'ta `py -3` kullan. Oturum açılışı ağ beklemez; kısa ömürlü worker yalnız resmi GitHub metadata'sını günde en fazla bir kez kontrol eder. İlk kontrolün sonucu sonraki oturum veya `doctor` çağrısında görünür. Aynı sürüm her prompt'ta tekrar gösterilmez. Notlar ve prompt'lar bu kontrol için gönderilmez, model çağrısı veya otomatik kurulum yapılmaz.
+
+`update --check --metadata-only` yalnız sürüm bilgisini okur: ZIP indirmez, paket kodu çalıştırmaz ve vault/runtime/cache yazmaz. Tam `update --check` mevcut paket doğrulamasını ve geçici sentetik kurulumu çalıştırmaya devam eder. Metadata sonucu paketin kurulabilirlik kanıtı değildir. Ağ hatası “güncelsin” anlamına gelmez; doctor son başarılı kontrol tarihini ve durumu gösterir.
+
+`preferences --update-notifications off/on` bildirimleri ve otomatik sürüm ağı erişimini yönetir; hafıza senkronizasyon tercihini değiştirmez. `BEYIN_UPDATES_OFF=1` bu tercihten önce gelir. `update --dismiss X.Y.Z` yalnız o sürümün oturum bildirimini susturur; doctor sürümü göstermeye devam eder. Tercih ve cache vault dışında state dizinindedir; eski preference şemasına alan eklenmediğinden eski sürüme rollback güvenlidir. İnternet erişimi kapalıyken `update --package /yol/paket.zip` kullanılabilir.
+
+Online ZIP indirmesinde GitHub asset SHA-256 ve varsa resmi checksum dosyası, herhangi bir paket kodu çalıştırılmadan önce doğrulanır. Cache kurulacak paketin kaynağı değildir; kurulum yeniden resmi metadata okur. Checksum bağımsız yayımlayıcı imzası değildir. `context --no-sync` sürüm kontrolü, worker veya bildirim kaydı oluşturmaz.
+
+## Bakımcı için yayın
+
+`VERSION` ve `docs/v3/releases/X.Y.Z.md` aynı sürümü tanımlar. `Verified V3 release package` workflow'u ZIP'i bir kez build eder; altı OS/Python kombinasyonu bu aynı ZIP'i temiz kurulum, gerçek V3.0.2 geçişi, no-op, rollback ve kesinti/recover ile doğrular. PR çalışmaları yayın yapmaz.
+
+Main üzerinde manuel `workflow_dispatch` ve `publish=true`, testler yeşilse aynı bytes'ı önce draft olarak yükler, sonra stable/latest yayınlar ve yayınlanmış asset'i tekrar indirip doğrular. Var olan release'in üzerine yazılmaz; yeni sürüm numarası gerekir. Global hook köprüsü (#41) bu sürümün parçası değildir.
