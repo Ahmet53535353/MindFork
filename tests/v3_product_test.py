@@ -189,6 +189,35 @@ class ProductInstallationTest(unittest.TestCase):
         receipt = self.command('receipt', payload={'event_id': 'product-first-run', 'summary': 'Synthetic calibration marked done.', 'refs': ['task.md']})
         self.assertTrue((self.vault / receipt['source']).is_file())
 
+    def test_context_no_sync_reads_existing_index_without_mutation(self):
+        self.installed()
+        note = self.vault / 'indexed.md'
+        note.write_text('---\n' + json.dumps({'id': 'indexed-note', 'project': 'demo'}) +
+                        '\n---\nQuartz read-only context remains source-backed.\n', encoding='utf-8')
+        self.command('sync')
+        before_vault, before_state = snapshot(self.vault), snapshot(self.state)
+        context = self.command('context', 'Quartz read-only context', '--project', 'demo', '--no-sync')
+        self.assertEqual([r['id'] for r in context['records']], ['indexed-note'])
+        self.assertEqual(context['source_sync'], {'status': 'skipped', 'reason': 'explicit_no_sync'})
+        self.assertEqual(snapshot(self.vault), before_vault)
+        self.assertEqual(snapshot(self.state), before_state)
+
+        note.write_text(note.read_text(encoding='utf-8').replace('remains', 'changed'), encoding='utf-8')
+        before_vault, before_state = snapshot(self.vault), snapshot(self.state)
+        stale = self.command('context', 'Quartz read-only context', '--project', 'demo', '--no-sync')
+        self.assertEqual(stale['records'], [])
+        self.assertEqual(stale['stale_count'], 1)
+        self.assertEqual(snapshot(self.vault), before_vault)
+        self.assertEqual(snapshot(self.state), before_state)
+
+        note.unlink()
+        before_vault, before_state = snapshot(self.vault), snapshot(self.state)
+        deleted = self.command('context', 'Quartz read-only context', '--project', 'demo', '--no-sync')
+        self.assertEqual(deleted['records'], [])
+        self.assertEqual(deleted['stale_count'], 1)
+        self.assertEqual(snapshot(self.vault), before_vault)
+        self.assertEqual(snapshot(self.state), before_state)
+
     def test_v2_sources_retained_and_old_writer_handlers_retired(self):
         sources = {'daily/2026-01-01.md': 'Legacy starlight daily source.',
                    'knowledge/legacy.md': 'Legacy starlight knowledge source.',
