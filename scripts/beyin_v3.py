@@ -43,6 +43,36 @@ def load_sync():
     return SyncEngine
 
 
+# Mirrors beyin_v3_jev_client.FEATURES; duplicated so argument parsing never imports
+# the optional client. tests/v3_jev_toggle_test.py pins the two lists together.
+JEV_FEATURES = ("context", "review", "answer", "auto_context")
+JEV_NOTICE = ("auto_context is on: every turn sends the prompt and excerpts of the matched "
+              "internal/public notes to the provider. Private notes are never sent.")
+JEV_WARNING = "TYPESAFE_API_KEY is not set; calls degrade to local results."
+
+
+def jev_client():
+    load_sync()
+    import beyin_v3_jev_client as client
+    return client
+
+
+def jev_status(state: Path):
+    """Doctor path: with no config and no kill switch the optional client is not imported."""
+    if (not (state / "jev.json").exists() and not (state / "jev.disabled").exists()
+            and os.environ.get("BEYIN_JEV_DISABLE") is None):
+        return {"mode": "off", "configured": False}
+    return jev_client().status(state)
+
+
+def jev_advice(result):
+    if result.get("automatic_model_calls"):
+        result["notice"] = JEV_NOTICE
+    if result.get("mode") != "off" and not result.get("key_present"):
+        result["warning"] = JEV_WARNING
+    return result
+
+
 def read_json(filename: str):
     if filename == "-":
         return json.load(sys.stdin)
@@ -94,6 +124,10 @@ def parser():
     review = sub.add_parser("jev-review", help="Advisory source review; never saves or approves a candidate")
     review.add_argument("--file", required=True, help="JSON proposal (maximum 24,000 characters)")
     review.add_argument("--project", required=True)
+    jev = sub.add_parser("jev", help="Read or set the optional remote advisor; never accepts a key")
+    jev.add_argument("mode", choices=("status", "off", "shadow", "on"))
+    jev.add_argument("--enable", action="append", choices=JEV_FEATURES, default=[])
+    jev.add_argument("--disable", action="append", choices=JEV_FEATURES, default=[])
     answer = sub.add_parser("jev-answer", help="Advisory answer claim verification against exact source quotes")
     answer.add_argument("--file", required=True, help="JSON list of claims (maximum 32,000 characters)")
     answer.add_argument("--project", required=True)
@@ -118,8 +152,9 @@ def main(argv=None):
         state = (args.state.expanduser() if args.state else default_state(vault)).resolve()
         if state == vault or vault in state.parents:
             raise ValueError("--state must be outside the vault")
-        engine = load_engine()
-        store = engine.MemoryStore(state, vault)
+        # The advisor switch reads and writes one small file; it needs no index or sync engine.
+        engine = load_engine() if args.command != "jev" else None
+        store = engine.MemoryStore(state, vault) if engine else None
         sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer") else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
@@ -135,6 +170,14 @@ def main(argv=None):
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
                       'model_calls': False, 'timer_installed': False}
+        elif args.command == "jev":
+            if args.mode == "status":
+                if args.enable or args.disable:
+                    raise ValueError("jev status reads only; use jev off/shadow/on with --enable/--disable")
+                result = jev_advice(jev_client().status(state))
+            else:
+                result = jev_advice(jev_client().set_mode(state, args.mode, enable=args.enable, disable=args.disable))
+                result["changed"] = True
         elif args.command == "doctor":
             result = {"pending_events": len(list((state / "hook-queue").glob("*.json"))),
                       "acknowledged_events": len(list((state / "hook-done").glob("*.json")))}
@@ -154,7 +197,8 @@ def main(argv=None):
             from beyin_v3_secrets import health as secret_filter_health
             result['secret_filter'] = secret_filter_health(state)
             result['secrets_redacted'] = result['secret_filter']['total']
-            result['automatic_model_calls'] = False
+            result['jev'] = jev_status(state)
+            result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.

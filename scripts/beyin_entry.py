@@ -10,10 +10,37 @@ sys.dont_write_bytecode = True
 
 
 
+JEV_MODES = {'off': 'kapali', 'shadow': 'golge', 'on': 'acik'}
+
+
+def jev_lines(result):
+    """Shared by the jev command and the doctor summary; reads only reported fields."""
+    lines = []
+    if result.get('automatic_model_calls'):
+        lines.append('Otomatik baglam acik: her turda istemin ve eslesen ic/kamu notlarindan'
+                     ' alintilar saglayiciya gider. Ozel notlar gonderilmez.')
+    if result.get('mode', 'off') != 'off' and not result.get('key_present'):
+        lines.append('TYPESAFE_API_KEY yok: cagrilar yerel sonuca duser.')
+    return lines
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
         return 'Islem tamamlanamadi: ' + str(result.get('message', result['error']))
+    if command == 'jev':
+        features = result.get('features', {})
+        lines = ['Jev: ' + JEV_MODES.get(result.get('mode'), 'bilinmiyor') +
+                 (' (kayitli: ' + JEV_MODES.get(result.get('saved_mode'), 'bilinmiyor') + ')'
+                  if result.get('kill_switch') else ''),
+                 'Ozellikler: ' + (', '.join(name + ' ' + ('acik' if value else 'kapali')
+                                             for name, value in features.items()) or 'yok'),
+                 'Anahtar: ' + ('var' if result.get('key_present') else 'yok'),
+                 'Acil kapatma: ' + ('acik' if result.get('kill_switch') else 'kapali'),
+                 'Son 24 saat: ' + str(result.get('last_24h', {}).get('calls', 0)) + ' cagri']
+        if not result.get('config_valid', True):
+            lines.append('Ayar dosyasi bozuk; jev.json elle duzeltilmeli.')
+        return '\n'.join(lines + jev_lines(result))
     if command == 'preferences':
         prefs = result['preferences']
         return ('Otomatik kontrol: ' + ('acik' if prefs['auto_sync'] else 'kapali') +
@@ -30,6 +57,13 @@ def human_result(result, command, installed_version=None):
                  'Bekleyen is: ' + str(result.get('pending_events', 0))]
         for name, details in result.get('lifecycle', {}).items():
             lines.append(name + ': ' + ('olay goruldu' if details.get('status') == 'observed_metadata' else 'henuz dogrulanmadi'))
+        jev = result.get('jev') or {}
+        if jev.get('mode', 'off') == 'off':
+            lines.append('Jev: kapali')
+        else:
+            lines.append('Jev: ' + JEV_MODES.get(jev['mode'], 'bilinmiyor') + ' (otomatik baglam: ' +
+                         ('acik' if jev.get('automatic_model_calls') else 'kapali') + '), son 24 saat ' +
+                         str(jev.get('last_24h', {}).get('calls', 0)) + ' cagri')
         if result.get('secrets_redacted'):
             lines.append('Sir suzgeci ' + str(result['secrets_redacted']) + ' eslesmeyi [REDACTED] olarak yazdi.')
         if result.get('skill_conflicts'):

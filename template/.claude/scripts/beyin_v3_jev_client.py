@@ -526,7 +526,7 @@ def status(vault):
 
 
 def set_mode(vault, mode=None, enable=(), disable=()):
-    """The only writer of jev.json. Unknown keys a user added by hand are kept."""
+    """The only writer of jev.json. Valid keys a user added by hand are kept; _supplied rejects the rest."""
     supplied=_supplied(vault)
     if mode is not None: supplied['mode']=mode
     features=list(supplied.get('features',DEFAULTS['features']))

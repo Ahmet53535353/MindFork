@@ -4,7 +4,48 @@ Normal `context`, lifecycle hook'ları ve otomatik işler yerel kalır. Bu eklen
 
 ## Açık etkinleştirme
 
-CLI'nin `--state` ile kullandığı kasa dışındaki dizine `jev.json` koyun:
+Kurucu bu eklentiyi sormaz ve kurmaz. Açmak, kapatmak ve durumu görmek için kurulu kasada:
+
+```sh
+python beyin.py jev status
+python beyin.py jev shadow
+python beyin.py jev on
+python beyin.py jev off
+```
+
+Kaynak depodan aynı komut: `python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state jev status`.
+
+`status` yalnız okur; `off|shadow|on` ayarı yazıp sonucu ve `"changed": true` döndürür. Komut kasa indeksine veya kaynak senkronizasyonuna ihtiyaç duymaz. Anahtar kabul etmez ve yazdırmaz; `--key` benzeri bir seçenek bilerek yoktur.
+
+Özellikler ayrı ayrı açılıp kapanır; `--enable` ve `--disable` tekrarlanabilir ve `status` ile birlikte kullanılamaz:
+
+```sh
+python beyin.py jev on --enable auto_context
+python beyin.py jev shadow --disable answer
+```
+
+| Özellik | Kullanan komut | Varsayılan |
+| --- | --- | --- |
+| `context` | `context --jev` | açık |
+| `review` | `jev-review` | açık |
+| `answer` | `jev-answer` | açık |
+| `auto_context` | her turdaki hook yolu; ayrı bir çalışma, açıkça etkinleştirilmedikçe kapalı | kapalı |
+
+Kapalı bir özelliğin amacı çağrılırsa istemci anahtar okumadan ve ağa çıkmadan `off` modu ile `feature_disabled` teşhisi döndürür.
+
+`auto_context` açıkken `status` çıktısında `automatic_model_calls: true` olur; komut buna, her turda istemin ve eşleşen `internal`/`public` not alıntılarının sağlayıcıya gittiğini söyleyen bir `notice` ekler. `private` notlar gönderilmez. Mod `off` değilken anahtar yoksa `warning` eklenir ve çağrılar yerel sonuca düşer.
+
+### Acil kapatma
+
+`BEYIN_JEV_DISABLE=1` ortam değişkeni veya state dizinindeki `jev.disabled` dosyası, kayıtlı modu değiştirmeden çağrıları durdurur. `status` bu durumda `mode: "off"`, eski değeriyle `saved_mode` ve `kill_switch: true` gösterir. Değişken kaldırılınca veya dosya silinince kayıtlı moda dönülür.
+
+### Çağrı kaydı
+
+Her çağrı state dizinindeki `jev-calls.jsonl` dosyasına tek satırlık sayaç yazar: amaç, mod, önbellek isabeti, `degraded`, hata kodu, gecikme, giriş token sayısı ve zaman. Sorgu metni, aday metni, yanıt içeriği ve anahtar yazılmaz. Dosya sınırı aşarsa eski yarısı atılır. `jev status` ve `doctor` son 24 saati buradan özetler.
+
+### Elle düzenleme
+
+`jev.json` hala elle düzenlenebilir; `timeout`, `max_candidates`, `base_url`, `env_file` gibi ileri anahtarlar komut yazarken korunur. Komut bu dosyanın tek yazıcısıdır: 0600 izinle atomik yazar. Dosya bozuksa komut hata döndürür ve dosyaya dokunmaz.
 
 ```json
 {"mode":"shadow","model":"jev-1.13.0","provider":"typesafe","timeout":3,"max_candidates":32,"max_questions":96,"max_input_chars":24000,"cache_ttl":3600}
