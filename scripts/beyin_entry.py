@@ -17,8 +17,8 @@ def jev_lines(result):
     """Shared by the jev command and the doctor summary; reads only reported fields."""
     lines = []
     if result.get('automatic_model_calls'):
-        lines.append('Otomatik baglam acik: her turda istemin ve eslesen ic/kamu notlarindan'
-                     ' alintilar saglayiciya gider. Ozel notlar gonderilmez.')
+        lines.append('Otomatik baglam acik: her turda istemin ve en fazla 8 aday ic/kamu notunun basligi ile'
+                     ' ilk 600 karakteri saglayiciya gider. Ozel notlar gonderilmez.')
     if result.get('mode', 'off') != 'off' and not result.get('key_present'):
         lines.append('TYPESAFE_API_KEY yok: cagrilar yerel sonuca duser.')
     return lines

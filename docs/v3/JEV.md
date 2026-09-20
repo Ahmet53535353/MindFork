@@ -29,11 +29,11 @@ python beyin.py jev shadow --disable answer
 | `context` | `context --jev` | açık |
 | `review` | `jev-review` | açık |
 | `answer` | `jev-answer` | açık |
-| `auto_context` | her turdaki hook yolu; ayrı bir çalışma, açıkça etkinleştirilmedikçe kapalı | kapalı |
+| `auto_context` | her turdaki hook yolu; [aşağıda](#her-turda-otomatik-bağlam-auto_context), açıkça etkinleştirilmedikçe kapalı | kapalı |
 
 Kapalı bir özelliğin amacı çağrılırsa istemci anahtar okumadan ve ağa çıkmadan `off` modu ile `feature_disabled` teşhisi döndürür.
 
-`auto_context` açıkken `status` çıktısında `automatic_model_calls: true` olur; komut buna, her turda istemin ve eşleşen `internal`/`public` not alıntılarının sağlayıcıya gittiğini söyleyen bir `notice` ekler. `private` notlar gönderilmez. Mod `off` değilken anahtar yoksa `warning` eklenir ve çağrılar yerel sonuca düşer.
+`auto_context` açıkken `status` çıktısında `automatic_model_calls: true` olur; komut buna, her turda istemin ve en fazla 8 aday `internal`/`public` notun başlığı ile ilk 600 karakterinin sağlayıcıya gittiğini söyleyen bir `notice` ekler. `private` notlar gönderilmez. Mod `off` değilken anahtar yoksa `warning` eklenir ve çağrılar yerel sonuca düşer.
 
 ### Acil kapatma
 
