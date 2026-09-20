@@ -194,13 +194,16 @@ class AutoContextTest(unittest.TestCase):
         self.assertEqual(self.filtered(), self.local())
         self.assertFalse(self.calls)
 
-    def test_source_changed_during_call_keeps_local(self):
+    def test_source_changed_during_call_recomputes_safe_local(self):
         self.config()
         local = self.local()
         def edits(url, body, key, timeout):
             (self.vault / 'deploy.md').write_text('changed', encoding='utf-8')
             return self.transport(url, body, key, timeout)
-        self.assertEqual(self.filtered(transport=edits), local)
+        result = self.filtered(transport=edits)
+        self.assertNotIn('deploy', self.ids(result))
+        self.assertEqual(result, self.store.context_for('claude', QUERY, strict=True, budget_chars=6000))
+        self.assertEqual(result['stale_count'], 1)
 
     def test_excerpt_is_bounded(self):
         self.record('long', 'Quartz deploy site ' + 'x' * 5000)

@@ -306,6 +306,17 @@ class MemoryStore:
     def retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, strict=False):
         return self._retrieve(query, project, audience, statuses, limit, budget_chars, strict=strict)
 
+    def candidates(self, query, project=None, audience="internal", statuses=None, limit=32, strict=False):
+        """Bounded eligible candidates before any final context packing.
+
+        Callers must build separately bounded provider cards and pack final output.
+        A long leading source must not hide later candidates from a reranker.
+        """
+        if type(limit) is not int or not 0 <= limit <= 128:
+            raise ValueError("candidate limit must be 0..128")
+        return self._retrieve(query, project, audience, statuses, limit, 0,
+                              strict=strict, candidate_only=True)
+
     def snapshot_context(self, audience="internal", budget_chars=6000, limit=5):
         """Explicit bounded current-state snapshot; normal empty queries abstain."""
         return self._retrieve("", audience=audience, statuses=("active", "waiting"),
@@ -428,7 +439,7 @@ class MemoryStore:
     STRICT_MIN_WEIGHT = 0.30
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
-    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False):
+    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
@@ -470,7 +481,11 @@ class MemoryStore:
                 continue
             if strict and str(record.get("source", "")).startswith(self.STRICT_EXCLUDE):
                 continue
-            vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", ""))) - STOPWORDS
+            # Aliases are source metadata, never a shortcut around eligibility gates.
+            aliases = record.get("aliases", [])
+            aliases = aliases if isinstance(aliases, list) else []
+            alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
+            vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
             vocabularies[record["id"]] = vocabulary
             score = len(terms & vocabulary)
             if score or scoped_listing or snapshot:
@@ -480,38 +495,53 @@ class MemoryStore:
         else:
             ranked.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
             ranked.sort(key=lambda item: -item[0])
-        selected, citations = [], []
-        used = 0
-        clipped_any = False
-        for _, record in ranked[:limit]:
-            citation = {"id": record["id"], "source": record["source"]}
-            size = len(_json(record)) + len(_json(citation))
-            if used + size > budget_chars:
-                clipped = dict(record, text="", text_truncated=True)
-                available = budget_chars - used - len(_json(clipped)) - len(_json(citation))
-                marker = " [truncated]"
-                if available <= len(marker):
-                    continue
-                # JSON escaping can cost more than one character per input char.
-                text = record["text"][:available - len(marker)]
-                clipped["text"] = text + marker
-                while text and len(_json(clipped)) + len(_json(citation)) > budget_chars - used:
-                    text = text[:-1]
-                    clipped["text"] = text + marker
-                if not text:
-                    continue
-                record = clipped
-                size = len(_json(record)) + len(_json(citation))
-                clipped_any = True
-            selected.append(record)
-            citations.append(citation)
-            used += size
-        omitted = len(ranked) - len(selected)
-        return {"records": selected, "citations": citations, "abstained": not selected, "truncated": bool(omitted) or clipped_any, "omitted_count": omitted, "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count}
+        if candidate_only:
+            return [record for _, record in ranked[:limit]]
+        return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)
 
+
+def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
+    """Pack successfully delivered sources, not a prefix of attempted candidates.
+
+    An oversized metadata record cannot consume a source slot. Text may be clipped,
+    never identity/citation fields. used_chars measures compact record+citation JSON;
+    render_context additionally accounts for the complete hook envelope.
+    """
+    if type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
+        raise ValueError("invalid budget")
+    selected, citations = [], []
+    used = 0
+    clipped_any = False
+    for record in records:
+        if len(selected) >= limit:
+            break
+        citation = {"id": record["id"], "source": record["source"]}
+        size = len(_json(record)) + len(_json(citation))
+        if used + size > budget_chars:
+            clipped = dict(record, text="", text_truncated=True)
+            available = budget_chars - used - len(_json(clipped)) - len(_json(citation))
+            marker = " [truncated]"
+            if available <= len(marker):
+                continue
+            # JSON escaping can cost more than one character per input char.
+            text = record["text"][:available - len(marker)]
+            clipped["text"] = text + marker
+            while text and len(_json(clipped)) + len(_json(citation)) > budget_chars - used:
+                text = text[:-1]
+                clipped["text"] = text + marker
+            if not text:
+                continue
+            record = clipped
+            size = len(_json(record)) + len(_json(citation))
+            clipped_any = True
+        selected.append(record)
+        citations.append(citation)
+        used += size
+    omitted = len(records) - len(selected)
+    return {"records": selected, "citations": citations, "abstained": not selected, "truncated": bool(omitted) or clipped_any, "omitted_count": omitted, "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count}
 
 def shared_context(store, harness, query, **kwargs):
-    """Both harnesses call the same source-backed retrieval function."""
+    """All supported harnesses call the same source-backed retrieval function."""
     if harness not in HARNESSES:
         raise ValueError("unsupported harness")
     return store.retrieve(query, **kwargs)
@@ -532,3 +562,30 @@ def optional_provider(enabled=False, factory=None):
     if factory is None or not callable(factory):
         raise ValueError("explicit provider factory required")
     return factory()
+
+
+def render_context(context, budget_chars, prefix="", suffix=""):
+    """Serialize a complete context within the delivery budget; never slice JSON.
+
+    Return the delivered projection as well so continuity cannot remember an omitted
+    source. Auxiliary receipt text yields to complete source identities and citations.
+    """
+    if type(budget_chars) is not int or budget_chars < 0:
+        raise ValueError("invalid budget")
+    records = context.get("records", [])
+    extra = {k: v for k, v in context.items() if k not in
+             {"records", "citations", "used_chars", "budget_chars", "omitted_count", "truncated", "abstained", "stale_count"}}
+    available = max(0, budget_chars - len(prefix))
+    payload_budget = available
+    while True:
+        packed = pack_context(records, len(records), payload_budget, context.get("stale_count", 0))
+        packed.update(extra)
+        text = json.dumps(packed, ensure_ascii=False)
+        overflow = len(text) - available
+        if overflow <= 0:
+            tail = suffix if len(prefix) + len(text) + len(suffix) <= budget_chars else ""
+            return prefix + text + tail, packed
+        if payload_budget == 0:
+            # A nonsensically small budget cannot carry even an empty envelope.
+            return "", pack_context([], 0, 0)
+        payload_budget = max(0, payload_budget - overflow - 8)

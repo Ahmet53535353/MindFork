@@ -126,6 +126,9 @@ def parser():
     review = sub.add_parser("jev-review", help="Advisory source review; never saves or approves a candidate")
     review.add_argument("--file", required=True, help="JSON proposal (maximum 24,000 characters)")
     review.add_argument("--project", required=True)
+    memory = sub.add_parser("jev-memory", help="Optional typed memory triage; never writes or approves")
+    memory.add_argument("--file", required=True, help="Source-backed JSON proposal, optional prior_record_ids (max 4)")
+    memory.add_argument("--project", required=True)
     jev = sub.add_parser("jev", help="Read or set the optional remote advisor; never accepts a key")
     jev.add_argument("mode", choices=("status", "off", "shadow", "on"))
     jev.add_argument("--enable", action="append", choices=JEV_FEATURES, default=[])
@@ -164,7 +167,7 @@ def main(argv=None):
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
         engine = load_engine() if args.command != "jev" else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer") and not read_only_context else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory") and not read_only_context else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -266,7 +269,7 @@ def main(argv=None):
                         'warnings': warnings[:20],
                         'truncated': len(warnings) > 20,
                     }
-        elif args.command in ("jev-review", "jev-answer"):
+        elif args.command in ("jev-review", "jev-answer", "jev-memory"):
             from beyin_v3_jev import review_candidate, verify_answer
             max_chars = 32000 if args.command == "jev-answer" else 24000
             # Bounded read also applies to stdin; never echo raw proposal errors.
@@ -281,6 +284,9 @@ def main(argv=None):
             if refreshed.get('status') != 'succeeded':
                 raise ValueError("proposal_source_sync_incomplete")
             handler = verify_answer if args.command == "jev-answer" else review_candidate
+            if args.command == "jev-memory":
+                from beyin_v3_memory_assessment import assess_memory
+                handler = assess_memory
             result = handler(sync.store, json.loads(raw), project=args.project)
         elif args.command == "receipt":
             payload = read_json(args.file)
