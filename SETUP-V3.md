@@ -21,6 +21,8 @@ Not kaydedildiğinde dosya kalıcıdır. İndeks oturum başı, mesaj gönderimi
 
 Basit scalar YAML ve JSON frontmatter desteklenir. Karmaşık YAML görünür uyarı üretir; sessizce yanlış metadata çıkarılmaz. Önce kaynak not okunarak ihtiyaç duyulan alanlar anlaşılır. Yeni görev `task-create --file TASK_JSON` ile oluşturulur; JSON şeması kurulu beyin skill'indedir. Kaynak task güncellemesi `task-update` ile expected revision kullanır; conflict durumunda güncel kaydı oku.
 
+İsteğe bağlı Jev danışmanı kurulumun parçası değildir: varsayılan kapalıdır, yalnız kendi TypeSafe API anahtarı olan kullanıcılar içindir ve kurucu bunu sormaz. Kullanıcı açıkça istemedikçe gündeme getirme; isterse `python3 beyin.py jev status` durumu gösterir, `jev shadow`/`jev on`/`jev off` değiştirir. Anahtarı komuta yazma. Sınırlar: [docs/v3/JEV.md](docs/v3/JEV.md).
+
 Güncelleme: vault içinde `python3 beyin.py update`; yalnız kontrol için `update --check`. Geri alma: `python3 beyin.py rollback`. Kesilen güncellemeyi sürdürmek için `python3 beyin.py recover`. Windows'ta `py -3` kullan. Değiştirilmiş yönetilen dosyada conflict varsa kullanıcı değişikliğini koru; `git reset` veya elle dosya kopyalayarak geçme. İlk temiz kurulum geri alınınca giriş komutu da kaldırılır; tekrar kurmak için resmi ZIP installer'ını kullan. Ayrıntılar: [güncelleme rehberi](docs/v3/UPDATE.md).
 
 Platform kanıtı ve kalan doğrulamalar: [docs/v3/PLATFORM-TESTS.md](docs/v3/PLATFORM-TESTS.md).
