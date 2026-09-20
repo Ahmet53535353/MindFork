@@ -120,6 +120,7 @@ def parser():
     context.add_argument("--status", action="append", dest="statuses")
     context.add_argument("--limit", type=int, default=5)
     context.add_argument("--budget-chars", type=int, default=8000)
+    context.add_argument("--no-sync", action="store_true", help="Read an existing index without writing to the vault or runtime")
     context.add_argument("--jev", action="store_true", help="Explicit optional remote advisor; requires state/jev.json and --project")
     review = sub.add_parser("jev-review", help="Advisory source review; never saves or approves a candidate")
     review.add_argument("--file", required=True, help="JSON proposal (maximum 24,000 characters)")
@@ -152,10 +153,13 @@ def main(argv=None):
         state = (args.state.expanduser() if args.state else default_state(vault)).resolve()
         if state == vault or vault in state.parents:
             raise ValueError("--state must be outside the vault")
+        read_only_context = args.command == "context" and args.no_sync
+        if read_only_context and args.jev:
+            raise ValueError("context --no-sync cannot be combined with --jev")
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
         engine = load_engine() if args.command != "jev" else None
-        store = engine.MemoryStore(state, vault) if engine else None
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer") else None
+        store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer") and not read_only_context else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -229,24 +233,28 @@ def main(argv=None):
                 params.update(supplied)
             if not isinstance(params["query"], str) or not params["query"].strip():
                 raise ValueError("context requires a nonempty query")
-            refreshed = sync.sync()
-            if refreshed.get('status') == 'conflict':
-                raise RuntimeError('Context blocked: source sync '+str(refreshed.get('status', 'failed'))+'. Run sync with the same vault/state to inspect and reconcile source issues, then retry context.')
-            # Harness selection deliberately does not change retrieval semantics.
-            if args.jev:
-                from beyin_v3_jev import advise_context
-                result = advise_context(sync.store, **params)
+            if read_only_context:
+                result = store.context_for(args.harness, **params)
+                result['source_sync'] = {'status': 'skipped', 'reason': 'explicit_no_sync'}
             else:
-                result = sync.store.context_for(args.harness, **params)
-            if refreshed.get('status') == 'degraded':
-                warnings = refreshed.get('warnings', [])
-                result['partial'] = True
-                result['source_sync'] = {
-                    'status': 'degraded',
-                    'warning_count': len(warnings),
-                    'warnings': warnings[:20],
-                    'truncated': len(warnings) > 20,
-                }
+                refreshed = sync.sync()
+                if refreshed.get('status') == 'conflict':
+                    raise RuntimeError('Context blocked: source sync '+str(refreshed.get('status', 'failed'))+'. Run sync with the same vault/state to inspect and reconcile source issues, then retry context.')
+                # Harness selection deliberately does not change retrieval semantics.
+                if args.jev:
+                    from beyin_v3_jev import advise_context
+                    result = advise_context(sync.store, **params)
+                else:
+                    result = sync.store.context_for(args.harness, **params)
+                if refreshed.get('status') == 'degraded':
+                    warnings = refreshed.get('warnings', [])
+                    result['partial'] = True
+                    result['source_sync'] = {
+                        'status': 'degraded',
+                        'warning_count': len(warnings),
+                        'warnings': warnings[:20],
+                        'truncated': len(warnings) > 20,
+                    }
         elif args.command in ("jev-review", "jev-answer"):
             from beyin_v3_jev import review_candidate, verify_answer
             max_chars = 32000 if args.command == "jev-answer" else 24000

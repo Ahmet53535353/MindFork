@@ -57,6 +57,25 @@ class RuntimeContractTest(unittest.TestCase):
             finally:
                 connection.close()
 
+    def test_read_only_reopen_retrieves_and_rejects_writes(self):
+        record = self.store.ingest(self.record())
+        evaluator.close_store(self.store)
+        read_only = self.module.MemoryStore(self.state, self.vault, read_only=True)
+        self.addCleanup(lambda: evaluator.close_store(read_only))
+        self.assertEqual([r['id'] for r in read_only.retrieve('Quartz observatory calibration')['records']], ['record'])
+        with self.assertRaisesRegex(ValueError, 'read-only runtime'):
+            read_only.ingest(record)
+        with self.assertRaisesRegex(ValueError, 'read-only runtime'):
+            read_only.update_task('record', 1, {'status': 'done'})
+        with self.assertRaisesRegex(ValueError, 'read-only runtime'):
+            read_only.submit_receipt('read-only-event', 'Synthetic result.', [record['source']], 'codex')
+
+    def test_read_only_reopen_requires_existing_initialized_runtime(self):
+        missing = self.root / 'missing-runtime'
+        with self.assertRaisesRegex(ValueError, 'not initialized'):
+            self.module.MemoryStore(missing, self.vault, read_only=True)
+        self.assertFalse(missing.exists())
+
     def test_receipt_idempotency_and_collision(self):
         rec = self.record()
         first = self.store.submit_receipt('synthetic-event', 'Calibration reviewed.', [rec['source']], 'codex')

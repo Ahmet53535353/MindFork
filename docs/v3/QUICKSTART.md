@@ -89,6 +89,7 @@ not independent verification that the record's assertion is true.
 ```text
 python3 scripts/beyin_v3.py --vault /absolute/vault ingest --file record.json
 python3 scripts/beyin_v3.py --vault /absolute/vault context "launch owner" --project demo --audience public --harness claude
+python3 scripts/beyin_v3.py --vault /absolute/vault context "launch owner" --project demo --no-sync
 python3 scripts/beyin_v3.py --vault /absolute/vault context --file query.json --harness codex
 python3 scripts/beyin_v3.py --vault /absolute/vault receipt --file receipt.json --harness codex
 python3 scripts/beyin_v3.py --vault /absolute/vault task-update --file patch.json
@@ -104,6 +105,12 @@ Task patch JSON requires `id`, `expected_revision`, and `changes`. A revision
 conflict requires reading current state and reconciling the intended change.
 `history RECORD_ID` returns ordered revision snapshots, including the original
 source synchronization and subsequent updates, so changes can be reviewed from local state.
+
+By default, `context` refreshes the local index before retrieval. `--no-sync`
+instead opens an already initialized SQLite index in read-only mode and does not
+write to either the vault or runtime. It can therefore miss newly added sources;
+changed or deleted sources are still excluded by the normal source-hash checks.
+The option fails when no bound index exists and cannot be combined with `--jev`.
 
 Results are JSON; command failures return a nonzero exit code. Check both process
 status and returned data. An abstained retrieval is a valid empty answer, not

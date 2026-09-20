@@ -113,18 +113,32 @@ STOPWORDS = _tokens("the a an is are was were what which who when where how why 
 
 
 class MemoryStore:
-    def __init__(self, state_dir, vault_root):
+    def __init__(self, state_dir, vault_root, read_only=False):
+        self.read_only = bool(read_only)
         self.vault_root = Path(vault_root).expanduser().resolve()
         if not self.vault_root.is_dir():
             raise ValueError("vault_root must be an existing directory")
         self.state_dir = Path(state_dir).expanduser().resolve()
         if self.state_dir.is_relative_to(self.vault_root):
             raise ValueError("runtime must be outside vault")
-        self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.state_dir.chmod(0o700)
         self.database = self.state_dir / "memory.sqlite3"
         if self.database.is_symlink():
             raise ValueError("database must not be a symlink")
+        if self.read_only:
+            if not self.state_dir.is_dir() or not self.database.is_file():
+                raise ValueError("read-only runtime is not initialized")
+            try:
+                with self._connect() as db:
+                    binding = db.execute("SELECT value FROM metadata WHERE key='vault_root'").fetchone()
+            except sqlite3.Error as exc:
+                raise ValueError("read-only runtime is not initialized") from exc
+            if not binding:
+                raise ValueError("read-only runtime is not bound to a vault")
+            if binding[0] != str(self.vault_root):
+                raise ValueError("runtime belongs to another vault")
+            return
+        self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.state_dir.chmod(0o700)
         with self._connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
@@ -150,12 +164,20 @@ class MemoryStore:
 
     @contextmanager
     def _connect(self):
-        db = sqlite3.connect(self.database, timeout=10)
+        if self.read_only:
+            db = sqlite3.connect(self.database.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+            db.execute("PRAGMA query_only=ON")
+        else:
+            db = sqlite3.connect(self.database, timeout=10)
         try:
             with db:
                 yield db
         finally:
             db.close()
+
+    def _require_writable(self):
+        if self.read_only:
+            raise ValueError("read-only runtime does not permit writes")
 
     def close(self):
         """Connections are scoped to each operation; provided for callers."""
@@ -216,6 +238,7 @@ class MemoryStore:
         return record
 
     def ingest(self, record):
+        self._require_writable()
         record = self._validate(record)
         payload = _json(record)
         with self._connect() as db:
@@ -230,6 +253,7 @@ class MemoryStore:
         return record
 
     def update_task(self, id, expected_revision, changes):
+        self._require_writable()
         if not isinstance(changes, dict) or {"id", "revision"} & changes.keys():
             raise ValueError("id and revision cannot be changed")
         with self._connect() as db:
@@ -257,6 +281,7 @@ class MemoryStore:
         return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": json.loads(row[4])} for row in rows]
 
     def submit_receipt(self, event_id, summary, refs, harness):
+        self._require_writable()
         if not isinstance(event_id, str) or not event_id.strip():
             raise ValueError("event_id required")
         if not isinstance(summary, str) or not summary.strip():
