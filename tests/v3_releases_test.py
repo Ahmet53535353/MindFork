@@ -93,6 +93,21 @@ class ReleasesTest(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(releases.ReleaseError): releases.safe_url(url)
         self.assertEqual(releases.safe_url('https://release-assets.githubusercontent.com/a'), 'https://release-assets.githubusercontent.com/a')
 
+    def test_http_not_modified_rate_limit_and_network_error_are_sanitized(self):
+        with patch.object(releases.urllib.request, 'build_opener') as builder:
+            opener = builder.return_value.open
+            opener.side_effect = urllib.error.HTTPError(releases.OFFICIAL, 304, 'unchanged', {'ETag': '"same"'}, io.BytesIO())
+            self.assertEqual(releases.request_bytes(releases.OFFICIAL, 1024), (None, {'ETag': '"same"'}))
+            for code in (403, 429):
+                opener.side_effect = urllib.error.HTTPError(releases.OFFICIAL, code, 'PRIVATE', {'Retry-After': '7200'}, io.BytesIO(b'PRIVATE'))
+                with self.assertRaises(releases.ReleaseError) as caught:
+                    releases.request_bytes(releases.OFFICIAL, 1024)
+                self.assertEqual(str(caught.exception), 'http_' + str(code))
+                self.assertEqual(caught.exception.retry_after, 7200)
+            opener.side_effect = urllib.error.URLError('PRIVATE network details')
+            with self.assertRaisesRegex(releases.ReleaseError, '^network_unavailable$'):
+                releases.request_bytes(releases.OFFICIAL, 1024)
+
     def test_304_preserves_release_and_renews_cadence(self):
         self.seed_cache()
         with patch.object(releases, 'fetch_metadata', return_value=(None, '"synthetic-etag"')) as fetch:
@@ -222,6 +237,7 @@ class ReleasesTest(unittest.TestCase):
         doctor = run_python(entry, ['doctor', '--human'], self.vault, self.env)
         self.assertEqual(doctor.returncode, 0, doctor.stderr)
         self.assertIn(b'3.1.0', doctor.stdout)
+        self.assertIn(b'Son kontrol:', doctor.stdout)
         self.assertNotIn(b'UNTRUSTED', doctor.stdout)
 
     def test_invalid_cli_combinations_leave_vault_and_state_unchanged(self):

@@ -17,14 +17,15 @@ def update_lines(result):
     status = result.get('status', 'unknown')
     if status == 'available':
         command = 'py -3' if sys.platform == 'win32' else 'python3'
-        return ['Yeni surum: ' + result['version'],
-                'Surum notlari: ' + result['release_url'],
-                'Guncelle: ' + command + ' beyin.py update']
-    messages = {'disabled': 'Surum bildirimleri kapali.', 'unknown': 'Surum kontrolu henuz yapilmadi.',
+        lines = ['Yeni surum: ' + result['version'],
+                 'Surum notlari: ' + result['release_url'],
+                 'Guncelle: ' + command + ' beyin.py update']
+    else:
+        messages = {'disabled': 'Surum bildirimleri kapali.', 'unknown': 'Surum kontrolu henuz yapilmadi.',
                 'unavailable': 'Surum kontrolu yapilamadi; guncellik dogrulanmadi.',
                 'up_to_date': 'Beyin guncel: ' + str(result.get('current_version', '?')),
                 'ahead': 'Kurulu surum resmi stable surumden ileride.'}
-    lines = [messages.get(status, 'Surum bilgisi alinamadi.')]
+        lines = [messages.get(status, 'Surum bilgisi alinamadi.')]
     if result.get('checked_at'):
         from datetime import datetime, timezone
         lines.append('Son kontrol: ' + datetime.fromtimestamp(result['checked_at'], timezone.utc).isoformat())
