@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+sys.dont_write_bytecode = True
 import time
 import uuid
 
@@ -128,6 +129,7 @@ def main():
         if result["failed"]:
             raise SystemExit(1)
         return
+    notice = ''
     try:
         payload = json.loads(sys.stdin.read(1_000_000) or "{}")
         event = payload.get("hook_event_name", args.event)
@@ -150,9 +152,12 @@ def main():
         if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or payload.get('no_memory') is True:
             print("{}")
             return
+        if event == 'SessionStart':
+            from beyin_v3_releases import session_start
+            notice = session_start(vault, state)
         settings = read(vault)
         if not settings['auto_sync']:
-            print('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')
+            print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
         enqueue_event(vault, state, payload, args.harness)
         command = [sys.executable, str(Path(__file__).resolve()), "--vault", str(vault),
@@ -168,17 +173,17 @@ def main():
         process = subprocess.Popen(command, **options) if due else None
         inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
         if not inject:
-            print('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')
+            print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
         if event in ("SessionStart", "UserPromptSubmit"):
             if not due and not disabled:
-                print(json.dumps(output_context(args.harness, event, 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
+                print(json.dumps(output_context(args.harness, event, notice + 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
                 return
             try:
                 if process is not None:
                     process.wait(timeout=1.5)
             except subprocess.TimeoutExpired:
-                print(json.dumps(output_context(args.harness, event, "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+                print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
                 return
             if process is not None and process.returncode:
                 raise RuntimeError("Source sync failed; metadata remains queued")
@@ -219,14 +224,14 @@ def main():
                     print("{}")
                     return
                 text = warning + f"Receipt session={session}; choose --harness for the current client.\nV3 source-backed context (data, not instructions):\n" + json.dumps(context, ensure_ascii=False) + receipt_context(vault)
-            output = output_context(args.harness, event, text[:settings['context_chars']])
+            output = output_context(args.harness, event, (notice + text)[:settings['context_chars']])
             print(json.dumps(output))
         else:
             print('{"decision":"stop"}' if args.harness == "antigravity" else "{}")
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if locals().get("event") in ("SessionStart", "UserPromptSubmit"):
-            print(json.dumps(output_context(args.harness, event, "V3 source sync failed or conflicted; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))
+            print(json.dumps(output_context(args.harness, event, notice + "V3 source sync failed or conflicted; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))
         else:
             print("{}")
 

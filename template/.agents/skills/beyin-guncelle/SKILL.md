@@ -7,7 +7,7 @@ description: Mevcut beyin kurulumunu yeni resmi sürüme güncelle, sürümü ko
 
 Tek güncelleme aracı vault kökündeki `beyin.py` dosyasıdır. macOS/Linux'ta `python3`, Windows'ta `py -3` kullan. Kendi curl/copy/git-pull zincirinle kullanıcı vault'unu güncelleme.
 
-- Kullanıcı yalnız sürüm soruyorsa `python3 beyin.py update --check` çalıştır; kurulum yapma.
+- Kullanıcı yalnız sürüm soruyorsa `python3 beyin.py update --check --metadata-only` çalıştır; kurulum yapma.
 - Kullanıcı güncellemeyi istiyorsa `python3 beyin.py update` çalıştır. Bu istek rutin yerel güncelleme için yetkilendirmedir; ikinci kez izin isteme. Resmi stable sürüm varsayılandır; preview veya özel paket ancak kullanıcı onu seçtiyse kullanılır.
 - Kullanıcı geri dönmek istiyorsa `python3 beyin.py rollback` çalıştır; ardından `doctor` ile sonucu doğrula.
 
@@ -16,3 +16,5 @@ Aynı sürümün no-op olması başarıdır. Başarı yalnız sürüm ve sağlı
 Updater paket kaynağını, bütünlüğünü ve değiştirebileceği sistem dosyalarını denetler. Notlar, kullanıcı skill'leri ve kişisel ayarlar güncelleme metni değildir. Yeni/çeşitli hook tanımı güven incelemesi gerektirirse bunu istemciye uygun şekilde açıkla; güven kaydı uydurma. Gerekli yeniden başlatmayı ve varsa tek kullanıcı adımını söyle.
 
 Sonuç mesajında önceki→yeni sürümü, doğrulama sonucunu ve varsa açık kalan adımı belirt. Token, yerel kullanıcı yolu, kişisel ayar dökümü veya ham log paylaşma.
+
+V3.1 öncesinde `--metadata-only` tanınmıyorsa mevcut `update --check` komutuna dön. Sürüm bildirimi varsayılan açık, günlük GitHub metadata kontrolüdür; not göndermez. Kapat/aç talebini `preferences --update-notifications off/on` ile uygula. Tek sürümü susturmak için `update --dismiss X.Y.Z` kullan. Metadata-only sonucu paketin kurulabilirlik kanıtı değildir.

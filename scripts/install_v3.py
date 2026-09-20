@@ -396,6 +396,7 @@ not knowledge synthesis.
     companion = initialize(vault, state)
     return {'status':'installed','files':len(planned),'trust_review_required':True,
             'companion': companion,
+            'update_notice': 'New releases are checked on GitHub at most daily; notes are not sent. Disable with beyin.py preferences --update-notifications off.',
             'skills':{'synced':['beyin','beyin-doktor','beyin-guncelle'],'conflicts':[], 'mode':'managed'}}
 
 

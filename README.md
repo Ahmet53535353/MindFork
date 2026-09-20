@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.0.2:** Windows güncelleme kilitleri ve Unicode/Git Bash hook yolları düzeltildi; harici skill symlink'leri korunuyor ve yeni oturumda süreklilik dosyaları öncelikli yükleniyor. Yerel paket kapısında 139 test ve 10/10 + 6/6 semantik senaryo geçti; native Windows işleri de yeşil. [Platform doğrulaması](docs/v3/PLATFORM-TESTS.md) · [Gerçek istemci ve Desktop kapsamı](docs/v3/LIVE-CLIENTS.md).
+> **V3.1.0:** Yeni sürüm bildirimi, tek komutla doğrulanmış güncelleme ve geri alma. V3.0.2 kullanıyorsan bir kez vault içinde `python3 beyin.py update` çalıştır; sonraki sürümleri oturum başında gör. [Sürüm notları](docs/v3/releases/3.1.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
@@ -20,7 +20,7 @@ Görsel anlatım, kopyalanabilir mesaj ve manuel indirme: **[avenox.lol/ikincibe
 
 ## Manuel kurulum
 
-1. [V3.0.2 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.2) aç. **[beyin-v3-3.0.2.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.2/beyin-v3-3.0.2.zip)** dosyasını ve yanındaki SHA-256 dosyasını indir. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
+1. [V3.1.0 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.1.0) aç. **[beyin-v3-3.1.0.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.1.0/beyin-v3-3.1.0.zip)** dosyasını ve yanındaki SHA-256 dosyasını indir. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
 2. Obsidian'da bir vault oluştur veya mevcut vault klasörünü seç. Notlarını başka yere taşıman gerekmez.
 3. Açtığın paket klasöründe terminal aç ve vault yolunu kendi klasörünle değiştir:
 
@@ -38,7 +38,7 @@ py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim"
 
 Kurulum üç istemci için proje bağlantılarını, ortak motoru, üç başlangıç skill'ini ve güncelleme kısayolunu kurar. Bundan sonra paket klasörünü açık tutman gerekmez.
 
-Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlanır; installer eklenti dosyalarını vault içine yazar, ama profil bazlı bağlantı ve `hermes plugins enable beyin-v3` adımını sen yaparsın. Adımlar: [docs/v3/HERMES.md](docs/v3/HERMES.md). Bu destek kaynak checkout'undadır; yukarıda bağlantısı verilen V3.0.2 release ZIP'inde henüz yoktur.
+Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlanır; installer eklenti dosyalarını vault içine yazar, ama profil bazlı bağlantı ve `hermes plugins enable beyin-v3` adımını sen yaparsın. Adımlar: [docs/v3/HERMES.md](docs/v3/HERMES.md). Bu destek V3.1.0 paketine dahildir.
 
 Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başlat**. Codex'te `/hooks` ekranında yeni hook tanımlarını inceleyip güven; diğer istemcilerde workspace güvenini tamamla. İstemci güvenini kurucu senin adına uydurmaz. Agent ile kurulum yapmak istersen [SETUP-V3.md](SETUP-V3.md) rehberini takip etmesini iste.
 
@@ -46,11 +46,11 @@ OpenCode için ek adım yok: installer vault içine eklentisini yazar, OpenCode 
 
 ## İlk konuşma
 
-`main` dalındaki kişilik/süreklilik düzeltmesi: yeni kurulum düşünme ortağı kimliğini
+V3.1.0 kişilik/süreklilik davranışı: yeni kurulum düşünme ortağı kimliğini
 ve başlangıç notlarını oluşturur; mevcut Core/Soul, kullanıcı düzeltmeleri, aktif konular
 ve son oturum kaynakları açılışta önceliklidir. Kalıcı öğrenimler aktif ajan tarafından
 kavram ve bağlantı notlarına işlenir. [V2/V3 karşılaştırması ve doğrulama](docs/v3/COMPANION-PARITY.md).
-Bu değişiklik henüz yukarıdaki V3.0.2 release ZIP'inde değildir.
+Bu davranış V3.1.0 paketine dahildir.
 
 Ajanına şunu söyle:
 
@@ -108,6 +108,15 @@ Kısayol aynı updater'ı çalıştırır. Terminalde önce kontrol etmek isters
 python3 beyin.py update --check
 python3 beyin.py update
 ```
+
+Yeni sürüm kontrolü varsayılan olarak açıktır: oturum başında ayrı bir süreç günde en fazla bir kez GitHub sürüm bilgisini kontrol eder. Not, prompt veya hesap bilgisi göndermez; model çağırmaz. İlk sonuç sonraki oturumda veya `doctor` çıktısında görünür. Aynı sürüm için bildirim bir kez gösterilir. Otomatik kurulum yapılmaz.
+
+- Hafif kontrol: `python3 beyin.py update --check --metadata-only`
+- Bildirimi kapat: `python3 beyin.py preferences --update-notifications off`
+- Aç: `python3 beyin.py preferences --update-notifications on`
+- Bir sürümü sustur: `python3 beyin.py update --dismiss 3.1.0`
+
+Windows'ta `python3` yerine `py -3` kullan. V3.0.2 kurulumunda yeni seçenekler ilk `update` işleminden sonra gelir.
 
 Varsayılan kaynak yalnız resmi GitHub **stable release** paketidir; geliştirme dalından kendiliğinden kod çekmez. Paket yayınlanmamışsa veya erişilemiyorsa hata bildirir, güncellenmiş gibi davranmaz. İndirilmiş ZIP ile çevrimdışı güncelleme ve geri alma için [güncelleme rehberi](docs/v3/UPDATE.md).
 

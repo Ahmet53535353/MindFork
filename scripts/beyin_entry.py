@@ -13,6 +13,25 @@ sys.dont_write_bytecode = True
 JEV_MODES = {'off': 'kapali', 'shadow': 'golge', 'on': 'acik'}
 
 
+def update_lines(result):
+    status = result.get('status', 'unknown')
+    if status == 'available':
+        command = 'py -3' if sys.platform == 'win32' else 'python3'
+        lines = ['Yeni surum: ' + result['version'],
+                 'Surum notlari: ' + result['release_url'],
+                 'Guncelle: ' + command + ' beyin.py update']
+    else:
+        messages = {'disabled': 'Surum bildirimleri kapali.', 'unknown': 'Surum kontrolu henuz yapilmadi.',
+                'unavailable': 'Surum kontrolu yapilamadi; guncellik dogrulanmadi.',
+                'up_to_date': 'Beyin guncel: ' + str(result.get('current_version', '?')),
+                'ahead': 'Kurulu surum resmi stable surumden ileride.'}
+        lines = [messages.get(status, 'Surum bilgisi alinamadi.')]
+    if result.get('checked_at'):
+        from datetime import datetime, timezone
+        lines.append('Son kontrol: ' + datetime.fromtimestamp(result['checked_at'], timezone.utc).isoformat())
+    return lines
+
+
 def jev_lines(result):
     """Shared by the jev command and the doctor summary; reads only reported fields."""
     lines = []
@@ -48,6 +67,8 @@ def human_result(result, command, installed_version=None):
                 '\nOtomatik baglam: ' + prefs['context_mode'] +
                 '\nBaglam ust siniri: ' + str(prefs['context_chars']) + ' karakter' +
                 '\nSir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali') +
+                '\nSurum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali') +
+                '\nAcikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.' +
                 '\nYerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
     if command == 'doctor':
         labels = {'never_seen': 'Henuz gercek istemci oturumu gozlenmedi.',
@@ -72,13 +93,17 @@ def human_result(result, command, installed_version=None):
             lines.append('Skill klasorundeki yonetilmeyen girdiler (bilgi): ' + ', '.join(result['skill_unmanaged']) + '.')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
-        return '\n'.join(lines)
+        return '\n'.join(lines + update_lines(result.get('updates', {})))
+    if result.get('verification') == 'metadata_only':
+        return '\n'.join(update_lines(result) + ['Yalniz surum bilgisi kontrol edildi; paket kurulumu denenmedi.'])
     if status == 'updated':
         message = 'Beyin guncellendi: ' + str(result.get('from_version', installed_version or '?')) + ' -> ' + str(result['version'])
     elif status == 'available':
         message = 'Yeni surum var: ' + str(result.get('current_version', '?')) + ' -> ' + str(result['version']) + '\nGuncellemek icin: python beyin.py update'
     elif status == 'noop':
         message = 'Beyin guncel: ' + str(result.get('version', installed_version or '?'))
+    elif status == 'dismissed':
+        message = 'Bu surumun oturum bildirimi susturuldu: ' + result['version']
     elif status == 'uninstalled':
         message = 'Kurulum geri alindi. Kullanici notlari korundu.'
     elif status == 'rolled_back':
@@ -119,8 +144,20 @@ def main(argv=None):
             parser.add_argument('command', choices=('update', 'rollback', 'recover'))
             parser.add_argument('--check', action='store_true')
             parser.add_argument('--package', type=Path)
+            parser.add_argument('--metadata-only', action='store_true')
+            parser.add_argument('--dismiss')
             args = parser.parse_args(argv)
-            if args.command == 'update': result = updater.update(vault, state, args.package, args.check)
+            if args.command != 'update' and (args.check or args.package or args.metadata_only or args.dismiss is not None):
+                parser.error('update options require the update command')
+            if args.metadata_only and (not args.check or args.package or args.dismiss is not None):
+                parser.error('--metadata-only requires --check and cannot use --package or --dismiss')
+            if args.dismiss is not None and (args.check or args.package):
+                parser.error('--dismiss cannot use --check or --package')
+            if args.command == 'update':
+                import beyin_v3_releases as releases
+                if args.metadata_only: result = releases.check(vault)
+                elif args.dismiss is not None: result = releases.dismiss(vault, state, args.dismiss)
+                else: result = updater.update(vault, state, args.package, args.check)
             elif args.command == 'rollback': result = updater.rollback(vault, state)
             else: result = updater.recover(vault, state)
             print(human_result(result, command, installed_version) if human else json.dumps(result, ensure_ascii=True, indent=2))
