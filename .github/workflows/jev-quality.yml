@@ -1,0 +1,96 @@
+name: Jev decision quality evidence
+
+on:
+  push:
+    branches: ['codex/jev-decision-quality']
+    paths:
+      - 'template/.claude/scripts/beyin_v3*.py'
+      - 'scripts/*v3*.py'
+      - 'template/.agents/skills/**'
+      - 'tests/v3_*.py'
+      - 'tests/fixtures/v3/decision_quality*'
+      - '.github/workflows/jev-quality.yml'
+  pull_request:
+    paths:
+      - 'template/.claude/scripts/beyin_v3*.py'
+      - 'scripts/*v3*.py'
+      - 'template/.agents/skills/**'
+      - 'tests/v3_*.py'
+      - 'tests/fixtures/v3/decision_quality*'
+      - '.github/workflows/jev-quality.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONIOENCODING: utf-8
+      BEYIN_V3_NO_SPAWN: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: e112d8af8ec3cc205a2f5aa4994ec337a1460ec8
+          path: comparison-baseline
+          persist-credentials: false
+      - name: Public baseline, then changed runtime and permanent delivery gates
+        run: |
+          mkdir -p evidence-artifacts
+          python scripts/evaluate_v3_decisions.py --source comparison-baseline --output evidence-artifacts/baseline.json
+          python scripts/evaluate_v3_decisions.py --output evidence-artifacts/changed.json --check
+          git rev-parse HEAD > evidence-artifacts/source-commit.txt
+          git archive --format=zip HEAD -o evidence-artifacts/source.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: jev-quality-evidence-${{ github.sha }}
+          path: evidence-artifacts/
+          retention-days: 14
+
+  installed-optionality:
+    name: Installed optionality / ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.11', '3.13']
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONIOENCODING: utf-8
+      BEYIN_V3_NO_SPAWN: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Fetch actual released baseline and build local test candidate (never publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release download v3.1.0 --repo avenoxai/avenoxbeyin --pattern 'beyin-v3-3.1.0.zip*' --dir baseline
+          python scripts/build_v3_release.py --version 3.1.1 --output candidate/beyin-v3-3.1.1.zip
+      - name: Clean install, all saved Jev modes, disable, rollback, interrupted recovery
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/verify_v3_jev_package.py --package candidate/beyin-v3-3.1.1.zip --baseline baseline/beyin-v3-3.1.0.zip | tee installed-proof.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: installed-jev-${{ matrix.os }}-${{ matrix.python }}-${{ github.sha }}
+          path: installed-proof.json
+          retention-days: 14

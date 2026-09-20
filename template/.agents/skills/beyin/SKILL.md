@@ -122,6 +122,32 @@ Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 50
 
 Aralık bir zamanlayıcı değildir: süre dolduktan sonraki istemci olayında kontrol yapılır. Uygulamalar kapalıyken çalışmaz. Seyrek kontrol veya manuel modda bilgi gerektiğinde `context` komutuyla kaynağı tazele; eski oturum bağlamını güncel varsayma. Önceden başlamış iş bitmiş olabilir; kapatma sonraki işleri durdurur.
 
-Bu V3 motoru Luna, Sonnet veya başka bir modele otomatik çağrı yapmaz. Yerel kontrol token tüketmez; ajanın yazdığı sonuçlar ve okuduğu/eklenen bağlam istemcinin kullanımına girer. Karakter sınırı token sayısı veya ücret garantisi değildir. Kullanıcının ayrıca kurduğu 15 dakikalık ajan otomasyonu bu ayarla yönetilmez; onu ayrı incele. İstek olmadan ücretli zamanlayıcı, model runner veya yeni bağımlılık ekleme.
+Varsayılan V3 motoru Luna, Sonnet veya başka bir modele otomatik çağrı yapmaz. Kullanıcının ayrıca açıkça etkinleştirdiği Jev auto_context özelliği bunun dışında, sınırlı ve opsiyonel uzak danışmadır. Yerel kontrol token tüketmez; ajanın yazdığı sonuçlar ve okuduğu/eklenen bağlam istemcinin kullanımına girer. Karakter sınırı token sayısı veya ücret garantisi değildir. Kullanıcının ayrıca kurduğu 15 dakikalık ajan otomasyonu bu ayarla yönetilmez; onu ayrı incele. İstek olmadan ücretli zamanlayıcı, model runner veya yeni bağımlılık ekleme.
 
 V3.1: `doctor` içindeki `updates` en son sürüm kontrolünü gösterir; ağ hatası güncel olunduğunu kanıtlamaz. Yalnız sürüm sorusunda `beyin.py update --check --metadata-only` kullan. Güncelleme talebini beyin-guncelle skill'ine yönlendir.
+
+
+## Opsiyonel Jev ve kaynaklı karar incelemesi
+
+Jev varsayılan kapalıdır. Kullanıcı istemeden açma, API anahtarı isteme veya her tur
+yeni danışma işi kurma. `python3 beyin.py jev status` ile mevcut ayarı oku.
+Kullanıcı kapatmayı istediğinde `python3 beyin.py jev off` çalıştır ve sonucu doğrula.
+Açık proje içinde isteğe bağlı arama: `python3 beyin.py context "konu" --project PROJE --jev`.
+Otomatik tur danışması ayrıca `jev on --enable auto_context` gerektirir.
+
+Önerilen kalıcı bilgi için önce özgün kaynağı, kapsamı, tarihi ve tam alıntıyı incele.
+Kullanıcı bu danışmanı etkinleştirmişse `python3 beyin.py jev-memory --project PROJE
+--file PROPOSAL_JSON` mevcut `review` özelliği altında tek istekte destek, kesinlik,
+bilgi türü ve önceki kayıtla ilişkiyi değerlendirebilir. JSON: `status: proposed`,
+`project`, `claim`, `evidence` listesinde `record_id`, `source_sha256`, `quote`;
+isteğe bağlı `prior_record_ids` en fazla dört aynı-proje kaydıdır.
+
+Sonuç hiçbir zaman kayıt onayı veya görev tamamlandığının kanıtı değildir. Geçici
+fikirleri tercihe dönüştürme, başka projedeki farkı çelişki sayma. Belirsiz, eski,
+iptal edilmiş veya tam bağlamı sığmayan kaynakları açıp incele. Son karardan sonra
+yalnız gerekli `note-create`, `task-update` ve receipt akışını kullan. Jev olmadan
+aynı kaynak incelemesini mevcut konuşmada yap; temel hafıza akışını durdurma.
+
+`remote_allowed: false` kaydı yerelde tutar, başlığı dahil Jev'e göndermez.
+`visibility: private` otomatik bağlama da girmez. Kullanıcının mahremiyetini model
+puanıyla aşma. Yerel devam referanslarını geçmiş konuşmanın tamamı gibi sunma.

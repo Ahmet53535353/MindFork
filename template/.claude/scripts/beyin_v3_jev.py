@@ -5,6 +5,7 @@ import json
 
 import beyin_v3_jev_client as client
 from beyin_v3_secrets import redact
+from beyin_v3 import pack_context
 
 
 def _safe(store, value):
@@ -26,49 +27,86 @@ def _fresh(store, records):
 
 
 def _clear(advice, code):
-    return dict(advice, scores={}, facet_scores={}, degraded=True,
+    return dict(advice, scores={}, facet_scores={}, relations={}, degraded=True,
                 diagnostics=advice.get('diagnostics', []) + [code])
+
+
+def remote_allowed(record):
+    """Local-only is a data policy, not a lower ranking or permission to send a title."""
+    return (record.get('visibility') != 'private' and record.get('remote_allowed', True) is True
+            and record.get('sensitivity', 'internal') in ('public', 'internal', 'normal'))
+
+
+def _signature(records):
+    # Include index-only policy metadata as well as the source revision and hash.
+    return {r['id']: hashlib.sha256(json.dumps({k: v for k, v in r.items() if k not in ('text', 'text_truncated')}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            for r in records}
+
+
+def _interleave(groups):
+    """Round-robin coverage without a local-only prefix that can consume all slots."""
+    seen, result = set(), []
+    for offset in range(max((len(group) for group in groups), default=0)):
+        for group in groups:
+            if offset < len(group) and group[offset]['id'] not in seen:
+                record = group[offset]
+                result.append(record)
+                seen.add(record['id'])
+    return result
+
+
+MANUAL_POOL = 16
+MANUAL_EXCERPT = 800
 
 
 def advise_context(store, query, *, project, audience='internal', statuses=None,
                    limit=5, budget_chars=8000, transport=None):
-    """Only rerank the delivered local candidates; never broaden eligibility."""
+    """Retrieve a bounded pool, judge permitted cards, then pack final source records."""
     if not isinstance(project, str) or not project.strip():
         raise ValueError('advisor_requires_explicit_project')
     if audience not in ('public', 'internal'):
         raise ValueError('advisor_private_audience_not_supported')
-    params = dict(project=project, audience=audience, statuses=statuses,
-                  limit=limit, budget_chars=budget_chars)
-    result = store.retrieve(query, **params)
-    records = result['records']
-    before = [(r['id'], r['revision'], r['source_sha256']) for r in records]
+    params = dict(project=project, audience=audience, statuses=statuses)
+    result = store.retrieve(query, **params, limit=limit, budget_chars=budget_chars)
     mode = client.inspect_config(store.state_dir)
-    if not mode['valid'] or mode['mode'] == 'off':
-        result['jev'] = dict(mode=mode['mode'], degraded=not mode['valid'],
+    if not mode['valid'] or mode['mode'] == 'off' or 'context' not in mode.get('features', []):
+        result['jev'] = dict(mode='off', degraded=not mode['valid'],
                              diagnostics=mode.get('diagnostics', []), scores={})
         return result
+    records = store.candidates(query, **params, limit=MANUAL_POOL)
+    before = _signature(records)
+    remote = [r for r in records if remote_allowed(r)]
+    # A local-only note needs meaningful local evidence; common-word matches don't
+    # gain unconditional admission merely because the provider cannot inspect them.
+    local_only = [r for r in store.candidates(query, **params, strict=True, limit=MANUAL_POOL)
+                  if not remote_allowed(r)]
     try:
-        cards = [dict(id=r['id'], title=r.get('title', ''), statement=r['text'],
-                      scope='project:' + project, domains=[r.get('kind', 'note')]) for r in records]
+        cards = [dict(id=r['id'], title=r.get('title', '')[:160], statement=json.dumps(dict(text=r['text'][:MANUAL_EXCERPT],
+                      excerpt_truncated=len(r['text']) > MANUAL_EXCERPT, project=r.get('project'), status=r.get('status'), updated_at=r.get('updated_at')), ensure_ascii=False),
+                      scope='project:' + project, domains=[r.get('kind', 'note')]) for r in remote]
         _safe(store, [query, cards])
     except (ValueError, OSError):
         result['jev'] = _clear({'mode': mode['mode']}, 'advisor_sensitive_or_invalid_input')
         return result
+    # Semicolon-separated subrequests are independent facets, not fabricated topics.
+    facets = [part.strip() for part in query.split(';') if part.strip()]
+    facets = facets if 1 <= len(facets) <= 3 else [query]
     advice = client.evaluate(store.state_dir, query, cards, scope='project:' + project,
-                             source_versions={r['id']: [r['source_sha256'], r['revision']] for r in records},
-                             transport=transport)
-    # Re-run all eligibility gates, including index revisions/supersession, after I/O.
-    current = store.retrieve(query, **params)
-    after = [(r['id'], r['revision'], r['source_sha256']) for r in current['records']]
-    if before != after or not _fresh(store, records):
-        result = current
+                             source_versions=before, facets=facets, transport=transport)
+    current = store.candidates(query, **params, limit=MANUAL_POOL)
+    if before != _signature(current) or not _fresh(store, records):
+        result = store.retrieve(query, **params, limit=limit, budget_chars=budget_chars)
         advice = _clear(advice, 'source_or_index_changed')
     elif client.inspect_config(store.state_dir) != mode:
         advice = _clear(advice, 'configuration_changed')
     elif advice['mode'] == 'on' and not advice['degraded']:
-        # Same set, same budget, source citations travel with their records.
-        result['records'] = sorted(records, key=lambda r: -advice['scores'].get(r['id'], 0))
-        result['citations'] = [dict(id=r['id'], source=r['source']) for r in result['records']]
+        groups = []
+        for scores in advice.get('facet_scores', {}).values():
+            # Score is an expected ordinal rubric level, NOT probability of correctness.
+            groups.append(sorted([r for r in remote if scores.get(r['id'], 0) >= 1.0],
+                                 key=lambda r: (-scores.get(r['id'], 0), r['id'])))
+        ranked = _interleave([_interleave(groups), local_only])
+        result = pack_context(ranked, limit, budget_chars, result.get('stale_count', 0))
     result['jev'] = advice
     return result
 
@@ -87,7 +125,7 @@ AUTO_KEEP = 0.4
 AUTO_RESCUE = 0.6
 
 
-def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.0, transport=None):
+def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.0, transport=None, project=None):
     """Per-turn hook path: strict local matches plus a loose lexical pool, judged in one call.
 
     The strict matcher wants two shared words, so a paraphrased question finds nothing. The
@@ -100,23 +138,43 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
             or not isinstance(query, str) or len(query.strip()) < AUTO_MIN_CHARS):
         return context
     strict = context.get('records') or []
-    known = {r['id'] for r in strict}
-    loose = [r for r in store.context_for(harness, query, limit=AUTO_POOL, budget_chars=budget_chars)['records']
-             if r['id'] not in known and not str(r.get('source', '')).startswith(store.STRICT_EXCLUDE)]
-    records = (strict + loose)[:AUTO_POOL]
-    keys = {'k' + str(i): r for i, r in enumerate(records) if str(r.get('text', '')).strip()}
-    if not keys or any(r.get('visibility') == 'private' for r in records):
+    if any(r.get('visibility') == 'private' for r in strict):
         return context
-    cards = [dict(id=k, title=str(r.get('title', '')), excerpt=r['text'][:AUTO_EXCERPT]) for k, r in keys.items()]
+    eligible = _eligible(store, project)
+    valid_strict = [eligible[r['id']] for r in strict if r['id'] in eligible]
+    if _signature(strict) != _signature(valid_strict):
+        context = store.context_for(harness, query, project=project, strict=True, budget_chars=budget_chars)
+        strict = context['records']
+    known = {r['id'] for r in strict}
+    loose = [r for r in store.candidates(query, project=project, limit=AUTO_POOL * 2)
+             if r['id'] not in known and not str(r.get('source', '')).startswith(store.STRICT_EXCLUDE)]
+    # Local-only records get local eligibility, but consume no remote-candidate slot.
+    union = _interleave([strict, loose])
+    records = [r for r in union if remote_allowed(r)][:AUTO_POOL]
+    records += [r for r in strict if not remote_allowed(r)][:AUTO_LIMIT]
+    keys = {'k' + str(i): r for i, r in enumerate(records) if str(r.get('text', '')).strip() and remote_allowed(r)}
+    if not keys:
+        return context
+    before = _signature(records)
+    cards = [dict(id=k, title=str(r.get('title', ''))[:160], excerpt=r['text'][:AUTO_EXCERPT],
+                  project=str(r.get('project') or ''), status=str(r.get('status') or ''),
+                  updated_at=str(r.get('updated_at') or '')) for k, r in keys.items()]
     outcome = dict(event='auto_context', mode=mode['mode'], strict=len(strict), loose=len(records) - len(strict))
     try:
         _safe(store, [query, cards])
     except (ValueError, OSError):
         client.log_event(store.state_dir, dict(outcome, outcome='skipped_sensitive'))
         return context
-    advice = client.evaluate(store.state_dir, query[:AUTO_PROMPT], cards, scope='auto', purpose='auto_context',
-                             source_versions={k: [r['source_sha256'], r['revision']] for k, r in keys.items()},
+    advice = client.evaluate(store.state_dir, query[:AUTO_PROMPT], cards, scope='project:' + project if project else 'auto', purpose='auto_context',
+                             source_versions={k: _signature([r])[r['id']] for k, r in keys.items()},
                              transport=transport, timeout_cap=timeout_cap)
+    # Reapply index-only permissions/scope/supersession too, even on transport failure.
+    current = _eligible(store, project)
+    surviving = [current[r['id']] for r in records if r['id'] in current]
+    if before != _signature(surviving) or not _fresh(store, records):
+        return store.context_for(harness, query, project=project, strict=True, budget_chars=budget_chars)
+    if client.inspect_config(store.state_dir) != mode:
+        return context
     scores = advice['scores']
     if advice['degraded'] or advice['mode'] == 'off' or not scores:
         return context
@@ -131,15 +189,14 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
         return context
     if not _fresh(store, records) or client.inspect_config(store.state_dir) != mode:
         return context
-    keep.sort(key=lambda r: -by_record.get(r['id'], 1.0))
-    selected, used = [], 0
-    for record in keep[:AUTO_LIMIT]:
-        size = len(json.dumps(record, ensure_ascii=False)) + len(record['id']) + len(record['source']) + 24
-        if used + size <= budget_chars:
-            selected.append(record)
-            used += size
-    result = dict(context, records=selected, citations=[dict(id=r['id'], source=r['source']) for r in selected],
-                  abstained=not selected, used_chars=used, jev=dict(dropped=dropped, added=rescued))
+    ranked_remote = sorted([r for r in keep if remote_allowed(r)],
+                           key=lambda r: (-by_record.get(r['id'], 0), r['id']))
+    ranked_local = [r for r in keep if not remote_allowed(r) and r['id'] in known]
+    packed = pack_context(_interleave([ranked_remote, ranked_local]), AUTO_LIMIT, budget_chars)
+    selected_ids = {r['id'] for r in packed['records']}
+    # Report delivered membership changes, not pre-budget model intentions.
+    result = dict(context, **packed)
+    result['jev'] = dict(dropped=len(known - selected_ids), added=len(selected_ids - known))
     return result
 
 
@@ -186,19 +243,32 @@ def review_candidate(store, proposal, *, project, transport=None):
         raise ValueError('proposal_requires_evidence')
 
     refs = _verified_evidence(store, evidence, project)
-    _safe(store, proposal)
-    versions = {r['id']: [r['source_sha256'], r['revision']] for r in refs}
     mode = client.inspect_config(store.state_dir)
+    enabled = mode['valid'] and mode['mode'] != 'off' and 'review' in mode.get('features', [])
+    if enabled and not all(remote_allowed(r) for r in refs):
+        return dict(status='advisory_only', approved=False, memory_written=False,
+                    jev=_clear({'mode': mode['mode']}, 'source_local_only'))
+    if enabled:
+        _safe(store, proposal)
+    versions = _signature(refs)
+    contexts = []
+    if enabled:
+        try:
+            contexts = _context(refs, evidence)
+            _safe(store, contexts)
+        except (ValueError, OSError):
+            return dict(status='advisory_only', approved=False, memory_written=False,
+                        jev=_clear({'mode': mode['mode']}, 'source_context_unavailable'))
     card = dict(id='proposal', title='Unapproved proposal', scope='project:' + project, domains=[],
                 statement=json.dumps({'stored_claim': proposal['claim'],
-                                      'evidence_quotes': [e['quote'] for e in evidence]}, ensure_ascii=False))
+                                      'evidence_quotes': [e['quote'] for e in evidence], 'source_context': contexts}, ensure_ascii=False))
     result = client.evaluate(store.state_dir, proposal['claim'], [card], scope='project:' + project,
                              source_versions=versions, purpose='evidence_review',
                              facets=['Do the exact quotes support the entire claim in its original scope?'],
                              transport=transport)
     try:
         now = _verified_evidence(store, evidence, project)
-        if versions != {r['id']: [r['source_sha256'], r['revision']] for r in now}:
+        if versions != _signature(now):
             raise ValueError('evidence_changed')
         if client.inspect_config(store.state_dir) != mode:
             raise ValueError('configuration_changed')
@@ -208,22 +278,24 @@ def review_candidate(store, proposal, *, project, transport=None):
 
 
 BATCH = 8            # claims per request; hard items weaken late in a longer list
-CONTEXT_CHARS = 400  # source text kept on each side of a quote
+CONTEXT_CHARS = 400  # retained public constant; new checks require complete bounded context
 CONTEXT_LIMIT = 4000
 CONFIDENCE_GATE = 0.8
 VERDICTS = dict(supports='supported', contradicts='contradicted', says_nothing='insufficient')
 
 
+def source_context(record):
+    """Complete indexed text plus canonical scope/lifecycle metadata, never a summary."""
+    value = dict(text=record['text'], metadata={k: record[k] for k in
+                 ('project', 'status', 'kind', 'updated_at') if k in record})
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
 def _context(refs, citations):
-    """Text around each quote. A literal quote can sit in a plan its own note cancels."""
-    windows, used = [], 0
-    for record, cite in zip(refs, citations):
-        text, quote = record['text'], cite['quote']
-        at = text.index(quote)
-        window = text[max(0, at - CONTEXT_CHARS):at + len(quote) + CONTEXT_CHARS].strip()
-        if window != quote.strip() and window not in windows and used + len(window) <= CONTEXT_LIMIT:
-            windows.append(window)
-            used += len(window)
+    """A cancelled status or far-away correction must not disappear around a quote."""
+    windows = list(dict.fromkeys(source_context(r) for r in refs))
+    if sum(len(text) for text in windows) > CONTEXT_LIMIT:
+        raise ValueError('source_context_incomplete')
     return windows
 
 
@@ -237,7 +309,10 @@ def verify_answer(store, claims, *, project, transport=None):
     if len(raw) > 32000:
         raise ValueError('claims_too_large')
     claims = json.loads(raw)
-    _safe(store, claims)
+    mode = client.inspect_config(store.state_dir)
+    enabled = mode['valid'] and mode['mode'] != 'off' and 'answer' in mode.get('features', [])
+    if enabled:
+        _safe(store, claims)
     # Validate the whole request before any network call.
     for claim in claims:
         if (not isinstance(claim, dict) or set(claim) != {'text', 'citations'}
@@ -262,14 +337,24 @@ def verify_answer(store, claims, *, project, transport=None):
             item['diagnostics'] = ['citation_not_current_or_exact']
             continue
         item['mechanical_verified'] = True
-        context = _context(refs, claim['citations'])
+        if not enabled:
+            item.update(verdict='uncertain', diagnostics=['semantic_off'])
+            continue
+        if not all(remote_allowed(r) for r in refs):
+            item.update(verdict='uncertain', diagnostics=['source_local_only'])
+            continue
+        try:
+            context = _context(refs, claim['citations'])
+        except ValueError:
+            item.update(verdict='uncertain', diagnostics=['source_context_incomplete'])
+            continue
         try:
             _safe(store, context)
         except ValueError:
             # The surrounding text goes to the provider too, so it passes the same gate.
             item.update(verdict='degraded', diagnostics=['context_sensitive'])
             continue
-        snapshots[index] = {r['id']: [r['source_sha256'], r['revision']] for r in refs}
+        snapshots[index] = _signature(refs)
         items[index] = dict(id='k' + str(index), claim=claim['text'],
                             quotes=[c['quote'] for c in claim['citations']], context=context)
     if items:
@@ -297,12 +382,12 @@ def verify_answer(store, claims, *, project, transport=None):
             item, advice = results[index], advices[index]
             try:
                 refs = _verified_evidence(store, claims[index]['citations'], project, by_id)
-                if versions != {r['id']: [r['source_sha256'], r['revision']] for r in refs}:
+                if versions != _signature(refs):
                     raise ValueError('evidence_changed')
                 if client.inspect_config(store.state_dir) != mode:
                     raise ValueError('configuration_changed')
             except (ValueError, OSError):
-                item.update(verdict='degraded', diagnostics=['source_or_configuration_changed'])
+                item.update(verdict='degraded', mechanical_verified=False, diagnostics=['source_or_configuration_changed'])
                 continue
             if advice.get('degraded'):
                 item.update(verdict='degraded', diagnostics=advice.get('diagnostics', []))

@@ -152,18 +152,18 @@ class AnswerTest(unittest.TestCase):
         sent = self.calls[0]['state']['items']
         self.assertEqual(sent['k0']['evidence']['quotes'], ['the newsletter goes out on Monday'])
         self.assertIn('cancelled in March', sent['k0']['evidence']['source_context'][0])
-        # A quote that is the whole record has nothing around it to add.
-        self.assertNotIn('source_context', sent['k1']['evidence'])
+        # Even a whole-record quote retains its original project/lifecycle metadata.
+        self.assertIn('project', sent['k1']['evidence']['source_context'][0])
 
-    def test_long_sources_send_a_window_not_the_note(self):
+    def test_incomplete_long_source_context_abstains_before_network(self):
         self.config('on')
         row = self.note('long', 'START ' + 'filler words ' * 200 + 'Quartz keeps notes short. ' + 'more filler ' * 200 + 'END')
-        self.verify([dict(text='Quartz notes are short.', citations=[dict(
+        result = self.verify([dict(text='Quartz notes are short.', citations=[dict(
             record_id='long', source_sha256=row['source_sha256'], quote='Quartz keeps notes short.')])])
-        window = self.calls[0]['state']['items']['k0']['evidence']['source_context'][0]
-        self.assertLessEqual(len(window), 2 * 400 + len('Quartz keeps notes short.'))
-        self.assertNotIn('START', window)
-        self.assertNotIn('END', window)
+        self.assertFalse(self.calls)
+        self.assertTrue(result['claims'][0]['mechanical_verified'])
+        self.assertEqual(result['claims'][0]['verdict'], 'uncertain')
+        self.assertEqual(result['claims'][0]['diagnostics'], ['source_context_incomplete'])
 
     def test_sensitive_text_around_a_quote_is_never_sent(self):
         self.config('on')
