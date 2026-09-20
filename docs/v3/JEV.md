@@ -190,3 +190,26 @@ kaçırıyordu. Paketleme bedelsiz değildir: zor iddialar paketin sonlarında
 güven kaybedip `uncertain` olabiliyor (iddia başına tek istekte 24/24, pakette
 18-21/24). Bu küçük bir yapılandırma denemesidir; gerçek kasalarda genel
 doğruluk, maliyet avantajı veya kullanıcı kabulü iddia edilmez.
+
+## Her turda otomatik bağlam (`auto_context`)
+
+Diğer üç özellik elle çağrılır. Bu özellik hook'un içinde, her mesajda çalışır; bu yüzden bir mod seçmek onu **açmaz**, ayrıca istenir:
+
+```sh
+python beyin.py jev shadow --enable auto_context   # önce ölç
+python beyin.py jev on --enable auto_context       # sonra uygula
+python beyin.py jev on --disable auto_context      # yalnız bunu kapat
+```
+
+Neden var: yerel "strict" eşleşme bir notu ancak iki ortak kelimeyle getirir. Bu, alakasız notu dışarıda tutar ama başka kelimelerle sorulan soruyu da kaçırır ("deploy sonrası eski sürüme nasıl dönerim" sorusu, içinde "geri alma" yazan notu bulamaz). Açıkken hook iki aşamalı çalışır:
+
+1. Yerel arama, strict eşleşmelere ek olarak tek ortak kelimeli en fazla 8 adaylık gevşek bir havuz çıkarır. Havuz aynı görünürlük, güven, tazelik ve supersede kapılarından geçer; `daily/` ve `private` kayıtlar havuza girmez.
+2. Tek bir Jev isteği bir konu kapısı ("bu mesaj somut bir konu mu, selam/onay mı") ve aday başına bir evet/hayır sorar.
+
+Sonuç `on` kipinde şöyle uygulanır: konu kapısı 0,25 altındaysa hiçbir not eklenmez. Strict eşleşme 0,4 altına düşerse çıkarılır. Gevşek aday yalnız 0,6 ve üstünde eklenir. En fazla 5 kayıt, aynı karakter bütçesi. Hiçbir şey değişmiyorsa yerel sonuç olduğu gibi kullanılır. `shadow` kipinde çağrı yapılır, sonuç değişmez, yalnız sayaçlar yazılır (`dropped`, `rescued`).
+
+Yerel sonuca geri dönülen durumlar: 12 karakterden kısa mesaj, yerel sır örüntüsü eşleşmesi, eksik anahtar, zaman aşımı, 429, bozuk yanıt, çağrı sırasında değişen kaynak, kill switch. Hook en fazla 2 saniye bekler ve kendi 5 saniyelik sınırına yaklaşmışsa hiç çağırmaz. `jev.json` yoksa Jev modülü içe aktarılmaz.
+
+Bedeli açıkça: her mesajda mesaj metni ve aday notların başlığı ile ilk 600 karakteri sağlayıcıya gider. İstanbul'dan tek atımlık çağrı ortanca 1,3 saniye, yüzde onu 2 saniyenin üstünde sürdü (sunucu ABD batı kıyısında); bu gecikme her eşleşen mesaja eklenir. İstek başına yaklaşık 600-1.500 girdi token'ı harcanır.
+
+Ölçüm (2026-09-20, canlı Jev, 12 sentetik Türkçe/İngilizce not, 26 mesaj, tek koşu): ilgili notu bulma 13/17'den 15/17'ye çıktı, alakasız not enjeksiyonu 2'den 1'e indi, strict'in bulduğu hiçbir ilgili not kaybedilmedi, bir çağrı zaman aşımına uğrayıp yerel sonuca döndü. Bir yanlış ekleme oldu ("bu fonksiyonu test için refactor et" mesajına test stratejisi notu). Bu sentetik bir ölçümdür ve Jev aynı isteğe her seferinde biraz farklı puan verir; gerçek kasada isabet daha düşük çıkabilir. Kendi notlarınızda önce `shadow` ile birkaç gün sayaçlara bakın, sonra `on` yapın.

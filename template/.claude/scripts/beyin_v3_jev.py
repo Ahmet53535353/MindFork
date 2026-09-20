@@ -73,6 +73,76 @@ def advise_context(store, query, *, project, audience='internal', statuses=None,
     return result
 
 
+AUTO_MIN_CHARS = 12  # a one or two word prompt carries no reliable topic
+AUTO_PROMPT = 2000
+AUTO_EXCERPT = 600
+AUTO_POOL = 8
+AUTO_LIMIT = 5
+# Live synthetic calibration: greetings scored <= 0.16 on the gate and real topics >= 0.39;
+# past the gate, off-topic notes stayed <= 0.31 and on-topic ones >= 0.76. A strict local match
+# already has lexical evidence, so it is kept unless clearly off topic. A loose match enters
+# only when Jev is confident. Shadow mode is how a vault checks these on its own notes.
+AUTO_GATE = 0.25
+AUTO_KEEP = 0.4
+AUTO_RESCUE = 0.6
+
+
+def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.0, transport=None):
+    """Per-turn hook path: strict local matches plus a loose lexical pool, judged in one call.
+
+    The strict matcher wants two shared words, so a paraphrased question finds nothing. The
+    loose pool passes the same visibility, trust, freshness and supersession gates; only the
+    word-overlap bar is lower, and a loose record enters only above AUTO_RESCUE. Any failure
+    or doubt returns the strict result untouched.
+    """
+    mode = client.inspect_config(store.state_dir)
+    if (not mode['valid'] or mode['mode'] == 'off' or 'auto_context' not in mode['features']
+            or not isinstance(query, str) or len(query.strip()) < AUTO_MIN_CHARS):
+        return context
+    strict = context.get('records') or []
+    known = {r['id'] for r in strict}
+    loose = [r for r in store.context_for(harness, query, limit=AUTO_POOL, budget_chars=budget_chars)['records']
+             if r['id'] not in known and not str(r.get('source', '')).startswith(store.STRICT_EXCLUDE)]
+    records = (strict + loose)[:AUTO_POOL]
+    keys = {'k' + str(i): r for i, r in enumerate(records) if str(r.get('text', '')).strip()}
+    if not keys or any(r.get('visibility') == 'private' for r in records):
+        return context
+    cards = [dict(id=k, title=str(r.get('title', '')), excerpt=r['text'][:AUTO_EXCERPT]) for k, r in keys.items()]
+    outcome = dict(event='auto_context', mode=mode['mode'], strict=len(strict), loose=len(records) - len(strict))
+    try:
+        _safe(store, [query, cards])
+    except (ValueError, OSError):
+        client.log_event(store.state_dir, dict(outcome, outcome='skipped_sensitive'))
+        return context
+    advice = client.evaluate(store.state_dir, query[:AUTO_PROMPT], cards, scope='auto', purpose='auto_context',
+                             source_versions={k: [r['source_sha256'], r['revision']] for k, r in keys.items()},
+                             transport=transport, timeout_cap=timeout_cap)
+    scores = advice['scores']
+    if advice['degraded'] or advice['mode'] == 'off' or not scores:
+        return context
+    passed = scores['topical'] >= AUTO_GATE
+    by_record = {r['id']: scores[k] for k, r in keys.items()}
+    keep = [r for r in records if passed and by_record.get(r['id'], 1.0 if r['id'] in known else 0.0)
+            >= (AUTO_KEEP if r['id'] in known else AUTO_RESCUE)]
+    dropped = len([r for r in strict if r not in keep])
+    rescued = len([r for r in keep if r['id'] not in known])
+    client.log_event(store.state_dir, dict(outcome, outcome='scored', gate_passed=passed, dropped=dropped, rescued=rescued))
+    if advice['mode'] != 'on' or not (dropped or rescued):
+        return context
+    if not _fresh(store, records) or client.inspect_config(store.state_dir) != mode:
+        return context
+    keep.sort(key=lambda r: -by_record.get(r['id'], 1.0))
+    selected, used = [], 0
+    for record in keep[:AUTO_LIMIT]:
+        size = len(json.dumps(record, ensure_ascii=False)) + len(record['id']) + len(record['source']) + 24
+        if used + size <= budget_chars:
+            selected.append(record)
+            used += size
+    result = dict(context, records=selected, citations=[dict(id=r['id'], source=r['source']) for r in selected],
+                  abstained=not selected, used_chars=used, jev=dict(dropped=dropped, added=rescued))
+    return result
+
+
 def _eligible(store, project):
     # Existing runtime gates enforce scope, visibility, trust, freshness and supersession.
     eligible = store._retrieve('', project=project, audience='internal',
