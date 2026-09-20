@@ -27,7 +27,7 @@ python beyin.py jev shadow --disable answer
 | Özellik | Kullanan komut | Varsayılan |
 | --- | --- | --- |
 | `context` | `context --jev` | açık |
-| `review` | `jev-review` | açık |
+| `review` | `jev-review`, `jev-memory` | açık |
 | `answer` | `jev-answer` | açık |
 | `auto_context` | her turdaki hook yolu; [aşağıda](#her-turda-otomatik-bağlam-auto_context), açıkça etkinleştirilmedikçe kapalı | kapalı |
 
@@ -59,11 +59,13 @@ python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state context
 
 Kurulu kasada karşılığı: `python beyin.py context "kısa notlar" --project demo --jev --json`. `--json`, danışman teşhislerini de gösterir. İnceleme için `python beyin.py jev-review --project demo --file proposal.json --json` kullanın.
 
-`--jev` ve açık proje kimliği birlikte gerekir. Bu çağrı sorguyu ve yerel aramanın seçtiği en fazla belirtilen sayıdaki kayıt metnini sağlayıcıya gönderir. `internal` görünürlük de gönderilebilir; yalnız kamu metni için `--audience public` kullanın. `private`, kapsam dışı, güvenilmeyen, değişmiş ve superseded kayıtlar gönderilmez. Yerel sır örüntüsü eşleşirse çağrı yapılmaz; örüntü taraması tüm hassas bilgileri tanıma garantisi değildir.
+`--jev` ve açık proje kimliği birlikte gerekir. Bu çağrı yerel aramanın en fazla 16 adayından uzaktan değerlendirmeye izin verilenlerin başlıklarını (160 karakter), metin kesitlerini (800 karakter), proje/durum/tarih bilgisini ve sorguyu gönderir. Son çıktıdaki kayıt sayısı ayrı bir sınırdır. `internal` görünürlük de gönderilebilir; yalnız kamu metni için `--audience public` kullanın. `private`, kapsam dışı, güvenilmeyen, değişmiş ve superseded kayıtlar gönderilmez. Yerel sır örüntüsü eşleşirse çağrı yapılmaz; örüntü taraması tüm hassas bilgileri tanıma garantisi değildir.
 
 - `off`: ağ/anahtar/cache erişimi yok.
 - `shadow`: puanlar `jev` alanında; yerel sonuç ve sıralama korunur.
-- `on`: yalnız zaten teslim edilen aynı kayıt kümesi sıralanır. Yeni kayıt seçilmez, karakter bütçesi değişmez. Kelime aramasının kaçırdığı kaydı bulma iddiası yoktur.
+- `on`: aday havuzundan seçim yapılır; ilk yerel çıktıya sığmayan ilgili aday alınabilir. Noktalı virgülle ayrılmış en fazla üç alt istek ayrı değerlendirilir. Karakter bütçesi değişmez. Yerel aday aramasının hiç bulmadığı kaydı Jev bulamaz.
+
+`remote_allowed: false` veya `sensitivity: sensitive` kaynak metaverisi, başlık dahil kaydın Jev'e gönderilmesini engeller. `remote_allowed` için metin değil JSON/YAML boolean kullanın. Yerelde uygun bulunan böyle kaynaklar, uzakta seçilenlerle dönüşümlü paketlenir; bütün kotayı baştan kaplayamazlar. `aliases: ["ses ofseti", "audio offset"]` yerel aday aramasını genişletir; izin kapılarını aşmaz.
 
 Çağrıdan sonra kaynak hashleri, indeks revizyonları ve erişim koşulları yeniden kontrol edilir. Değişim varsa puan atılır ve güncel yerel sonuç kullanılır. Timeout, 429, eksik anahtar veya bozuk yanıt yerel sonuçları engellemez. Teşhislerde ham servis hataları bulunmaz.
 
@@ -89,6 +91,46 @@ python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state jev-rev
 ```
 
 1–8 kanıt, tam alıntı, aynı proje ve güncel hash zorunludur; alıntı hem indeks metninde hem gerçek kaynakta bulunmalıdır. Kaynak senkronizasyonu eksikse inceleme durur. Yanıt her zaman `approved: false`, `memory_written: false` içerir. Sonuç yalnız iddianın alıntıyla desteklenme puanıdır; başka kartlarla otomatik birleştirme/çelişki çözümü yapmaz. Ayrı inceleyen kişi/ajan kapsam ve zaman sınırını değerlendirir, gerekirse mevcut `note-create` akışını kullanır.
+
+## Kaynaklı hafıza değerlendirmesi (`jev-memory`)
+
+`review` özelliğini kullanır ve aynı `proposal.json` biçimini kabul eder:
+
+```sh
+python beyin.py jev-memory --project demo --file proposal.json --json
+```
+
+İsteğe bağlı `prior_record_ids: ["eski-karar"]` alanıyla en fazla dört eski kayıt
+belirtilebilir. Alan yoksa aynı projedeki uygun yerel adaylardan seçilir; boş liste
+eski kayıt karşılaştırmasını kapatır. Bir istekte üç bağımsız Choice sorusu
+(destek, kesinlik/niyet, bilgi türü) ve eski kayıt başına bir ilişki sorusu sorulur.
+İlişkiler: tekrar, ayrıntılandırma, değişen karar, çelişki veya ilgisiz kayıt.
+
+Herhangi bir cevap düşük güvenliyse, kaynak iddiayı desteklemiyorsa, ifade kesin
+değilse veya eski kayıtla çelişiyorsa `route: inspect_sources` döner. Değişen karar
+için kaynak tarihleri ayrıca kodda kontrol edilir. Uygun aday bile yalnız
+`candidate_for_agent_review` olur; `approved`, `memory_written`, `task_created`
+ve `task_completed` her zaman `false` kalır. Aktif ajan kaynağı inceler ve mevcut
+yetkisi kapsamında normal kayıt akışını kullanır.
+
+`off` modunda kaynak/alıntı kontrolü yereldir; anahtar, Jev cache veya sağlayıcı
+erişimi olmaz. `shadow` değerlendirme yapabilir ama boyutları ve yönlendirmeyi
+uygulamaz. İzinli kanıtların ve eski kayıtların tam metni gönderilir; kaynak
+başına 4.000 karakter veya toplam istek bütçesi aşılırsa yerel incelemeye dönülür.
+Bir kaynak yerel-only ise bütün anlamsal değerlendirme atlanır.
+
+## Jev olmadan devam bağlamı
+
+Hook'un gerçekten teslim ettiği en fazla üç kaynak, aynı harness ve oturumda
+"onu da test et" gibi kısa devamlar için hatırlanır. Ham mesaj veya transcript
+kaydedilmez; yalnız kaynak kimliği, hash, revizyon, proje ve zaman tutulur.
+Somut konudan itibaren 20 dakika sonra süre dolar; belirsiz devamlar süreyi
+uzatmaz. Farklı proje, yeni konu, kaynak değişikliği veya izin kaybında kaynak
+devralınmaz. Konu ayırımı sınırlı Türkçe/İngilizce kelime kurallarıdır; genel
+dil anlama garantisi değildir. Bu yerel özellik Jev modlarından bağımsızdır.
+
+Güncel uygulama, araştırma bağlantıları, ölçüm ve sınırlar:
+[PR 69 inceleme kanıtı](decision-quality/REVIEW.md).
 
 ## Aktarılan çözümler ve ölçüm
 
@@ -140,11 +182,12 @@ Jev'de puanlar komşu iddialara sızıyordu. Bir paket `max_input_chars` sınır
 aşarsa ağ çağrısı yapılmadan ikiye bölünür. Hata veren bir istek yalnız kendi
 paketindeki iddiaları `degraded` yapar.
 
-Alıntıyla birlikte kaynak kaydında alıntının iki yanındaki en fazla 400'er
-karakter de gönderilir (iddia başına toplam 4.000 karakter). Alıntı birebir
+Alıntıyla birlikte kaynak kayıtlarının tam indeks metni ve sınırlı kapsam
+metaverisi gönderilir (iddia başına toplam 4.000 karakter). Tam bağlam sığmazsa
+kesilmez: iddia `uncertain` ve `source_context_incomplete` ile yerel incelemeye döner. Alıntı birebir
 doğru olup notun devamı tersini söyleyebilir ("eski plan ... bu plan iptal
 edildi"); yalnız alıntı gönderildiğinde böyle iddialar `supported` çıkıyordu.
-Bu pencere de aynı sır taramasından geçer; eşleşme varsa o iddia gönderilmez ve
+Bu bağlam da aynı sır taramasından geçer; eşleşme varsa o iddia gönderilmez ve
 `context_sensitive` ile `degraded` olur.
 
 Boş atıf veya eşleşmeyen hash/alıntı `insufficient` döndürür ve o iddia
@@ -153,7 +196,7 @@ bulunmalıdır. Diğer Jev komutlarındaki proje, görünürlük, güven ve sır
 kontrolleri geçerlidir. Bu açık komut `internal` kayıt alıntılarını ve çevresindeki
 metni sağlayıcıya gönderebilir; `private` kayıtlar elenir. Normal bağlam ve hook akışı değişmez.
 
-`mechanical_verified`, yalnız çağrı öncesindeki kaynak/alıntı eşleşmesini
+`mechanical_verified`, kaynak/alıntı eşleşmesini
 bildirir; anlamsal doğrulama değildir. `off` ve `shadow` modlarında anlamsal
 sonuç `uncertain` kalır. `on` modunda her iddia için tek bir seçim sorusu
 sorulur: kanıt iddiayı destekliyor mu, iddiayla çelişiyor mu, yoksa iddia
@@ -203,7 +246,7 @@ python beyin.py jev on --disable auto_context      # yalnız bunu kapat
 
 Neden var: yerel "strict" eşleşme bir notu ancak iki ortak kelimeyle getirir. Bu, alakasız notu dışarıda tutar ama başka kelimelerle sorulan soruyu da kaçırır ("deploy sonrası eski sürüme nasıl dönerim" sorusu, içinde "geri alma" yazan notu bulamaz). Açıkken hook iki aşamalı çalışır:
 
-1. Yerel arama, strict eşleşmelere ek olarak tek ortak kelimeli en fazla 8 adaylık gevşek bir havuz çıkarır. Havuz aynı görünürlük, güven, tazelik ve supersede kapılarından geçer; `daily/` ve `private` kayıtlar havuza girmez.
+1. Yerel arama, strict eşleşmelere ek olarak en fazla 16 gevşek aday bulur. İki grup dönüşümlü birleştirilir ve uzaktan değerlendirmeye izinli en fazla 8 kayıt seçilir. Yerel-only kayıtlar uzak aday kotasını tüketmez. Havuz aynı görünürlük, güven, tazelik ve supersede kapılarından geçer; `daily/` ve `private` kayıtlar havuza girmez.
 2. Tek bir Jev isteği bir konu kapısı ("bu mesaj somut bir konu mu, selam/onay mı") ve aday başına bir evet/hayır sorar.
 
 Sonuç `on` kipinde şöyle uygulanır: konu kapısı 0,25 altındaysa hiçbir not eklenmez. Strict eşleşme 0,4 altına düşerse çıkarılır. Gevşek aday yalnız 0,6 ve üstünde eklenir. En fazla 5 kayıt, aynı karakter bütçesi. Hiçbir şey değişmiyorsa yerel sonuç olduğu gibi kullanılır. `shadow` kipinde çağrı yapılır, sonuç değişmez, yalnız sayaçlar yazılır (`dropped`, `rescued`).
