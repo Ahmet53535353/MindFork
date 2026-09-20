@@ -88,10 +88,10 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: v3-release-bundle
-      - name: Offline contracts and retrieval gates
-        run: |
-          python -m unittest discover -s tests -p "v3_*test.py"
-          python scripts/evaluate_v3.py
+      - name: Offline contracts
+        run: python -m unittest discover -s tests -p "v3_*test.py"
+      - name: Retrieval gates
+        run: python scripts/evaluate_v3.py
       - name: Exact ZIP installation, V3.0.2 upgrade, rollback and recovery
         shell: bash
         run: python scripts/verify_v3_release.py --package "dist/beyin-v3-$VERSION.zip" --baseline baseline/beyin-v3-3.0.2.zip
