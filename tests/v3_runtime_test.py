@@ -2,6 +2,7 @@
 """Reliability gates with real temp directories/SQLite and synthetic records."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -75,6 +76,32 @@ class RuntimeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not initialized'):
             self.module.MemoryStore(missing, self.vault, read_only=True)
         self.assertFalse(missing.exists())
+
+    def test_read_only_reopen_rejects_wrong_and_unbound_vault(self):
+        other_vault = self.root / 'another-vault'
+        other_vault.mkdir()
+        with self.assertRaisesRegex(ValueError, 'another vault'):
+            self.module.MemoryStore(self.state, other_vault, read_only=True)
+        with self.store._connect() as db:
+            db.execute("DELETE FROM metadata WHERE key='vault_root'")
+        before = self.store.database.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'not bound'):
+            self.module.MemoryStore(self.state, self.vault, read_only=True)
+        self.assertEqual(self.store.database.read_bytes(), before)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX permission contract')
+    def test_read_only_retrieval_preserves_runtime_permissions(self):
+        self.store.ingest(self.record())
+        self.store.database.chmod(0o400)
+        self.state.chmod(0o500)
+        try:
+            read_only = self.module.MemoryStore(self.state, self.vault, read_only=True)
+            self.assertEqual(len(read_only.retrieve('Quartz observatory calibration')['records']), 1)
+            self.assertEqual(self.store.database.stat().st_mode & 0o777, 0o400)
+            self.assertEqual(self.state.stat().st_mode & 0o777, 0o500)
+        finally:
+            self.state.chmod(0o700)
+            self.store.database.chmod(0o600)
 
     def test_receipt_idempotency_and_collision(self):
         rec = self.record()

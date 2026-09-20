@@ -210,6 +210,14 @@ class ProductInstallationTest(unittest.TestCase):
         self.assertEqual(snapshot(self.vault), before_vault)
         self.assertEqual(snapshot(self.state), before_state)
 
+        note.unlink()
+        before_vault, before_state = snapshot(self.vault), snapshot(self.state)
+        deleted = self.command('context', 'Quartz read-only context', '--project', 'demo', '--no-sync')
+        self.assertEqual(deleted['records'], [])
+        self.assertEqual(deleted['stale_count'], 1)
+        self.assertEqual(snapshot(self.vault), before_vault)
+        self.assertEqual(snapshot(self.state), before_state)
+
     def test_v2_sources_retained_and_old_writer_handlers_retired(self):
         sources = {'daily/2026-01-01.md': 'Legacy starlight daily source.',
                    'knowledge/legacy.md': 'Legacy starlight knowledge source.',

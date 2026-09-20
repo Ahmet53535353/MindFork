@@ -154,6 +154,10 @@ def main(argv=None):
         if state == vault or vault in state.parents:
             raise ValueError("--state must be outside the vault")
         read_only_context = args.command == "context" and args.no_sync
+        if read_only_context:
+            # The source CLI can run without the installed entry point, which
+            # already disables bytecode. Importing the engine must not write.
+            sys.dont_write_bytecode = True
         if read_only_context and args.jev:
             raise ValueError("context --no-sync cannot be combined with --jev")
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
