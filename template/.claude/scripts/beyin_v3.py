@@ -535,6 +535,7 @@ def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
             size = len(_json(record)) + len(_json(citation))
             clipped_any = True
         selected.append(record)
+        clipped_any = clipped_any or bool(record.get("text_truncated"))
         citations.append(citation)
         used += size
     omitted = len(records) - len(selected)
@@ -579,6 +580,8 @@ def render_context(context, budget_chars, prefix="", suffix=""):
     payload_budget = available
     while True:
         packed = pack_context(records, len(records), payload_budget, context.get("stale_count", 0))
+        packed["omitted_count"] += context.get("omitted_count", 0)
+        packed["truncated"] = packed["truncated"] or bool(context.get("truncated"))
         packed.update(extra)
         text = json.dumps(packed, ensure_ascii=False)
         overflow = len(text) - available
@@ -587,5 +590,5 @@ def render_context(context, budget_chars, prefix="", suffix=""):
             return prefix + text + tail, packed
         if payload_budget == 0:
             # A nonsensically small budget cannot carry even an empty envelope.
-            return "", pack_context([], 0, 0)
+            return "", dict(packed, records=[], citations=[], abstained=True, used_chars=0)
         payload_budget = max(0, payload_budget - overflow - 8)

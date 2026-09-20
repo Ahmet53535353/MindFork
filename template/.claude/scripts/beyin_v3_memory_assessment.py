@@ -93,6 +93,9 @@ def assess_memory(store, proposal, *, project, transport=None):
     result['prior_relations'] = [dict(record_id=record['id'], **choices['relation_p' + str(i)])
                                  for i, record in enumerate(priors)]
     uncertain = any(item['confidence'] < CONFIDENCE_GATE for item in choices.values())
+    conflict = any(relation['choice'] == 'contradiction' for relation in result['prior_relations'])
+    if conflict:
+        result['diagnostics'].append('prior_conflict')
     for record, relation in zip(priors, result['prior_relations']):
         if relation['choice'] == 'changed_decision':
             old = _time(record.get('updated_at'))
@@ -100,7 +103,7 @@ def assess_memory(store, proposal, *, project, transport=None):
             if old is None or any(date is None or date < old for date in dates):
                 uncertain = True
                 result['diagnostics'].append('temporal_order_unverified')
-    if (uncertain or choices['support']['choice'] != 'supports' or
+    if (uncertain or conflict or choices['support']['choice'] != 'supports' or
             choices['commitment']['choice'] != 'asserted' or choices['kind']['choice'] in ('question', 'hypothesis', 'other')):
         result['route'] = 'inspect_sources'
         if uncertain:

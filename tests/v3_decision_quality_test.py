@@ -109,6 +109,35 @@ class DecisionQualityTest(unittest.TestCase):
         self.assertEqual([r['id'] for r in result['records']], ['target'])
         self.assertEqual(len(self.calls[0]['state']['candidates']), 2)
 
+    def test_render_preserves_upstream_omissions_and_clipping(self):
+        self.note('target', 'Quartz deployment ' * 200)
+        self.note('other')
+        context = self.store.retrieve('Quartz deployment', limit=1, budget_chars=900)
+        self.assertTrue(context['records'][0]['text_truncated'])
+        self.assertEqual(context['omitted_count'], 1)
+        text, delivered = runtime.render_context(context, 2000)
+        self.assertEqual(json.loads(text), delivered)
+        self.assertTrue(delivered['truncated'])
+        self.assertEqual(delivered['omitted_count'], 1)
+        # An additional envelope omission must be counted too.
+        _, empty = runtime.render_context(context, 300)
+        self.assertEqual(empty['omitted_count'], 2)
+
+    def test_high_confidence_prior_conflict_requires_source_inspection(self):
+        row = self.note('target', 'Quartz launches on Monday.')
+        self.note('prior', 'Quartz launches on Tuesday.')
+        self.config()
+        def conflict(url, body, key, timeout):
+            response = self.transport(url, body, key, timeout)
+            response['answers']['relation_p0'].update(choice='contradiction',
+                probabilities={k: float(k == 'contradiction') for k in body['questions']['relation_p0']['criteria']})
+            return response
+        result = assess_memory(self.store, self.proposal(row, prior_record_ids=['prior']),
+                               project='demo', transport=conflict)
+        self.assertEqual(result['route'], 'inspect_sources')
+        self.assertIn('prior_conflict', result['diagnostics'])
+        self.assertFalse(result['memory_written'])
+
     def test_manual_shadow_keeps_exact_local_membership_order_and_budget(self):
         self.note('z'); self.note('target'); self.config('shadow')
         local = self.store.retrieve('Quartz deployment', project='demo', limit=1)
