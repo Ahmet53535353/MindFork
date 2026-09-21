@@ -64,15 +64,43 @@ class InstallLegacyExemptionTest(unittest.TestCase):
 
     def test_released_package_carries_the_exemption_for_both_roots(self):
         import zipfile
-        data = (RELEASED / 'v3.0.0/beyin.md').read_bytes()
-        for root in ROOTS:
-            self.seed(root + '/skills/beyin/SKILL.md', data)
         extracted = self.base / 'extracted'
         with zipfile.ZipFile(build_package(self.base / 'release.zip', '3.0.1', self.env)) as archive:
+            # The pre-#40 validator only accepts this key (issue #73).
+            self.assertEqual(set(json.loads(archive.read('manifest.json'))['legacy_skill_hashes']),
+                             {'.claude/skills/beyin-doktor/SKILL.md'})
             archive.extractall(extracted)
-        result = run_python(extracted / 'scripts/install_v3.py',
-                            ['--vault', self.vault, '--state', self.state], extracted, self.env)
-        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        for tag in TAGS:
+            with self.subTest(tag=tag):
+                self.new_vault('package-' + tag)
+                seeded = {}
+                for name in SKILLS:
+                    data = (RELEASED / tag / (name + '.md')).read_bytes()
+                    for root in ROOTS:
+                        relative = root + '/skills/' + name + '/SKILL.md'
+                        seeded[relative] = self.seed(relative, data)
+                result = run_python(extracted / 'scripts/install_v3.py',
+                                    ['--vault', self.vault, '--state', self.state], extracted, self.env)
+                self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+                for relative, path in seeded.items():
+                    self.assertEqual(path.read_bytes(),
+                                     (ROOT / 'template/.agents/skills' / relative.split('/')[2] / 'SKILL.md').read_bytes())
+
+    def test_legacy_wire_subset_preserves_custom_skill_conflict(self):
+        doctor = '.claude/skills/beyin-doktor/SKILL.md'
+        subset = {doctor: self.installer.default_skill_hashes()[doctor]}
+        for root in ROOTS:
+            for name in SKILLS:
+                with self.subTest(root=root, skill=name):
+                    relative = root + '/skills/' + name + '/SKILL.md'
+                    path = self.seed(relative, (RELEASED / 'v3.0.2' / (name + '.md')).read_bytes()
+                                     + b'\nUser customization.\n')
+                    before = snapshot(self.vault)
+                    with self.assertRaisesRegex(ValueError, 'Unmanaged file conflict'):
+                        self.installer.install(self.vault, self.state, plan_only=True,
+                                               legacy_skill_hashes=subset)
+                    self.assertEqual(snapshot(self.vault), before)
+                    path.unlink()
 
     def test_stock_claude_doctor_skill_stays_exempt(self):
         path = self.seed('.claude/skills/beyin-doktor/SKILL.md',

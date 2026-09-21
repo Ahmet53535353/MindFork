@@ -57,6 +57,13 @@ jobs:
           python scripts/build_v3_release.py --version "$VERSION" --output "dist/beyin-v3-$VERSION.zip"
           gh release download v3.0.2 --repo avenoxai/avenoxbeyin --pattern 'beyin-v3-3.0.2.zip*' --dir baseline
           gh release download v3.1.0 --repo avenoxai/avenoxbeyin --pattern 'beyin-v3-3.1.0.zip*' --dir baseline
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: cad7953d6eccea96db0096279b259a14c441e728
+          path: intermediate-baseline
+          persist-credentials: false
+      - name: Build the actual post-3.0.2 main installation baseline (issue 73)
+        run: python intermediate-baseline/scripts/build_v3_release.py --version 3.0.2 --output baseline/cad7953-3.0.2.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v3-release-bundle
@@ -93,12 +100,13 @@ jobs:
         run: python -m unittest discover -s tests -p "v3_*test.py"
       - name: Retrieval gates
         run: python scripts/evaluate_v3.py
-      - name: Exact ZIP installation, V3.0.2 and V3.1.0 upgrade, rollback and recovery
+      - name: Exact ZIP installation, released and intermediate upgrades, rollback and recovery
         shell: bash
         run: |
           set -euo pipefail
           python scripts/verify_v3_release.py --package "dist/beyin-v3-$VERSION.zip" --baseline baseline/beyin-v3-3.0.2.zip
           python scripts/verify_v3_release.py --package "dist/beyin-v3-$VERSION.zip" --baseline baseline/beyin-v3-3.1.0.zip
+          python scripts/verify_v3_release.py --package "dist/beyin-v3-$VERSION.zip" --baseline baseline/cad7953-3.0.2.zip
 
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
@@ -137,6 +145,7 @@ jobs:
           cmp "dist/beyin-v3-$VERSION.zip" "published/beyin-v3-$VERSION.zip"
           python scripts/verify_v3_release.py --package "published/beyin-v3-$VERSION.zip" --baseline baseline/beyin-v3-3.0.2.zip
           python scripts/verify_v3_release.py --package "published/beyin-v3-$VERSION.zip" --baseline baseline/beyin-v3-3.1.0.zip
+          python scripts/verify_v3_release.py --package "published/beyin-v3-$VERSION.zip" --baseline baseline/cad7953-3.0.2.zip
           python - <<'PY'
           import os, sys, tempfile
           from pathlib import Path

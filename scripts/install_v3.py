@@ -183,6 +183,13 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) for value in values)
             for name, values in legacy_skill_hashes.items()):
         raise ValueError('invalid legacy skill hashes')
+    # The manifest keeps the original one-path schema for older validators.
+    # Released starter bytes are also pinned in this checksum-listed installer;
+    # retain those exemptions when an old updater supplies only the wire subset.
+    known_skill_hashes = default_skill_hashes()
+    legacy_skill_hashes = {name: sorted(set(known_skill_hashes.get(name, [])) |
+                                      set(legacy_skill_hashes.get(name, [])))
+                           for name in known_skill_hashes.keys() | legacy_skill_hashes.keys()}
     # An accepted path only supplies its own file's digest, so every other runner still needs review.
     if accept_customized:
         legacy_hashes = dict(legacy_hashes)
