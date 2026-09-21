@@ -4,7 +4,7 @@ Vault içindeki `beyin.py` tek giriş noktasıdır. Komutları vault klasöründ
 
 ## Git kullanmadan ilk kurulum
 
-[V3.1.0 release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.1.0) `beyin-v3-3.1.0.zip` indirip aç. Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
+[Son kararlı release sayfasından](https://github.com/avenoxai/avenoxbeyin/releases/latest) `beyin-v3-X.Y.Z.zip` paketini indirip aç (`X.Y.Z` sayfadaki sürüm numarasıdır). Paket ve minimum gereksinimler sürüm sayfasında belirtilir. GitHub'ın otomatik kaynak arşivi ile ürün paketi farklıdır.
 
 Bir vault klasörü seç veya oluştur. Açılan paketin içinde:
 
@@ -39,8 +39,8 @@ Varsayılan indirme kaynağı `avenoxai/avenoxbeyin` deposunun resmi GitHub stab
 Yerel, önceden indirilmiş ZIP ile ağ gerekmez:
 
 ```sh
-python3 beyin.py update --check --package "/indirilen/beyin-v3-3.1.0.zip"
-python3 beyin.py update --package "/indirilen/beyin-v3-3.1.0.zip"
+python3 beyin.py update --check --package "/indirilen/beyin-v3-X.Y.Z.zip"
+python3 beyin.py update --package "/indirilen/beyin-v3-X.Y.Z.zip"
 ```
 
 Yerel paketi yalnız güvendiğin kaynaktan al: checksum bütünlüğü kontrol eder; bağımsız bir imza veya kaynak güveninin yerine geçmez.
@@ -66,7 +66,7 @@ python3 beyin.py rollback
 
 `recover`, yarım kalan işlemin journal'ını okuyup planlanan işlemi tamamlar. Bir hata mesajı işlemin iptal edildiği anlamına gelmez; bazı sistem dosyaları yazılmış, başarılı sürüm damgası henüz yazılmamış olabilir.
 
-`rollback`, son sistem işleminin yedeğini geri getirir. İlk V2 geçişinde önceki sürüm ve tanınan eski runner'lar da geri yüklenir. Temiz V3 kurulumunu geri almak `uninstalled` olarak raporlanır; olmayan bir eski sürüm uydurulmaz. Sonradan eklediğin kullanıcı notları silinmez. Bu komut bütün vault geçmişini geri alan bir işlem değildir.
+`rollback`, son sistem işleminin yedeğini geri getirir. [Opsiyonel global köprüyü](GLOBAL-BRIDGE.md) kendin eklediysen, köprüyü içermeyen eski bir sürüme (V3.1.0 ve öncesi) `rollback` veya `uninstall` yapmadan önce global ayardaki köprü handler'larını kaldır; olmayan bir scripti global hook'ta bırakmak istemci hatası üretir. İlk V2 geçişinde önceki sürüm ve tanınan eski runner'lar da geri yüklenir. Temiz V3 kurulumunu geri almak `uninstalled` olarak raporlanır; olmayan bir eski sürüm uydurulmaz. Sonradan eklediğin kullanıcı notları silinmez. Bu komut bütün vault geçmişini geri alan bir işlem değildir.
 
 Yönetilen dosyada araya giren kullanıcı değişikliği varsa işlem bunu ezmek yerine conflict ile durur. Desteklenen JSON ayarlarında ilgisiz değişiklikler korunur; çakışan yönetilen bölüm için inceleme gerekir. Kilitli/aktif bir writer varsa tamamlanmasını bekleyip tekrar dene. Kaybolmuş bir işin kilit/sentinel dosyasını gelişigüzel silme.
 
@@ -89,7 +89,7 @@ Bu kontroller dağıtık cloud kilidi veya bütün harici uygulamalar için atom
 Repo kökünde:
 
 ```sh
-python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.1.0.zip" --version 3.1.0
+python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.2.0.zip" --version 3.2.0
 ```
 
 Bu komut yalnız yerel ZIP oluşturur, GitHub'a yayınlamaz. Paket `manifest.json`, izin verilen installer/giriş dosyaları, runtime modülleri ve üç skill'i içerir. Manifest sürüm, schema/runtime schema, minimum Python, dosya hashleri ve tanınan legacy hashlerini taşır. Release yayınlama ve final platform CI ayrı işlemlerdir.
@@ -106,6 +106,6 @@ Online ZIP indirmesinde GitHub asset SHA-256 ve varsa resmi checksum dosyası, h
 
 ## Bakımcı için yayın
 
-`VERSION` ve `docs/v3/releases/X.Y.Z.md` aynı sürümü tanımlar. `Verified V3 release package` workflow'u ZIP'i bir kez build eder; altı OS/Python kombinasyonu bu aynı ZIP'i temiz kurulum, gerçek V3.0.2 geçişi, no-op, rollback ve kesinti/recover ile doğrular. PR çalışmaları yayın yapmaz.
+`VERSION` ve `docs/v3/releases/X.Y.Z.md` aynı sürümü tanımlar. `Verified V3 release package` workflow'u ZIP'i bir kez build eder; altı OS/Python kombinasyonu bu aynı ZIP'i temiz kurulum, yayınlanmış gerçek V3.0.2 ve V3.1.0 paketlerinden geçiş, no-op, rollback ve kesinti/recover ile doğrular. PR çalışmaları yayın yapmaz.
 
-Main üzerinde manuel `workflow_dispatch` ve `publish=true`, testler yeşilse aynı bytes'ı önce draft olarak yükler, sonra stable/latest yayınlar ve yayınlanmış asset'i tekrar indirip doğrular. Var olan release'in üzerine yazılmaz; yeni sürüm numarası gerekir. Global hook köprüsü (#41) bu sürümün parçası değildir.
+Main üzerinde manuel `workflow_dispatch` ve `publish=true`, testler yeşilse aynı bytes'ı önce draft olarak yükler, sonra stable/latest yayınlar ve yayınlanmış asset'i tekrar indirip doğrular. Var olan release'in üzerine yazılmaz; yeni sürüm numarası gerekir. Opsiyonel global köprü (#41) V3.2.0 ile pakete girdi; kurulum ve güncelleme global ayarları değiştirmez ([GLOBAL-BRIDGE.md](GLOBAL-BRIDGE.md)).
