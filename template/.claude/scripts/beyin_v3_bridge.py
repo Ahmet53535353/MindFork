@@ -72,7 +72,7 @@ def main(argv=None):
         vault = args.vault.expanduser().resolve()
         if not vault.is_dir() or not 0 <= args.context_chars <= 4000:
             raise ValueError('Invalid vault or context budget')
-        state = args.state or Path(json.loads((vault / '.beyin-runtime.json').read_text())['state'])
+        state = args.state or Path(json.loads((vault / '.beyin-runtime.json').read_text(encoding='utf-8'))['state'])
         if not state.is_absolute():
             raise ValueError('Runtime state must be absolute')
         state = state.resolve()

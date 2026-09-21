@@ -41,7 +41,7 @@ class BridgeTest(unittest.TestCase):
         return json.loads(result.stdout)
 
     def queued(self):
-        return [json.loads(p.read_text()) for p in (self.state / 'hook-queue').glob('*.json')]
+        return [json.loads(p.read_text(encoding='utf-8')) for p in (self.state / 'hook-queue').glob('*.json')]
 
     def test_external_boundary_context_and_project_metadata_for_both_clients(self):
         for harness in ('claude', 'codex'):
@@ -52,7 +52,9 @@ class BridgeTest(unittest.TestCase):
             self.assertLessEqual(len(text), 1500)
         events = self.queued()
         self.assertEqual(len(events), 2)
-        self.assertTrue(all(e['project'] == self.project.name and len(e['project_id']) == 24 for e in events))
+        for event in events:
+            self.assertEqual(event['project'], self.project.name)
+            self.assertEqual(len(event['project_id']), 24)
         self.assertNotIn(str(self.project), json.dumps(events))
         self.assertNotIn('TRANSCRIPT_CANARY', json.dumps(events))
 
@@ -126,14 +128,14 @@ class BridgeTest(unittest.TestCase):
         self.invoke()
         self.invoke(dict(self.payload, hook_event_name='Stop', event_id='stop'))
         self.assertEqual(hook.drain_queue(self.vault, self.state)['processed'], 2)
-        gaps = json.loads((self.state / 'receipt-gaps.json').read_text())['checkpoints']
+        gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints']
         self.assertEqual(len(gaps), 1)
         self.assertEqual(gaps[0]['project'], self.project.name)
         engine = SyncEngine(self.vault, self.state)
         engine.note_create('notes/result.md', 'Synthetic result.', {'id': 'result', 'project': 'demo'})
         engine.receipt('finished', 'Synthetic result.', ['notes/result.md'], 'codex', session=gaps[0]['session'])
         engine.sync()
-        self.assertEqual(json.loads((self.state / 'receipt-gaps.json').read_text())['potential_missing_receipts'], 0)
+        self.assertEqual(json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['potential_missing_receipts'], 0)
 
     def test_legacy_checkpoint_schema_migrates_without_losing_rows(self):
         engine = SyncEngine(self.vault, self.state)
@@ -142,7 +144,7 @@ class BridgeTest(unittest.TestCase):
             db.execute('CREATE TABLE receipt_checkpoints(harness TEXT,session TEXT,at REAL,PRIMARY KEY(harness,session))')
             db.execute("INSERT INTO receipt_checkpoints VALUES ('codex','old',123)")
         hook.drain_queue(self.vault, self.state)
-        gaps = json.loads((self.state / 'receipt-gaps.json').read_text())['checkpoints']
+        gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints']
         self.assertEqual(gaps[0]['session'], 'old')
 
     def test_installed_zip_config_executes_from_external_project_without_global_writes(self):
