@@ -27,8 +27,11 @@ def build(output, version='3.0.0'):
     manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     legacy = [ROOT/'template/.claude/scripts'/name for name in ('flush.py','compile.py')] + [ROOT/'template/.claude/hooks'/(name+suffix) for name in ('session-start','session-end','pre-compact','prompt-counter') for suffix in ('.sh','.ps1')]
     manifest['legacy_hashes'] = {p.relative_to(ROOT/'template').as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy if p.exists()}
-    # One source for the exemption map, so a release install trusts exactly what the tree does.
-    manifest['legacy_skill_hashes'] = installer().default_skill_hashes()
+    # cad7953-era updaters reject every other key before they can load the new
+    # installer. Keep this schema-1 wire field compatible; the checksum-listed
+    # installer also knows the released starter hashes for all six skill paths.
+    doctor = '.claude/skills/beyin-doktor/SKILL.md'
+    manifest['legacy_skill_hashes'] = {doctor: installer().default_skill_hashes()[doctor]}
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
