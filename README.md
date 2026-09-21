@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.1.0:** Yeni sürüm bildirimi, tek komutla doğrulanmış güncelleme ve geri alma. V3.0.2 kullanıyorsan bir kez vault içinde `python3 beyin.py update` çalıştır; sonraki sürümleri oturum başında gör. [Sürüm notları](docs/v3/releases/3.1.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.2.0:** Jev kapalıyken de daha iyi kaynak sürekliliği ve alias araması, isteğe bağlı `jev-memory` değerlendirmesi ve vault dışındaki seçili projeler için opsiyonel köprü. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.2.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
@@ -20,7 +20,7 @@ Görsel anlatım, kopyalanabilir mesaj ve manuel indirme: **[avenox.lol/ikincibe
 
 ## Manuel kurulum
 
-1. [V3.1.0 sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.1.0) aç. **[beyin-v3-3.1.0.zip](https://github.com/avenoxai/avenoxbeyin/releases/download/v3.1.0/beyin-v3-3.1.0.zip)** dosyasını ve yanındaki SHA-256 dosyasını indir. GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
+1. [Son kararlı sürüm sayfasını](https://github.com/avenoxai/avenoxbeyin/releases/latest) aç. **`beyin-v3-X.Y.Z.zip`** dosyasını ve yanındaki SHA-256 dosyasını indir (`X.Y.Z` sayfadaki sürüm numarasıdır). GitHub'ın otomatik “Source code” arşivi yerine bu paketi seç.
 2. Obsidian'da bir vault oluştur veya mevcut vault klasörünü seç. Notlarını başka yere taşıman gerekmez.
 3. Açtığın paket klasöründe terminal aç ve vault yolunu kendi klasörünle değiştir:
 
@@ -38,7 +38,7 @@ py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim"
 
 Kurulum üç istemci için proje bağlantılarını, ortak motoru, üç başlangıç skill'ini ve güncelleme kısayolunu kurar. Bundan sonra paket klasörünü açık tutman gerekmez.
 
-Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlanır; installer eklenti dosyalarını vault içine yazar, ama profil bazlı bağlantı ve `hermes plugins enable beyin-v3` adımını sen yaparsın. Adımlar: [docs/v3/HERMES.md](docs/v3/HERMES.md). Bu destek V3.1.0 paketine dahildir.
+Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlanır; installer eklenti dosyalarını vault içine yazar, ama profil bazlı bağlantı ve `hermes plugins enable beyin-v3` adımını sen yaparsın. Adımlar: [docs/v3/HERMES.md](docs/v3/HERMES.md). Bu destek V3.1.0 ve sonraki paketlere dahildir.
 
 Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başlat**. Codex'te `/hooks` ekranında yeni hook tanımlarını inceleyip güven; diğer istemcilerde workspace güvenini tamamla. İstemci güvenini kurucu senin adına uydurmaz. Agent ile kurulum yapmak istersen [SETUP-V3.md](SETUP-V3.md) rehberini takip etmesini iste.
 
@@ -50,7 +50,7 @@ V3.1.0 kişilik/süreklilik davranışı: yeni kurulum düşünme ortağı kimli
 ve başlangıç notlarını oluşturur; mevcut Core/Soul, kullanıcı düzeltmeleri, aktif konular
 ve son oturum kaynakları açılışta önceliklidir. Kalıcı öğrenimler aktif ajan tarafından
 kavram ve bağlantı notlarına işlenir. [V2/V3 karşılaştırması ve doğrulama](docs/v3/COMPANION-PARITY.md).
-Bu davranış V3.1.0 paketine dahildir.
+Bu davranış V3.1.0 ve sonraki paketlere dahildir.
 
 Ajanına şunu söyle:
 
@@ -114,7 +114,7 @@ Yeni sürüm kontrolü varsayılan olarak açıktır: oturum başında ayrı bir
 - Hafif kontrol: `python3 beyin.py update --check --metadata-only`
 - Bildirimi kapat: `python3 beyin.py preferences --update-notifications off`
 - Aç: `python3 beyin.py preferences --update-notifications on`
-- Bir sürümü sustur: `python3 beyin.py update --dismiss 3.1.0`
+- Bir sürümü sustur: `python3 beyin.py update --dismiss X.Y.Z`
 
 Windows'ta `python3` yerine `py -3` kullan. V3.0.2 kurulumunda yeni seçenekler ilk `update` işleminden sonra gelir.
 
