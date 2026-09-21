@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a minimal checksum-listed portable release from this checkout."""
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -24,7 +25,8 @@ def build(output, version='3.0.0'):
     paths += sorted((ROOT / 'template/.claude/scripts').glob('beyin_v3*.py'))
     paths += [ROOT / 'template/.agents/skills' / name / 'SKILL.md' for name in ('beyin', 'beyin-doktor', 'beyin-guncelle')]
     files = {p.relative_to(ROOT).as_posix(): p.read_bytes() for p in paths}
-    manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
+    # Produce new manifest format with installed_hash and installed_content for installer compatibility
+    manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: {"original": None, "installed_hash": hashlib.sha256(data).hexdigest(), "installed_content": base64.b64encode(data).decode()} for name, data in files.items()}}
     legacy = [ROOT/'template/.claude/scripts'/name for name in ('flush.py','compile.py')] + [ROOT/'template/.claude/hooks'/(name+suffix) for name in ('session-start','session-end','pre-compact','prompt-counter') for suffix in ('.sh','.ps1')]
     manifest['legacy_hashes'] = {p.relative_to(ROOT/'template').as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy if p.exists()}
     # One source for the exemption map, so a release install trusts exactly what the tree does.

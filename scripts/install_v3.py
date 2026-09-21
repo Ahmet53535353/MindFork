@@ -145,6 +145,43 @@ def semantic_unchanged(name, baseline, current, previous):
     return False
 
 
+def _copy_template_for_fresh_install(vault, root):
+    """Copy template folder structure for fresh installs."""
+    import shutil
+    import re
+    template = root / "template"
+    if not template.is_dir():
+        return
+    vault_version = vault / ".beyin-version"
+    if vault_version.exists():
+        return
+    companion_pattern = re.compile(r'(?i)^🔮\s*\d{3}-companion$|^🔮\s*\d{3}-echo$|^companion$|^echo$')
+    # Files managed by the installer that should not be copied from template
+    managed_files = {
+        '.beyin-version',
+        '.beyin-runtime.json',
+        'beyin.py',
+        'AGENTS.md',
+        'CLAUDE.md',
+    }
+    for item in template.iterdir():
+        # Skip companion directory - let companion initialization handle it
+        if item.is_dir() and companion_pattern.match(item.name):
+            continue
+        # Skip managed files
+        if item.name in managed_files:
+            continue
+        dest = vault / item.name
+        if item.is_dir():
+            if dest.exists():
+                continue
+            shutil.copytree(item, dest, copy_function=shutil.copy2)
+        else:
+            if dest.exists():
+                continue
+            shutil.copy2(item, dest)
+
+
 def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", legacy_hashes=None,
              legacy_skill_hashes=None, migration=None, migration_plan=None, accept_customized=()):
     vault, state = vault.resolve(), state.resolve()
@@ -410,7 +447,9 @@ def package_defaults():
     if not isinstance(files, dict): raise ValueError('Invalid extracted package manifest')
     updater_name = 'template/.claude/scripts/beyin_v3_update.py'
     updater_path = ROOT / updater_name
-    if digest(updater_path.read_bytes()) != files.get(updater_name):
+    expected = files.get(updater_name)
+    expected_hash = expected['installed_hash'] if isinstance(expected, dict) else expected
+    if digest(updater_path.read_bytes()) != expected_hash:
         raise ValueError('Extracted updater checksum mismatch')
     spec = importlib.util.spec_from_file_location('beyin_extract_validator', updater_path)
     updater = importlib.util.module_from_spec(spec); spec.loader.exec_module(updater)
@@ -448,6 +487,7 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
     if plan_only or uninstall:
         return _install(vault, state, uninstall, plan_only, version, legacy_hashes, legacy_skill_hashes,
                         accept_customized=accept_customized)
+    _copy_template_for_fresh_install(vault, ROOT)
     directory = ROOT / 'template/.claude/scripts'
     if (Path(state).resolve() / 'update-journal.json').exists():
         spec = importlib.util.spec_from_file_location('beyin_install_recovery', directory / 'beyin_v3_update.py')

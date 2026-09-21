@@ -126,7 +126,9 @@ def validate_package(package):
         files = {}
         for name, expected in manifest['files'].items():
             data = archive.read(name)
-            if not isinstance(expected, str) or digest(data) != expected:
+            # Support both old format (string hash) and new format (dict with installed_hash)
+            expected_hash = expected['installed_hash'] if isinstance(expected, dict) else expected
+            if not isinstance(expected_hash, str) or digest(data) != expected_hash:
                 raise ValueError('package checksum mismatch')
             files[name] = data
         required = {'scripts/install_v3.py', 'scripts/beyin_entry.py', 'scripts/beyin_v3.py', 'template/.claude/scripts/beyin_v3.py', 'template/.claude/scripts/beyin_v3_update.py'}
@@ -328,8 +330,7 @@ def update(vault, state, package=None, check=False):
                 installer = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(installer)
                 plan = installer.install(vault, state, plan_only=True, version=new,
-                                         legacy_hashes=manifest.get('legacy_hashes', {}),
-                                         legacy_skill_hashes=manifest.get('legacy_skill_hashes', {}))
+                                         legacy_hashes=manifest.get('legacy_hashes', {}))
                 trust_review = False
                 for name in ('.claude/settings.local.json', '.codex/hooks.json', '.agents/hooks.json'):
                     if name in plan['planned']:

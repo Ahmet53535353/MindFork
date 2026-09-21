@@ -129,7 +129,9 @@ class OfflineUpdateTest(unittest.TestCase):
             for name, expected in metadata['files'].items():
                 self.assertFalse(Path(name).is_absolute())
                 self.assertNotIn('..', Path(name).parts)
-                self.assertEqual(hashlib.sha256(archive.read(name)).hexdigest(), expected)
+                # Support both old format (string hash) and new format (dict with installed_hash)
+                expected_hash = expected['installed_hash'] if isinstance(expected, dict) else expected
+                self.assertEqual(hashlib.sha256(archive.read(name)).hexdigest(), expected_hash)
             self.assertIn('scripts/install_v3.py', metadata['files'])
             self.assertIn('scripts/beyin_entry.py', metadata['files'])
 

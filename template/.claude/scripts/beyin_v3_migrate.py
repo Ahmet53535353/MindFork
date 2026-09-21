@@ -73,6 +73,20 @@ def migration_guard(vault_root, state_dir):
     if state.is_relative_to(vault):
         raise ValueError('migration state must be outside vault')
     legacy = _legacy_root(vault)
+    has_legacy_state = legacy.exists() and any(p.name != '.gitkeep' for p in legacy.iterdir())
+    
+    # Check for V1/V2 vault by version file
+    version_file = vault / '.beyin-version'
+    is_v1_or_v2 = False
+    if version_file.exists():
+        try:
+            version_text = version_file.read_text(encoding='utf-8').strip()
+            major = int(version_text.split('.')[0])
+            is_v1_or_v2 = major < 3
+        except (ValueError, IndexError):
+            pass
+    
+    is_fresh_install = not has_legacy_state and not is_v1_or_v2
     with ExitStack() as stack:
         if legacy.exists():
             for path in sorted(legacy.glob('*.lock')):
@@ -94,7 +108,8 @@ def migration_guard(vault_root, state_dir):
         prior = state/'v2-migration.json'
         plan = {'migration': 'v2-to-v3-source-cutover-1', 'cutover_at': datetime.now(timezone.utc).isoformat(),
                 'sources': sources, 'legacy_state': states,
-                'historical_receipts': sorted(p.relative_to(vault).as_posix() for p in (vault/'receipts').glob('*.md'))}
+                'historical_receipts': sorted(p.relative_to(vault).as_posix() for p in (vault/'receipts').glob('*.md')),
+                'is_fresh_install': is_fresh_install}
         if prior.exists():
             plan['previous'] = json.loads(prior.read_text(encoding='utf-8'))
         yield plan
