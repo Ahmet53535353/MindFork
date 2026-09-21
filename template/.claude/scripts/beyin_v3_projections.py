@@ -9,6 +9,9 @@ def _checkpoint_schema(db):
     db.execute('CREATE TABLE IF NOT EXISTS receipt_checkpoints(harness TEXT, session TEXT, at REAL, turn_at REAL DEFAULT 0, PRIMARY KEY(harness,session))')
     if 'turn_at' not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
         db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN turn_at REAL DEFAULT 0')
+    for column in ('project', 'project_id'):
+        if column not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
+            db.execute(f'ALTER TABLE receipt_checkpoints ADD COLUMN {column} TEXT')
 
 
 def record_checkpoints(engine, events):
@@ -22,6 +25,9 @@ def record_checkpoints(engine, events):
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at,turn_at) VALUES (?,?,0,?) ON CONFLICT(harness,session) DO UPDATE SET turn_at=MAX(turn_at,excluded.turn_at)', values)
             elif event.get('event') in ('Stop', 'SessionEnd'):
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at) VALUES (?,?,?) ON CONFLICT(harness,session) DO UPDATE SET at=MAX(at,excluded.at)', values)
+            if event.get('project') and event.get('project_id'):
+                db.execute('UPDATE receipt_checkpoints SET project=?,project_id=? WHERE harness=? AND session=?',
+                           (event['project'], event['project_id'], event['harness'], event['session']))
 
 
 def refresh_gaps(engine, db):
@@ -29,7 +35,7 @@ def refresh_gaps(engine, db):
     _checkpoint_schema(db)
     receipts = [json.loads(row[0]) for row in db.execute('SELECT payload FROM receipts')]
     gaps = []
-    for row in db.execute('SELECT harness,session,at,turn_at FROM receipt_checkpoints'):
+    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id FROM receipt_checkpoints'):
         if not row[2] or row[2] < row[3]:
             continue
         threshold = row[3] or row[2]
@@ -37,6 +43,8 @@ def refresh_gaps(engine, db):
                       datetime.fromisoformat(r.get('created_at', '1970-01-01T00:00:00+00:00')).timestamp() >= threshold for r in receipts)
         if not matched:
             gaps.append({'harness': row[0], 'session': row[1], 'checkpoint_at': row[2], 'turn_at': row[3], 'scope': 'session_only' if row[0] == 'antigravity' else 'turn' if row[3] else 'terminal_only'})
+            if row[4] and row[5]:
+                gaps[-1].update(project=row[4], project_id=row[5])
     atomic(engine.state/'receipt-gaps.json', json.dumps({'potential_missing_receipts': len(gaps), 'checkpoints': gaps, 'scope_limits': {'antigravity': 'session_only; later per-turn boundaries unsupported', 'missing_prompt_event': 'terminal_only; receipt attribution may be incomplete'}, 'meaning': 'Checkpoint without a matching structured receipt; may be trivial or deliberately omitted. No summary inferred.'}))
 
 

@@ -47,6 +47,11 @@ def enqueue_event(vault, state, payload, harness):
     state = Path(state)
     metadata = {"event": payload.get("hook_event_name"), "harness": harness,
                 "session": hashlib.sha256(str(payload.get("session_id", "unknown")).encode()).hexdigest()[:24]}
+    # Keep a bounded label and opaque identity, never the full project path.
+    from beyin_v3_bridge import origin
+    project = origin(payload, harness)
+    if project:
+        metadata.update(project)
     if payload.get('no_memory') is True:
         metadata['no_memory'] = True
     identity = str(payload.get("event_id") or uuid.uuid4().hex)
@@ -114,6 +119,7 @@ def main():
     parser.add_argument("--event")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--drain-queue", action="store_true")
+    parser.add_argument("--metadata-only", action="store_true", help="Queue lifecycle metadata without injecting vault context")
     args = parser.parse_args()
     vault, state = args.vault.resolve(), args.state.resolve()
     if state == vault or vault in state.parents:
@@ -152,7 +158,7 @@ def main():
         if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or payload.get('no_memory') is True:
             print("{}")
             return
-        if event == 'SessionStart':
+        if event == 'SessionStart' and not args.metadata_only:
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
         settings = read(vault)
@@ -172,7 +178,7 @@ def main():
         due = False if disabled else claim_check(state, settings, event)
         process = subprocess.Popen(command, **options) if due else None
         inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
-        if not inject:
+        if not inject or args.metadata_only:
             print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
         if event in ("SessionStart", "UserPromptSubmit"):
@@ -248,7 +254,7 @@ def main():
             print('{"decision":"stop"}' if args.harness == "antigravity" else "{}")
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
-        if locals().get("event") in ("SessionStart", "UserPromptSubmit"):
+        if not args.metadata_only and locals().get("event") in ("SessionStart", "UserPromptSubmit"):
             print(json.dumps(output_context(args.harness, event, notice + "V3 source sync failed or conflicted; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))
         else:
             print("{}")
