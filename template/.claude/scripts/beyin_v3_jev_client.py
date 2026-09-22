@@ -203,7 +203,10 @@ def _endpoint(base):
             parsed.scheme=='http' and parsed.hostname in ('localhost','127.0.0.1','::1')):
         raise ValueError('endpoint_invalid')
     # Validate malformed ports as well.
-    parsed.port
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError('endpoint_invalid')
     base=base.rstrip('/')
     return base+'/systemone' if base.endswith('/v1') else base+'/v1/systemone'
 
@@ -427,7 +430,9 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                     if inspect_config(vault) != policy: raise ValueError('configuration_changed')
                     result['cache_hit']=True
                     return result
-        except (OSError,ValueError,KeyError,TypeError):
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            if isinstance(exc, ValueError) and str(exc) == 'configuration_changed':
+                raise
             result['diagnostics'].append('cache_unavailable')
         key=env.get('TYPESAFE_API_KEY')
         if not key: raise ValueError('credentials_missing')
