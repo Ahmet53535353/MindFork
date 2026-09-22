@@ -10,6 +10,7 @@ import sqlite3
 
 BUILTIN_PATTERNS = (
     re.compile(r"""(?i)(?<![a-zA-Z0-9_])(?:\\*["\']?(?:api[_ -]?key|access[_ -]?token|token|secret|password|passwd)\\*["\']?)\s*[:=]\s*(?:\\*["\'][^\r\n"\']{8,}\\*["\']|[^\s,;\'"\}\]\)&]{8,})"""),
+    re.compile(r"(?<=://)[^/\s:@]*:[^/\s:@]+(?=@)"),
     re.compile(r"\bgh(?:p|o|u|s|r)_[A-Za-z0-9]{20,255}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,255}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,255}\b"),

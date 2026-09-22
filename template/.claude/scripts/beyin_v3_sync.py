@@ -198,6 +198,27 @@ class SyncEngine:
             return text, 0
         return redact_secrets(text, self.state)
 
+    def _protect_data(self, data):
+        if not read_preferences(self.root)['secret_filter'] or data is None:
+            return data, 0
+        total_redacted = 0
+
+        def _walk(item):
+            nonlocal total_redacted
+            if isinstance(item, str):
+                redacted_text, count = redact_secrets(item, self.state)
+                total_redacted += count
+                return redacted_text
+            elif isinstance(item, dict):
+                return {k: _walk(v) for k, v in item.items()}
+            elif isinstance(item, list):
+                return [_walk(v) for v in item]
+            elif isinstance(item, tuple):
+                return tuple(_walk(v) for v in item)
+            return item
+
+        return _walk(data), total_redacted
+
     def _record_redactions(self, count):
         if count:
             record_redactions(self.state, count)
@@ -343,6 +364,7 @@ class SyncEngine:
         allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes'}
         if not isinstance(changes, dict) or set(changes) - allowed:
             raise ValueError('unsupported task metadata changes')
+        changes, redacted = self._protect_data(changes)
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
@@ -375,7 +397,8 @@ class SyncEngine:
         result_record = json.loads(row[0])
         if result_record['revision'] != expected_revision + 1 or result_record['source_sha256'] != _hash(intended):
             raise RevisionConflict('task source changed before projection readback')
-        return result_record
+        self._record_redactions(redacted)
+        return dict(result_record, redacted=redacted, secrets_redacted=redacted)
 
     def note_create(self, source, text, metadata=None):
         if not isinstance(text, str) or not text.strip() or (metadata is not None and not isinstance(metadata, dict)):
@@ -410,6 +433,8 @@ class SyncEngine:
         if metadata.get('generated') or metadata.get('kind') == 'receipt':
             raise ValueError('managed note kinds require their dedicated command')
         text, redacted = self._protect(text)
+        metadata, meta_redacted = self._protect_data(metadata)
+        redacted += meta_redacted
         path = self._path(source)
         intended = render(metadata, text+'\n')
         with self.store._connect() as db:
@@ -462,6 +487,8 @@ class SyncEngine:
         for field in ('title', 'project', 'next_action', 'updated_at'):
             if field in metadata and not isinstance(metadata[field], str):
                 raise ValueError('task metadata text fields must be strings')
+        metadata, meta_redacted = self._protect_data(metadata)
+        redacted += meta_redacted
         metadata.update(kind='task', revision=1)
         path = self._path(source)
         intended = render(metadata, text+'\n')
