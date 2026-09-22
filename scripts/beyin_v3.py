@@ -218,6 +218,10 @@ def main(argv=None):
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
+            gaps_info = result['receipt-gaps.json'] or {}
+            result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts', 0)
+            result['unattended_checkpoints'] = gaps_info.get('unattended_checkpoints', 0)
+            result['receipt_coverage'] = gaps_info.get('receipt_coverage')
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
