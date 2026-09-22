@@ -382,9 +382,12 @@ class SyncEngine:
             raise ValueError('note text and metadata required')
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
-        if not source.startswith(('notes/', 'knowledge/')) or not source.endswith('.md'):
-            raise ValueError('new semantic notes belong under notes/ or knowledge/')
+        if not source.startswith(('notes/', 'knowledge/', '🔮 850-Companion/')) or not source.endswith('.md'):
+            raise ValueError('new semantic notes belong under notes/, knowledge/, or 🔮 850-Companion/')
         metadata = dict(metadata or {})
+        valid_types = ('episodic', 'semantic', 'procedural')
+        if 'type' not in metadata or metadata['type'] not in valid_types:
+            raise ValueError('metadata.type required: episodic|semantic|procedural')
         for field in ('project', 'kind', 'status', 'updated_at'):
             if metadata.get(field) is None:
                 metadata.pop(field, None)
@@ -442,10 +445,13 @@ class SyncEngine:
             raise ValueError('task body and metadata required')
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
-        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at'}
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'type'}
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
+        valid_types = ('episodic', 'semantic', 'procedural')
+        if 'type' not in metadata or metadata['type'] not in valid_types:
+            raise ValueError('metadata.type required: episodic|semantic|procedural')
         text, redacted = self._protect(text)
         if not isinstance(metadata.get('id'), str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}', metadata['id']):
             raise ValueError('stable task id required')

@@ -132,7 +132,7 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(len(gaps), 1)
         self.assertEqual(gaps[0]['project'], self.project.name)
         engine = SyncEngine(self.vault, self.state)
-        engine.note_create('notes/result.md', 'Synthetic result.', {'id': 'result', 'project': 'demo'})
+        engine.note_create('notes/result.md', 'Synthetic result.', {'id': 'result', 'project': 'demo', 'type': 'semantic'})
         engine.receipt('finished', 'Synthetic result.', ['notes/result.md'], 'codex', session=gaps[0]['session'])
         engine.sync()
         self.assertEqual(json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['potential_missing_receipts'], 0)

@@ -121,7 +121,7 @@ class MigrationTest(unittest.TestCase):
     def test_semantic_note_create_preserves_existing_source(self):
         from beyin_v3_sync import SyncEngine
         engine = SyncEngine(self.root, self.state)
-        engine.note_create('knowledge/lesson.md', 'Learned synthetic lesson.', {'project': 'demo'})
+        engine.note_create('knowledge/lesson.md', 'Learned synthetic lesson.', {'project': 'demo', 'type': 'semantic'})
         original = (self.root/'knowledge/lesson.md').read_bytes()
         with self.assertRaises(ValueError):
             engine.note_create('knowledge/lesson.md', 'Overwrite', {})

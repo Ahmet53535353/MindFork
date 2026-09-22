@@ -71,10 +71,11 @@ Kullanıcının seçtiği klasörü ve mevcut dosyaları koru. **Yeni görev iç
 
 Başarılı çıkışa ek olarak dönen `id`, `kind`, `revision`, `status`, `owner` ve `source` alanlarını istekle karşılaştır. Yalnız status doğruysa veya dosya oluşmuşsa tamam sayma. Aynı ID veya dosya zaten varsa üzerine yazma.
 
-Yeni `notes/` veya `knowledge/` kaydı için `python3 beyin.py note-create --file NOTE_JSON` mevcut dosyanın üzerine yazmayı reddeden güvenli giriş yoludur:
+Yeni `notes/`, `knowledge/`, veya `🔮 850-Companion/` kaydı için `python3 beyin.py note-create --file NOTE_JSON` mevcut dosyanın üzerine yazmayı reddeden güvenli giriş yoludur:
 
 ```json
-{"source":"knowledge/ornek-karar.md","text":"Kalıcı karar ve dayandığı kaynak bağlantıları.","metadata":{"kind":"fact","project":"proje-adi","visibility":"internal"}}
+{"source":"knowledge/ornek-karar.md","text":"Kalıcı karar ve dayandığı kaynak bağlantıları.","metadata":{"kind":"fact","project":"proje-adi","visibility":"internal","type":"semantic"}}
+{"source":"🔮 850-Companion/memory-types.md","text":"Type tanımları.","metadata":{"kind":"fact","project":"Beyin","visibility":"internal","type":"semantic"}}
 ```
 
 Kullanıcının başka bir klasör düzeni varsa onu koruyarak normal dosya araçlarıyla yazabilirsin; aynı adı taşıyan mevcut notu yeni not sanıp ezme.
