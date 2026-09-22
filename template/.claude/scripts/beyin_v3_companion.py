@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import re
 
-NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
+NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md', 'memory-types.md')
 FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
 DEFAULT_DIRECTORY = '🔮 850-Companion'
 STARTERS = {
@@ -12,6 +12,7 @@ STARTERS = {
     'Last-Session.md': '# Son oturum\n\nHenüz bir çalışma sonucu kaydedilmedi. Anlamlı çalışma sonunda sonuç, gerekçe, açık kalan adım ve kaynak bağlantılarını buraya yaz.\n',
     'Threads.md': '# Threads\n\n## Active Threads\nHenüz açık bir konu kaydedilmedi.\n\n## Closed Threads\n',
     'Journal.md': '# Journal\n\nOrtak çalışmadan doğan gözlemler, öğrenimler ve açık sorular. Çıkarımları kesin kullanıcı bilgisi olarak sunma.\n',
+    'memory-types.md': '---\n{"type": "semantic", "project": "Beyin", "visibility": "internal"}\n---\n# Memory Types\n\nBu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type\'ını tanımlar.\n\n## Type Tanımları\n\n### episodic — Zaman Serisi / Anılar\nBelirli bir zaman diliminde ne oldu.\nÖrnekler: Journal.md, Threads.md, Last-Session.md, daily/v3/*.md\n\n### semantic — Kalıcı Bilgi / Gerçekler / Kimlik\nZamanla değişmeyen, sorgulanabilir gerçekler.\nÖrnekler: Core.md, knowledge/concepts/*.md\n\n### procedural — Nasıl Yapılır / Kurallar / Playbook\'lar\nSüreçler, kurallar, workflow\'lar.\nÖrnekler: Kurallar.md, .agents/skills/*/SKILL.md\n',
 }
 
 

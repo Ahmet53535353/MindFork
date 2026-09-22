@@ -19,7 +19,7 @@ class TaskCreateTest(unittest.TestCase):
         self.vault.mkdir()
         self.state = Path(self.tmp.name)/'state'
         self.engine = SyncEngine(self.vault, self.state)
-        self.metadata = {'id': 'atlas-task', 'title': 'Prepare launch', 'status': 'active', 'owner': 'Synthetic Owner', 'project': 'atlas', 'visibility': 'internal', 'facts': {'reason': 'Approved synthetic task'}}
+        self.metadata = {'id': 'atlas-task', 'title': 'Prepare launch', 'status': 'active', 'owner': 'Synthetic Owner', 'project': 'atlas', 'visibility': 'internal', 'facts': {'reason': 'Approved synthetic task'}, 'type': 'procedural'}
 
     def test_cli_creates_one_frontmatter_and_readbacks_all_task_fields(self):
         payload = {'source': 'tasks/atlas.md', 'text': 'Prepare the synthetic launch.', 'metadata': self.metadata}
@@ -37,17 +37,17 @@ class TaskCreateTest(unittest.TestCase):
 
     def test_note_create_rejects_embedded_frontmatter_without_writes(self):
         with self.assertRaisesRegex(ValueError, 'frontmatter'):
-            self.engine.note_create('notes/bad.md', '---\n{"status":"active"}\n---\nTask body', {'kind': 'fact'})
+            self.engine.note_create('notes/bad.md', '---\n{"status":"active"}\n---\nTask body', {'kind': 'fact', 'type': 'semantic'})
         self.assertFalse((self.vault/'notes/bad.md').exists())
 
     def test_note_create_requires_dedicated_task_command(self):
         with self.assertRaisesRegex(ValueError, 'task-create'):
-            self.engine.note_create('notes/bad.md', 'Task body', {'kind': 'task'})
+            self.engine.note_create('notes/bad.md', 'Task body', {'kind': 'task', 'type': 'procedural'})
         self.assertFalse((self.vault/'notes/bad.md').exists())
 
     def test_unrelated_bad_source_does_not_turn_new_note_or_task_into_false_failure(self):
         (self.vault/'unrelated.md').write_text('---\nproject: []\n---\nUnrelated malformed metadata.\n')
-        note = self.engine.note_create('notes/good.md', 'Usable note', {'project': None})
+        note = self.engine.note_create('notes/good.md', 'Usable note', {'project': None, 'type': 'semantic'})
         self.assertEqual(note['status'], 'succeeded')
         self.assertEqual(note['source_sync']['status'], 'degraded')
         self.assertTrue(note['warnings'])

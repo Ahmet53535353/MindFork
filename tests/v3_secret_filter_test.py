@@ -24,7 +24,7 @@ class SecretFilterTest(unittest.TestCase):
         self.token = 'sk-' + ('SyntheticOnly' * 3)
 
     def test_default_off_preserves_text(self):
-        result = self.engine.note_create('notes/default.md', 'Demo '+self.token)
+        result = self.engine.note_create('notes/default.md', 'Demo '+self.token, {'type': 'semantic'})
         self.assertEqual(result['secrets_redacted'], 0)
         self.assertIn(self.token, (self.vault/'notes/default.md').read_text())
 
@@ -32,9 +32,9 @@ class SecretFilterTest(unittest.TestCase):
         save(self.vault, {'secret_filter': True})
         reference = self.vault/'reference.md'; reference.write_text('Synthetic reference.\n')
         self.engine.sync()
-        note = self.engine.note_create('notes/filtered.md', 'Demo '+self.token)
+        note = self.engine.note_create('notes/filtered.md', 'Demo '+self.token, {'type': 'semantic'})
         task = self.engine.task_create('tasks/filtered.md', 'Bearer '+'x'*24,
-            {'id':'filtered-task','title':'Synthetic','status':'active','owner':'Synthetic Owner'})
+            {'id':'filtered-task','title':'Synthetic','status':'active','owner':'Synthetic Owner','type': 'procedural'})
         receipt = self.engine.receipt('filtered-event', 'api_key='+self.token,
                                       ['reference.md'], 'codex')
         for result in (note, task, receipt):
@@ -72,7 +72,7 @@ class SecretFilterTest(unittest.TestCase):
         self.state.mkdir(parents=True, exist_ok=True)
         literal = 'CUSTOM-SYNTHETIC-CANARY'
         (self.state/'secret-patterns.txt').write_text(literal+'\n', encoding='utf-8')
-        result = self.engine.note_create('knowledge/custom.md', 'Value '+literal)
+        result = self.engine.note_create('knowledge/custom.md', 'Value '+literal, {'type': 'semantic'})
         self.assertEqual(result['secrets_redacted'], 1)
         self.assertNotIn(literal, (self.vault/'knowledge/custom.md').read_text())
         database = (self.state/'secret-filter.sqlite3').read_bytes()
