@@ -509,37 +509,110 @@ def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
     """
     if type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
         raise ValueError("invalid budget")
-    selected, citations = [], []
+    if limit == 0 or budget_chars == 0 or not records:
+        return {"records": [], "citations": [], "abstained": True, "truncated": bool(records),
+                "omitted_count": len(records), "used_chars": 0, "budget_chars": budget_chars, "stale_count": stale_count}
+
+    marker = " [truncated]"
+    candidates = []
+    citations = []
+    full_sizes = []
+    min_floors = []
+    cum_floor = 0
+
+    for r in records:
+        if len(candidates) >= limit:
+            break
+        cit = {"id": r["id"], "source": r["source"]}
+        full_sz = len(_json(r)) + len(_json(cit))
+        empty_r = dict(r, text="", text_truncated=True)
+        overhead = len(_json(empty_r)) + len(_json(cit))
+        floor = min(full_sz, overhead + len(marker) + 1)
+
+        if cum_floor + floor > budget_chars:
+            continue
+
+        candidates.append(r)
+        citations.append(cit)
+        full_sizes.append(full_sz)
+        min_floors.append(floor)
+        cum_floor += floor
+
+    if not candidates:
+        return {"records": [], "citations": [], "abstained": True, "truncated": bool(records),
+                "omitted_count": len(records), "used_chars": 0, "budget_chars": budget_chars, "stale_count": stale_count}
+
+    active_count = len(candidates)
+    alloc = list(min_floors)
+    remaining = budget_chars - cum_floor
+
+    # Multi-pass fair share distribution of remaining surplus
+    while remaining > 0:
+        needy = [i for i in range(active_count) if alloc[i] < full_sizes[i]]
+        if not needy:
+            break
+        share = max(1, remaining // len(needy))
+        progress = False
+        for i in needy:
+            give = min(share, full_sizes[i] - alloc[i], remaining)
+            if give > 0:
+                alloc[i] += give
+                remaining -= give
+                progress = True
+            if remaining == 0:
+                break
+        if not progress:
+            break
+
+    if remaining > 0:
+        for i in range(active_count):
+            if alloc[i] < full_sizes[i]:
+                give = min(remaining, full_sizes[i] - alloc[i])
+                alloc[i] += give
+                remaining -= give
+                if remaining == 0:
+                    break
+
+    selected, final_citations = [], []
     used = 0
     clipped_any = False
-    for record in records:
-        if len(selected) >= limit:
-            break
-        citation = {"id": record["id"], "source": record["source"]}
-        size = len(_json(record)) + len(_json(citation))
-        if used + size > budget_chars:
+    slack = 0
+
+    for i in range(active_count):
+        record = candidates[i]
+        citation = citations[i]
+        target_budget = min(full_sizes[i], alloc[i] + slack)
+
+        if full_sizes[i] <= target_budget:
+            selected.append(record)
+            final_citations.append(citation)
+            used += full_sizes[i]
+            slack = target_budget - full_sizes[i]
+        else:
             clipped = dict(record, text="", text_truncated=True)
-            available = budget_chars - used - len(_json(clipped)) - len(_json(citation))
-            marker = " [truncated]"
-            if available <= len(marker):
+            avail = target_budget - len(_json(clipped)) - len(_json(citation))
+            if avail <= len(marker):
+                slack += target_budget
                 continue
-            # JSON escaping can cost more than one character per input char.
-            text = record["text"][:available - len(marker)]
+            text = record["text"][:avail - len(marker)]
             clipped["text"] = text + marker
-            while text and len(_json(clipped)) + len(_json(citation)) > budget_chars - used:
+            while text and len(_json(clipped)) + len(_json(citation)) > target_budget:
                 text = text[:-1]
                 clipped["text"] = text + marker
             if not text:
+                slack += target_budget
                 continue
-            record = clipped
-            size = len(_json(record)) + len(_json(citation))
+            record_size = len(_json(clipped)) + len(_json(citation))
+            selected.append(clipped)
+            final_citations.append(citation)
+            used += record_size
             clipped_any = True
-        selected.append(record)
-        clipped_any = clipped_any or bool(record.get("text_truncated"))
-        citations.append(citation)
-        used += size
+            slack = target_budget - record_size
+
     omitted = len(records) - len(selected)
-    return {"records": selected, "citations": citations, "abstained": not selected, "truncated": bool(omitted) or clipped_any, "omitted_count": omitted, "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count}
+    return {"records": selected, "citations": final_citations, "abstained": not selected,
+            "truncated": bool(omitted) or clipped_any, "omitted_count": omitted,
+            "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count}
 
 def shared_context(store, harness, query, **kwargs):
     """All supported harnesses call the same source-backed retrieval function."""
