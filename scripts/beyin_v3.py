@@ -207,6 +207,8 @@ def main(argv=None):
                     seen[event['harness']].add(event.get('event', 'unknown'))
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
+            manifest = state / 'v3-install.json'
+            result['kept_legacy_runners'] = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', []) if manifest.exists() else []
             load_sync()
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)

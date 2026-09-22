@@ -48,6 +48,32 @@ the `.claude/hooks/` V2 handlers). Accepting one path does not accept any other;
 there is no blanket override. The pre-install bytes go into the install manifest
 as the file's `original`, so `--uninstall` and `rollback` put your version back.
 
+## Keeping a customized legacy runner
+
+A runner you rewrote for your own pipeline may still be wanted next to V3, for
+example a summarizer that writes `daily/YYYY-MM-DD.md` while V3 writes
+`daily/v3/`. Keep that one file by name instead of retiring it:
+
+```text
+python3 scripts/install_v3.py --vault "/absolute/path/to/vault" \
+  --keep-customized-legacy .claude/scripts/flush.py \
+  --keep-customized-legacy .claude/hooks/session-end.sh
+```
+
+A kept runner is unmanaged: the installer does not read, hash, plan or replace
+it, it takes no manifest entry, and `--uninstall` and `rollback` leave it alone.
+Hook entries in `.claude/settings.json`, `.claude/settings.local.json` and
+`.codex/hooks.json` that call a kept hook file stay in place; entries for the
+other V2 handlers are still retired. The same path cannot be both kept and
+accepted, and keeping one path does not keep any other.
+
+The choice is recorded as `kept_legacy` in the install manifest, so a later
+`update` or reinstall, which takes no flags, does not ask for the same review
+again and finalization does not demand a retirement marker for that file.
+`doctor` lists the kept paths as `kept_legacy_runners`. What a kept runner
+writes is yours to reconcile: V3 does not read it, index it or stop it, and a
+kept summarizer that writes the same file as a V3 projection is your conflict.
+
 Retiring a runner only replaces that one file. Helper modules it imported stay on
 disk, now uncalled: `_portalock.py` here, and in older vaults files such as
 `autopush.py`. They are left alone because they are not hash-recognized project
