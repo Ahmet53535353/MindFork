@@ -285,10 +285,39 @@ class SyncEngine:
                 conflicts.append({'journal': entry.name, 'reason': str(exc)})
         return completed, conflicts
 
+    def _scan_receipts(self, db):
+        receipts_dir = self.root / 'receipts'
+        if not receipts_dir.is_dir():
+            return
+        for path in sorted(receipts_dir.glob('*.md')):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                raw = path.read_text(encoding='utf-8')
+                metadata, body = parse(raw)
+                if metadata.get('kind') == 'receipt' and metadata.get('event_id'):
+                    event_id = metadata['event_id']
+                    row = db.execute('SELECT payload FROM receipts WHERE id=?', (event_id,)).fetchone()
+                    if not row:
+                        event = {
+                            'event_id': event_id,
+                            'summary': body.strip(),
+                            'refs': metadata.get('refs', []),
+                            'harness': metadata.get('harness', 'manual'),
+                        }
+                        if metadata.get('created_at'):
+                            event['created_at'] = metadata['created_at']
+                        if metadata.get('session'):
+                            event['session'] = metadata['session']
+                        db.execute('INSERT OR IGNORE INTO receipts VALUES (?,?)', (event_id, _json(event)))
+            except Exception:
+                continue
+
     def sync(self):
         # Serialize recovery, source scan and projection across local processes.
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            self._scan_receipts(db)
             completed, recovery_conflicts = self._recover(db)
             records, warnings, conflicts = self._scan()
             conflicts.extend(recovery_conflicts)
@@ -502,6 +531,30 @@ class SyncEngine:
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload FROM receipts WHERE id=?', (event_id,)).fetchone()
+            if not row:
+                path = self._path(source)
+                if path.exists():
+                    try:
+                        disk_metadata, disk_body = parse(path.read_text(encoding='utf-8'))
+                        if disk_metadata.get('kind') == 'receipt' and disk_metadata.get('event_id') == event_id:
+                            if disk_body.rstrip() != summary.rstrip() or disk_metadata.get('refs') != refs:
+                                raise ReceiptConflict('event id collision')
+                            old = {
+                                'event_id': event_id,
+                                'summary': summary,
+                                'refs': refs,
+                                'harness': disk_metadata.get('harness', harness),
+                            }
+                            if disk_metadata.get('created_at'):
+                                old['created_at'] = disk_metadata['created_at']
+                            if disk_metadata.get('session'):
+                                old['session'] = disk_metadata['session']
+                            db.execute('INSERT OR IGNORE INTO receipts VALUES (?,?)', (event_id, _json(old)))
+                            row = (json.dumps(old),)
+                    except ReceiptConflict:
+                        raise
+                    except Exception:
+                        pass
             if row:
                 old = json.loads(row[0])
                 if old['summary'] != summary or old['refs'] != refs:
@@ -524,7 +577,8 @@ class SyncEngine:
             raise ReceiptConflict('receipt projection conflict')
         if self._path(source, existing=True).read_text(encoding='utf-8') != content:
             raise ReceiptConflict('receipt source changed before readback')
-        self.store.submit_receipt(event_id, summary, refs, event['harness'])
+        self.store.submit_receipt(event_id, summary, refs, event['harness'],
+                                  created_at=event.get('created_at'), session=event.get('session'))
         self._record_redactions(redacted)
         return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
                 'redacted': redacted, 'secrets_redacted': redacted}
