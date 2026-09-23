@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.2.0:** Jev kapalıyken de daha iyi kaynak sürekliliği ve alias araması, isteğe bağlı `jev-memory` değerlendirmesi ve vault dışındaki seçili projeler için opsiyonel köprü. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.2.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.3.0:** Claude Code artık kurulumdan sonra da `AGENTS.md` kurallarını görüyor, OMP (Oh My Pi) altıncı istemci olarak destekleniyor ve özelleştirilmiş eski runner V3'ün yanında tutulabiliyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.3.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
