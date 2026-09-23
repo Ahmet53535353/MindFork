@@ -44,6 +44,8 @@ Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başl
 
 OpenCode için ek adım yok: installer vault içine eklentisini yazar, OpenCode vault klasöründe açılınca aynı motora bağlanır. Adımlar: [docs/v3/OPENCODE.md](docs/v3/OPENCODE.md).
 
+OMP (Oh My Pi) için ek adım yok: installer vault içine `.omp/hooks/pre/beyin-v3.ts` yazar, OMP vault klasöründe açılınca aynı motora bağlanır; her oturumda bağlanması için tek dosyayı global agentDir'e kopyalamak yeterlidir. Adımlar: [docs/v3/OMP.md](docs/v3/OMP.md).
+
 ## İlk konuşma
 
 V3.1.0 kişilik/süreklilik davranışı: yeni kurulum düşünme ortağı kimliğini
