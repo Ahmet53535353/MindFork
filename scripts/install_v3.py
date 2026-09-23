@@ -42,12 +42,14 @@ STOCK_DOCTOR_HASH = "fd7919c86d140314de82660b2b6f428e2804c4e4d5df35e68d9904dc0ab
 RETIRED_STUB = b"# BEYIN_V3_LEGACY_RETIRED: canonical source runtime owns new outcomes.\n"
 
 
-def managed_handler(handler, previous):
+def managed_handler(handler, previous, kept=()):
     command = handler.get("command", "")
     serialized = command + " " + " ".join(str(arg) for arg in handler.get("args", []))
     normalized = serialized.replace("\\", "/")
-    legacy = any(re.search(r'(?:^|/)\.(?:claude|codex|agents)/hooks/' + re.escape(name) +
-                           r'(?=$|[\s"\';&|])', normalized) for name in LEGACY_HOOK_FILES)
+    # A kept runner stays wired: the user chose to run it next to V3, so its entry is theirs.
+    legacy = any(re.search(r'(?:^|/)' + re.escape(root + name) + r'(?=$|[\s"\';&|])', normalized)
+                 for root in (".claude/hooks/", ".codex/hooks/", ".agents/hooks/")
+                 for name in LEGACY_HOOK_FILES if root + name not in kept)
     return command in previous or "beyin_v3_hook.py" in command or legacy
 
 
@@ -123,7 +125,7 @@ def conflict_case(current):
     return "deleted" if current is None else "content differs"
 
 
-def semantic_unchanged(name, baseline, current, previous):
+def semantic_unchanged(name, baseline, current, previous, kept=()):
     if baseline is None or current is None: return False
     if line_endings_only(baseline, current): return True
     # The owned-region comparisons below must not see line endings either: a CRLF rewrite
@@ -139,14 +141,15 @@ def semantic_unchanged(name, baseline, current, previous):
             def owned(raw):
                 data = json.loads(raw)
                 if name == ".agents/hooks.json": return data.get("beyin-v3")
-                return {event: [dict(group, hooks=[h for h in group.get("hooks", []) if managed_handler(h, previous)]) for group in groups if any(managed_handler(h, previous) for h in group.get("hooks", []))] for event, groups in data.get("hooks", {}).items() if any(managed_handler(h, previous) for group in groups for h in group.get("hooks", []))}
+                return {event: [dict(group, hooks=[h for h in group.get("hooks", []) if managed_handler(h, previous, kept)]) for group in groups if any(managed_handler(h, previous, kept) for h in group.get("hooks", []))] for event, groups in data.get("hooks", {}).items() if any(managed_handler(h, previous, kept) for group in groups for h in group.get("hooks", []))}
             return owned(baseline) == owned(current)
     except (ValueError, UnicodeError, TypeError): pass
     return False
 
 
 def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", legacy_hashes=None,
-             legacy_skill_hashes=None, migration=None, migration_plan=None, accept_customized=()):
+             legacy_skill_hashes=None, migration=None, migration_plan=None, accept_customized=(),
+             keep_customized=()):
     vault, state = vault.resolve(), state.resolve()
     if not vault.is_dir() or state == vault or vault in state.parents:
         raise ValueError("Existing vault and state outside vault required")
@@ -199,6 +202,24 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         path = vault / name
         if path.exists():
             legacy_hashes[name] = digest(path.read_bytes())
+    # A kept runner is the user's own writer running next to V3: never planned, never
+    # retired, never in the manifest. The choice persists in the manifest so a later
+    # update, which takes no flags, does not ask for the same review again.
+    for name in keep_customized:
+        if name not in LEGACY_RUNNERS:
+            raise ValueError('unsupported legacy managed path ' + str(name))
+        if name in accept_customized:
+            raise ValueError('legacy runner cannot be both kept and retired ' + str(name))
+        if name in manifest['files']:
+            raise ValueError('legacy runner already retired; restore it with --uninstall or rollback before keeping ' + name)
+        if not (vault / name).is_file():
+            raise ValueError('kept legacy runner not found ' + name)
+    # Hook entries of a runner kept before this run were the user's in the last install, so
+    # edits to them are no conflict. Accepting a kept runner ends the keep and retires it.
+    user_owned = set(manifest.get('kept_legacy', [])) | set(keep_customized)
+    kept = sorted(user_owned - set(accept_customized))
+    if migration_plan is not None and (kept or 'kept_legacy' in migration_plan):
+        migration_plan['kept_legacy'] = kept
 
     def add(name, content):
         path = (vault / name).resolve()
@@ -209,6 +230,8 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
     for name, expected in legacy_hashes.items():
         if name not in LEGACY_RUNNERS:
             raise ValueError('unsupported legacy managed path')
+        if name in kept:
+            continue
         path = vault / name
         if path.exists() and name not in manifest['files']:
             if digest(path.read_bytes()) != expected:
@@ -264,12 +287,12 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         for event, groups in list(hooks.items()):
             cleaned = []
             for group in groups:
-                kept = [h for h in group.get("hooks", []) if not managed_handler(h, manifest.get("commands", []))]
+                remaining = [h for h in group.get("hooks", []) if not managed_handler(h, manifest.get("commands", []), kept)]
                 # Encoded Windows command contains no visible filename; match exact prior manifest below.
                 previous = manifest.get("commands", [])
-                kept = [h for h in kept if h.get("command") not in previous]
-                if kept:
-                    cleaned.append(dict(group, hooks=kept))
+                remaining = [h for h in remaining if h.get("command") not in previous]
+                if remaining:
+                    cleaned.append(dict(group, hooks=remaining))
             hooks[event] = cleaned
         posix, windows = commands([sys.executable, hook, "--vault", vault, "--state", state, "--harness", harness])
         for event in ("SessionStart", "UserPromptSubmit", "Stop", "PostToolUse", "PreCompact", "SessionEnd"):
@@ -288,8 +311,8 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
         for event, groups in data.get("hooks", {}).items():
-            data["hooks"][event] = [dict(group, hooks=kept) for group in groups
-                                     if (kept := [h for h in group.get("hooks", []) if not managed_handler(h, manifest.get("commands", []))])]
+            data["hooks"][event] = [dict(group, hooks=remaining) for group in groups
+                                     if (remaining := [h for h in group.get("hooks", []) if not managed_handler(h, manifest.get("commands", []), kept)])]
         add(".claude/settings.json", jbytes(data))
     path = vault / ".agents/hooks.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -362,7 +385,7 @@ not knowledge synthesis.
         current = path.read_bytes() if path.exists() else None
         if item and (current is None or digest(current) != item["installed_hash"]):
             baseline = base64.b64decode(item["installed_content"]) if item.get("installed_content") else None
-            if not semantic_unchanged(name, baseline, current, manifest.get("commands", [])):
+            if not semantic_unchanged(name, baseline, current, manifest.get("commands", []), user_owned):
                 raise ValueError("Reinstall conflict: managed file changed " + name +
                                  " (" + conflict_case(current) + ")")
         elif not item and current is not None and not line_endings_only(planned[name], current):
@@ -378,6 +401,10 @@ not knowledge synthesis.
         next_manifest["files"][name] = {"original": original, "installed_hash": digest(content), "installed_content": encode(content)}
     next_manifest["commands"] = next_manifest.pop("new_commands", [])
     next_manifest["version"] = version
+    if kept:
+        next_manifest["kept_legacy"] = kept
+    else:
+        next_manifest.pop("kept_legacy", None)
     if plan_only:
         return {"planned": planned, "manifest": next_manifest, "modes": modes}
     spec = importlib.util.spec_from_file_location('beyin_install_transaction', ROOT / 'template/.claude/scripts/beyin_v3_update.py')
@@ -408,7 +435,7 @@ not knowledge synthesis.
         updater._apply(vault,state,journal,(migration,migration_plan) if migration else None)
     from beyin_v3_companion import initialize
     companion = initialize(vault, state)
-    return {'status':'installed','files':len(planned),'trust_review_required':True,
+    return {'status':'installed','files':len(planned),'trust_review_required':True,'kept_legacy':kept,
             'companion': companion,
             'update_notice': 'New releases are checked on GitHub at most daily; notes are not sent. Disable with beyin.py preferences --update-notifications off.',
             'skills':{'synced':['beyin','beyin-doktor','beyin-guncelle'],'conflicts':[], 'mode':'managed'}}
@@ -445,7 +472,7 @@ def package_defaults():
 
 
 def install(vault, state, uninstall=False, plan_only=False, version=None, legacy_hashes=None,
-            legacy_skill_hashes=None, accept_customized=()):
+            legacy_skill_hashes=None, accept_customized=(), keep_customized=()):
     package = package_defaults()
     if package is not None:
         if version is not None and version != package['version']:
@@ -461,7 +488,7 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
         version = version or '3.0.0'
     if plan_only or uninstall:
         return _install(vault, state, uninstall, plan_only, version, legacy_hashes, legacy_skill_hashes,
-                        accept_customized=accept_customized)
+                        accept_customized=accept_customized, keep_customized=keep_customized)
     directory = ROOT / 'template/.claude/scripts'
     if (Path(state).resolve() / 'update-journal.json').exists():
         spec = importlib.util.spec_from_file_location('beyin_install_recovery', directory / 'beyin_v3_update.py')
@@ -475,7 +502,7 @@ def install(vault, state, uninstall=False, plan_only=False, version=None, legacy
         with module.migration_guard(vault, state) as plan:
             return _install(vault, state, version=version, legacy_hashes=legacy_hashes,
                             legacy_skill_hashes=legacy_skill_hashes, migration=module, migration_plan=plan,
-                            accept_customized=accept_customized)
+                            accept_customized=accept_customized, keep_customized=keep_customized)
     finally:
         sys.path.remove(str(directory))
 
@@ -486,7 +513,8 @@ def plan_report(plan):
     return {"status": "plan", "version": plan["manifest"]["version"],
             "write": sorted(name for name in plan["planned"] if name not in retire),
             "retire": retire,
-            "preserve": sorted(name for name in plan["planned"] if files[name]["original"] is not None)}
+            "preserve": sorted(name for name in plan["planned"] if files[name]["original"] is not None),
+            "keep": sorted(plan["manifest"].get("kept_legacy", []))}
 
 
 def main():
@@ -498,6 +526,8 @@ def main():
     mode.add_argument("--plan", action="store_true", help="report what an install would do; change nothing")
     parser.add_argument("--accept-customized-legacy", action="append", default=[], metavar="PATH",
                         help="retire one named customized legacy runner (vault-relative); repeatable")
+    parser.add_argument("--keep-customized-legacy", action="append", default=[], metavar="PATH",
+                        help="leave one named customized legacy runner and its hook entries untouched and unmanaged (vault-relative); repeatable")
     args = parser.parse_args()
     spec = importlib.util.spec_from_file_location("beyin_cli_defaults", ROOT / "scripts/beyin_v3.py")
     defaults = importlib.util.module_from_spec(spec); spec.loader.exec_module(defaults)
@@ -505,8 +535,9 @@ def main():
     os.umask(0o077)
     try:
         accepted = tuple(name.replace("\\", "/") for name in args.accept_customized_legacy)
+        kept = tuple(name.replace("\\", "/") for name in args.keep_customized_legacy)
         result = install(args.vault, args.state or default_state(args.vault.resolve()), args.uninstall,
-                         plan_only=args.plan, accept_customized=accepted)
+                         plan_only=args.plan, accept_customized=accepted, keep_customized=kept)
         print(json.dumps(plan_report(result) if args.plan else result))
     except Exception as exc:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}), file=sys.stderr)
