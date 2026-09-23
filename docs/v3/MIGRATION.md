@@ -63,13 +63,19 @@ python3 scripts/install_v3.py --vault "/absolute/path/to/vault" \
 A kept runner is unmanaged: the installer does not read, hash, plan or replace
 it, it takes no manifest entry, and `--uninstall` and `rollback` leave it alone.
 Hook entries in `.claude/settings.json`, `.claude/settings.local.json` and
-`.codex/hooks.json` that call a kept hook file stay in place; entries for the
-other V2 handlers are still retired. The same path cannot be both kept and
-accepted, and keeping one path does not keep any other.
+`.codex/hooks.json` that call a kept hook file by that exact path stay in place
+and are yours to edit or remove; entries for the other V2 handlers, including a
+file of the same name under `.codex/hooks/` or `.agents/hooks/`, are still
+retired. A kept path must exist and must not already be retired. The same path
+cannot be both kept and accepted in one run, and keeping one path does not keep
+any other.
 
 The choice is recorded as `kept_legacy` in the install manifest, so a later
-`update` or reinstall, which takes no flags, does not ask for the same review
-again and finalization does not demand a retirement marker for that file.
+`update`, which takes no flags, or a reinstall without the flag does not ask for
+the same review again and finalization does not demand a retirement marker for
+that file. To stop keeping a runner, reinstall with
+`--accept-customized-legacy` for that path: it is retired like any other
+accepted runner and leaves `kept_legacy`.
 `doctor` lists the kept paths as `kept_legacy_runners`. What a kept runner
 writes is yours to reconcile: V3 does not read it, index it or stop it, and a
 kept summarizer that writes the same file as a V3 projection is your conflict.

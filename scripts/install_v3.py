@@ -47,9 +47,9 @@ def managed_handler(handler, previous, kept=()):
     serialized = command + " " + " ".join(str(arg) for arg in handler.get("args", []))
     normalized = serialized.replace("\\", "/")
     # A kept runner stays wired: the user chose to run it next to V3, so its entry is theirs.
-    legacy = any(re.search(r'(?:^|/)\.(?:claude|codex|agents)/hooks/' + re.escape(name) +
-                           r'(?=$|[\s"\';&|])', normalized)
-                 for name in LEGACY_HOOK_FILES if ".claude/hooks/" + name not in kept)
+    legacy = any(re.search(r'(?:^|/)' + re.escape(root + name) + r'(?=$|[\s"\';&|])', normalized)
+                 for root in (".claude/hooks/", ".codex/hooks/", ".agents/hooks/")
+                 for name in LEGACY_HOOK_FILES if root + name not in kept)
     return command in previous or "beyin_v3_hook.py" in command or legacy
 
 
@@ -125,7 +125,7 @@ def conflict_case(current):
     return "deleted" if current is None else "content differs"
 
 
-def semantic_unchanged(name, baseline, current, previous):
+def semantic_unchanged(name, baseline, current, previous, kept=()):
     if baseline is None or current is None: return False
     if line_endings_only(baseline, current): return True
     # The owned-region comparisons below must not see line endings either: a CRLF rewrite
@@ -141,7 +141,7 @@ def semantic_unchanged(name, baseline, current, previous):
             def owned(raw):
                 data = json.loads(raw)
                 if name == ".agents/hooks.json": return data.get("beyin-v3")
-                return {event: [dict(group, hooks=[h for h in group.get("hooks", []) if managed_handler(h, previous)]) for group in groups if any(managed_handler(h, previous) for h in group.get("hooks", []))] for event, groups in data.get("hooks", {}).items() if any(managed_handler(h, previous) for group in groups for h in group.get("hooks", []))}
+                return {event: [dict(group, hooks=[h for h in group.get("hooks", []) if managed_handler(h, previous, kept)]) for group in groups if any(managed_handler(h, previous, kept) for h in group.get("hooks", []))] for event, groups in data.get("hooks", {}).items() if any(managed_handler(h, previous, kept) for group in groups for h in group.get("hooks", []))}
             return owned(baseline) == owned(current)
     except (ValueError, UnicodeError, TypeError): pass
     return False
@@ -210,8 +210,15 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             raise ValueError('unsupported legacy managed path ' + str(name))
         if name in accept_customized:
             raise ValueError('legacy runner cannot be both kept and retired ' + str(name))
-    kept = sorted(set(manifest.get('kept_legacy', [])) | set(keep_customized))
-    if migration_plan is not None and kept:
+        if name in manifest['files']:
+            raise ValueError('legacy runner already retired; restore it with --uninstall or rollback before keeping ' + name)
+        if not (vault / name).is_file():
+            raise ValueError('kept legacy runner not found ' + name)
+    # Hook entries of a runner kept before this run were the user's in the last install, so
+    # edits to them are no conflict. Accepting a kept runner ends the keep and retires it.
+    user_owned = set(manifest.get('kept_legacy', [])) | set(keep_customized)
+    kept = sorted(user_owned - set(accept_customized))
+    if migration_plan is not None and (kept or 'kept_legacy' in migration_plan):
         migration_plan['kept_legacy'] = kept
 
     def add(name, content):
@@ -371,7 +378,7 @@ not knowledge synthesis.
         current = path.read_bytes() if path.exists() else None
         if item and (current is None or digest(current) != item["installed_hash"]):
             baseline = base64.b64decode(item["installed_content"]) if item.get("installed_content") else None
-            if not semantic_unchanged(name, baseline, current, manifest.get("commands", [])):
+            if not semantic_unchanged(name, baseline, current, manifest.get("commands", []), user_owned):
                 raise ValueError("Reinstall conflict: managed file changed " + name +
                                  " (" + conflict_case(current) + ")")
         elif not item and current is not None and not line_endings_only(planned[name], current):
@@ -389,6 +396,8 @@ not knowledge synthesis.
     next_manifest["version"] = version
     if kept:
         next_manifest["kept_legacy"] = kept
+    else:
+        next_manifest.pop("kept_legacy", None)
     if plan_only:
         return {"planned": planned, "manifest": next_manifest, "modes": modes}
     spec = importlib.util.spec_from_file_location('beyin_install_transaction', ROOT / 'template/.claude/scripts/beyin_v3_update.py')

@@ -293,6 +293,85 @@ class InstallLegacyExemptionTest(unittest.TestCase):
         self.assertEqual(plain_doctor.returncode, 0, plain_doctor.stderr.decode('utf-8', errors='replace'))
         self.assertEqual(json.loads(plain_doctor.stdout)['kept_legacy_runners'], [])
 
+    def test_editing_or_removing_the_kept_hook_entry_is_no_reinstall_or_update_conflict(self):
+        self.seed('.claude/hooks/session-end.sh', CUSTOM_HOOK)
+        settings = self.seed('.claude/settings.local.json', json.dumps({'hooks': {'SessionEnd': [{'hooks': [
+            {'type': 'command', 'command': '"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh"'}]}]}}).encode('utf-8'))
+        result = self.cli('--keep-customized-legacy', '.claude/hooks/session-end.sh')
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        def edit(change):
+            data = json.loads(settings.read_text(encoding='utf-8'))
+            for groups in data['hooks'].values():
+                for group in groups:
+                    change(group)
+            settings.write_text(json.dumps(data), encoding='utf-8')
+        kept = lambda group: 'session-end.sh' in json.dumps(group)
+        edit(lambda group: [h.update(timeout=30) for h in group['hooks']] if kept(group) else None)
+        reinstall = self.cli()
+        self.assertEqual(reinstall.returncode, 0, reinstall.stderr.decode('utf-8', errors='replace'))
+        self.assertIn('"timeout": 30', settings.read_text(encoding='utf-8'))
+        edit(lambda group: group['hooks'].clear() if kept(group) else None)
+        package = build_package(self.base / 'upgrade.zip', '3.0.1', self.env)
+        update = run_python(self.vault / 'beyin.py', ['update', '--package', package], self.vault, self.env)
+        self.assertEqual(update.returncode, 0, update.stderr.decode('utf-8', errors='replace'))
+        self.assertNotIn('session-end.sh', settings.read_text(encoding='utf-8'))
+        edit(lambda group: [h.update(timeout=99) for h in group['hooks'] if 'beyin_v3_hook.py' in h['command']])
+        with self.assertRaisesRegex(ValueError, 'Reinstall conflict: managed file changed .claude/settings.local.json'):
+            self.installer.install(self.vault, self.state, plan_only=True)
+
+    def test_accepting_a_previously_kept_runner_retires_it_and_ends_the_keep(self):
+        runner = self.seed('.claude/scripts/flush.py', CUSTOM_RUNNER)
+        hook = self.seed('.claude/hooks/session-end.sh', CUSTOM_HOOK)
+        settings = self.seed('.claude/settings.json', json.dumps({'hooks': {'SessionEnd': [{'hooks': [
+            {'type': 'command', 'command': '"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh"'}]}]}}).encode('utf-8'))
+        result = self.cli('--keep-customized-legacy', '.claude/scripts/flush.py',
+                          '--keep-customized-legacy', '.claude/hooks/session-end.sh')
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        accept = self.cli('--accept-customized-legacy', '.claude/hooks/session-end.sh')
+        self.assertEqual(accept.returncode, 0, accept.stderr.decode('utf-8', errors='replace'))
+        self.assertEqual(json.loads(accept.stdout)['kept_legacy'], ['.claude/scripts/flush.py'])
+        self.assertIn(b'BEYIN_V3_LEGACY_RETIRED', hook.read_bytes())
+        self.assertNotIn('session-end.sh', settings.read_text(encoding='utf-8'))
+        self.assertEqual(runner.read_bytes(), CUSTOM_RUNNER)
+        manifest = json.loads((self.state / 'v3-install.json').read_text(encoding='utf-8'))
+        self.assertEqual(manifest['kept_legacy'], ['.claude/scripts/flush.py'])
+        self.assertIn('.claude/hooks/session-end.sh', manifest['files'])
+        last = self.cli('--accept-customized-legacy', '.claude/scripts/flush.py')
+        self.assertEqual(last.returncode, 0, last.stderr.decode('utf-8', errors='replace'))
+        self.assertIn(b'BEYIN_V3_LEGACY_RETIRED', runner.read_bytes())
+        self.assertNotIn('kept_legacy', json.loads((self.state / 'v3-install.json').read_text(encoding='utf-8')))
+        uninstall = self.cli('--uninstall')
+        self.assertEqual(uninstall.returncode, 0, uninstall.stderr.decode('utf-8', errors='replace'))
+        self.assertEqual(runner.read_bytes(), CUSTOM_RUNNER)
+        self.assertEqual(hook.read_bytes(), CUSTOM_HOOK)
+        self.assertIn('session-end.sh', settings.read_text(encoding='utf-8'))
+
+    def test_keeping_a_claude_hook_keeps_only_entries_for_that_exact_path(self):
+        self.seed('.claude/hooks/session-end.sh', CUSTOM_HOOK)
+        self.seed('.codex/hooks.json', json.dumps({'hooks': {'SessionEnd': [{'hooks': [
+            {'type': 'command', 'command': '"$CLAUDE_PROJECT_DIR/' + root + '/hooks/session-end.sh"'}
+            for root in ('.claude', '.codex', '.agents')]}]}}).encode('utf-8'))
+        plan = self.installer.install(self.vault, self.state, plan_only=True,
+                                      keep_customized=('.claude/hooks/session-end.sh',))
+        groups = json.loads(plan['planned']['.codex/hooks.json'])['hooks'].values()
+        self.assertEqual([h['command'] for group in sum(groups, []) for h in group['hooks'] if 'session-end.sh' in h['command']],
+                         ['"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh"'])
+
+    def test_keeping_a_missing_or_already_retired_runner_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'kept legacy runner not found .claude/scripts/flush.py'):
+            self.installer.install(self.vault, self.state, plan_only=True,
+                                   keep_customized=('.claude/scripts/flush.py',))
+        runner = self.seed('.claude/scripts/flush.py', CUSTOM_RUNNER)
+        result = self.cli('--accept-customized-legacy', '.claude/scripts/flush.py')
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        with self.assertRaisesRegex(ValueError, 'legacy runner already retired'):
+            self.installer.install(self.vault, self.state, plan_only=True,
+                                   keep_customized=('.claude/scripts/flush.py',))
+        keep = self.cli('--keep-customized-legacy', '.claude/scripts/flush.py')
+        self.assertNotEqual(keep.returncode, 0)
+        self.assertIn(b'BEYIN_V3_LEGACY_RETIRED', runner.read_bytes())
+        self.assertNotIn('kept_legacy', json.loads((self.state / 'v3-install.json').read_text(encoding='utf-8')))
+
 
 if __name__ == '__main__':
     unittest.main()
