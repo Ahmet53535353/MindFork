@@ -248,6 +248,13 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         for name, content in module.plan_plugin(vault, state).items():
             add(name, content)
+    omp = ROOT / "template/.claude/scripts/beyin_v3_omp.py"
+    if omp.exists():
+        # OMP loads <project>/.omp/hooks/pre/*.ts when the session cwd matches the vault.
+        spec = importlib.util.spec_from_file_location("beyin_release_omp", omp)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        for name, content in module.plan_plugin(vault, state).items():
+            add(name, content)
     add(".claude/scripts/beyin_v3_cli.py", (ROOT / "scripts/beyin_v3.py").read_bytes())
     hook = vault / ".claude/scripts/beyin_v3_hook.py"
     for harness, name in (("claude", ".claude/settings.local.json"), ("codex", ".codex/hooks.json")):
