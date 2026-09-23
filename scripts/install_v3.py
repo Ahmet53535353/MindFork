@@ -19,6 +19,9 @@ sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 START, END = "<!-- beyin-v3:start -->", "<!-- beyin-v3:end -->"
+# By default Claude Code skips AGENTS.md whenever a CLAUDE.md exists; an import keeps it loaded once (#84).
+AGENTS_IMPORT = re.compile(r"(?m)^@(?:\./)?AGENTS\.md\s*$")
+CLAUDE_IMPORT = b"@AGENTS.md\n"
 LEGACY_HOOK_FILES = tuple(name + suffix for name in ("session-start", "session-end", "pre-compact", "prompt-counter") for suffix in (".sh", ".ps1"))
 LEGACY = tuple(".claude/hooks/" + name for name in LEGACY_HOOK_FILES)
 LEGACY_RUNNERS = LEGACY + (".claude/scripts/flush.py", ".claude/scripts/compile.py")
@@ -134,7 +137,13 @@ def semantic_unchanged(name, baseline, current, previous, kept=()):
     try:
         if name in ("AGENTS.md", "CLAUDE.md"):
             pattern = re.escape(START) + r".*?" + re.escape(END)
-            return re.findall(pattern, baseline.decode(), re.S) == re.findall(pattern, current.decode(), re.S)
+            blocks = re.findall(pattern, current.decode(), re.S)
+            imports = name == "CLAUDE.md" and bool(AGENTS_IMPORT.search(current.decode()))
+            # An importing CLAUDE.md already receives the block through AGENTS.md; the import-only
+            # file the installer created owns its import line the way other routers own the block.
+            if imports and not blocks: return True
+            if name == "CLAUDE.md" and baseline == CLAUDE_IMPORT and not imports: return False
+            return re.findall(pattern, baseline.decode(), re.S) == blocks
         if name == ".codex/config.toml":
             return bool(re.search(r"(?m)^hooks\s*=\s*true\s*$", current.decode()))
         if name in (".claude/settings.local.json", ".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json"):
@@ -377,6 +386,18 @@ not knowledge synthesis.
     for name in ("AGENTS.md", "CLAUDE.md"):
         path = vault / name
         text = path.read_text(encoding="utf-8") if path.exists() else ""
+        if name == "CLAUDE.md":
+            # A CLAUDE.md symlinked to AGENTS.md was already planned through AGENTS.md.
+            if path.resolve() == (vault / "AGENTS.md").resolve(): continue
+            item = manifest["files"].get(name)
+            outside = re.sub(r"\n*" + re.escape(START) + r".*?" + re.escape(END), "", text, flags=re.S)
+            # Absent, or the block-only file an earlier install created (an edited block still conflicts below).
+            if not path.exists() or (item is not None and item["original"] is None and not outside.strip()):
+                add(name, CLAUDE_IMPORT)
+                continue
+            if AGENTS_IMPORT.search(outside):
+                if item is not None or START in text: add(name, outside.encode())
+                continue
         text = re.sub(re.escape(START) + r".*?" + re.escape(END), lambda _: block, text, flags=re.S) if START in text else text.rstrip() + "\n\n" + block + "\n"
         add(name, text.encode())
     for name in planned:
