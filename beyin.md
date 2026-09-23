@@ -139,9 +139,11 @@ Vault kokunde su kontrolleri yap:
 Ek olarak `.beyin-version`, `.agents/skills/beyin/SKILL.md`,
 `.agents/skills/beyin-doktor/SKILL.md` ve `.agents/skills/beyin-guncelle/SKILL.md`
 dosyalarinin varligini kontrol et. Kurulumdan sonra gecici ZIP ve acma klasorunu sil;
-kullanici notlarina dokunma. Kurulum vault kokundeki `AGENTS.md` ve `CLAUDE.md`
-dosyalarina `<!-- beyin-v3:start -->` isaretli yonetilen bir bolum ekler; mevcut icerik
-korunur. Kullaniciya verdigin ozette neyin eklendigini yaz.
+kullanici notlarina dokunma. Kurulum vault kokundeki `AGENTS.md` dosyasina
+`<!-- beyin-v3:start -->` isaretli yonetilen bir bolum ekler; mevcut icerik korunur.
+`CLAUDE.md` yoksa yalniz `@AGENTS.md` import satiriyla olusturulur. `AGENTS.md`'yi zaten
+import eden `CLAUDE.md`'ye bolum ikinci kez eklenmez; import etmeyen `CLAUDE.md`'ye ayni
+bolum eklenir. Kullaniciya verdigin ozette neyin eklendigini yaz.
 
 Kurulum vault kokune yalniz ilgili platformun guncelleme kisayolunu birakir: macOS'ta
 `Beyni Güncelle.command`, Windows'ta `Beyni Guncelle.cmd`, Linux'ta `Beyni Güncelle.sh`
