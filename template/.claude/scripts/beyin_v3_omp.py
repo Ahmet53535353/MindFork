@@ -64,6 +64,19 @@ function sessionOf(ctx) {
   }
 }
 
+// OMP task sub-agents load the parent's hooks and emit their own session_start. The task
+// executor appends a session_init entry before that event; top-level sessions never carry
+// one. Skip sub-agents like OpenCode child sessions: they never submit receipts, and
+// tracking them would inject duplicate context and report false receipt gaps.
+function isSubagent(ctx) {
+  try {
+    const entries = ctx?.sessionManager?.getEntries?.()
+    return Array.isArray(entries) && entries.some((entry) => entry?.type === "session_init")
+  } catch {
+    return false
+  }
+}
+
 function send(state, event, payload) {
   // Fail open: any transport failure means no context, never a broken OMP turn.
   return new Promise((resolve) => {
@@ -96,13 +109,21 @@ function send(state, event, payload) {
 //   session_before_compact -> PreCompact
 //   session_shutdown       -> SessionEnd
 // The only request-time injection channel is before_agent_start, so a hook outside
-// the vault must no-op: never queue or inject for an unrelated project.
+// the vault must no-op: never queue or inject for an unrelated project. Sub-agent
+// sessions no-op the same way.
 export default function (pi) {
   const state = runtimeState()
   if (!state) return
   let pinned = ""
   let firstPromptSeen = false
-  const inVaultOf = (ctx) => inVault(ctx) ? sessionOf(ctx) : null
+  const subagents = new Map()
+  const inVaultOf = (ctx) => {
+    if (!inVault(ctx)) return null
+    const session = sessionOf(ctx)
+    // getEntries() copies the whole session, so decide once per session.
+    if (!subagents.has(session)) subagents.set(session, isSubagent(ctx))
+    return subagents.get(session) ? null : session
+  }
 
   pi.on("session_start", async (_event, ctx) => {
     const session = inVaultOf(ctx)
@@ -129,23 +150,24 @@ export default function (pi) {
   })
 
   pi.on("tool_result", async (event, ctx) => {
-    if (!inVault(ctx) || !WRITE_TOOLS.has(String(event?.toolName ?? ""))) return
-    await send(state, "PostToolUse", { session_id: sessionOf(ctx) })
+    if (!WRITE_TOOLS.has(String(event?.toolName ?? ""))) return
+    const session = inVaultOf(ctx)
+    if (session) await send(state, "PostToolUse", { session_id: session })
   })
 
   pi.on("session_stop", async (_event, ctx) => {
-    if (!inVault(ctx)) return
-    await send(state, "Stop", { session_id: sessionOf(ctx) })
+    const session = inVaultOf(ctx)
+    if (session) await send(state, "Stop", { session_id: session })
   })
 
   pi.on("session_before_compact", async (_event, ctx) => {
-    if (!inVault(ctx)) return
-    await send(state, "PreCompact", { session_id: sessionOf(ctx) })
+    const session = inVaultOf(ctx)
+    if (session) await send(state, "PreCompact", { session_id: session })
   })
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (!inVault(ctx)) return
-    await send(state, "SessionEnd", { session_id: sessionOf(ctx) })
+    const session = inVaultOf(ctx)
+    if (session) await send(state, "SessionEnd", { session_id: session })
   })
 }
 '''

@@ -23,7 +23,8 @@ const mod = await import(pathToFileURL(process.env.PLUGIN_PATH).href)
 mod.default(pi)
 const result = { keys: Object.keys(handlers).sort() }
 if (result.keys.length) {
-  const ctx = { cwd: process.env.OMP_CWD, sessionManager: { getSessionId: () => "omp-1" } }
+  const ctx = { cwd: process.env.OMP_CWD,
+    sessionManager: { getSessionId: () => "omp-1", getEntries: () => [{ type: "message" }] } }
   await handlers.session_start({}, ctx)
   const first = await handlers.before_agent_start({ prompt: "merhaba" }, ctx)
   result.first = first?.message?.content ?? null
@@ -36,6 +37,15 @@ if (result.keys.length) {
   const outside = { cwd: process.env.OMP_OUTSIDE, sessionManager: { getSessionId: () => "omp-2" } }
   const out = await handlers.before_agent_start({ prompt: "x" }, outside)
   result.outside = out?.message?.content ?? null
+  // OMP task sub-agents reuse the parent's hooks; the executor records session_init first.
+  const sub = { cwd: process.env.OMP_CWD,
+    sessionManager: { getSessionId: () => "omp-sub", getEntries: () => [{ type: "session_init", task: "t" }] } }
+  await handlers.session_start({}, sub)
+  const subPrompt = await handlers.before_agent_start({ prompt: "klima kargo DHL" }, sub)
+  result.subagent = subPrompt?.message?.content ?? null
+  await handlers.tool_result({ toolName: "edit" }, sub)
+  await handlers.session_stop({}, sub)
+  await handlers.session_shutdown({}, sub)
   await handlers.session_shutdown({}, ctx)
 }
 console.log(JSON.stringify(result))
@@ -142,13 +152,14 @@ class OMPHarnessTest(unittest.TestCase):
         self.assertIn('OMP köprüsü kuruldu', result['first'])
         self.assertIn('notes/klima.md', result['second'], 'Later prompts inject turn context')
         self.assertEqual(result['outside'], None, 'Sessions outside the vault get no memory context')
+        self.assertEqual(result['subagent'], None, 'Task sub-agents get no memory context')
         done = self.done_events()
         self.assertEqual({e['harness'] for e in done}, {'omp'})
         self.assertEqual(sorted(e['event'] for e in done),
                          sorted(['SessionStart', 'UserPromptSubmit', 'UserPromptSubmit', 'PostToolUse',
                                  'PreCompact', 'Stop', 'SessionEnd']),
                          'One event per mapped hook; the first prompt is both SessionStart and a real turn, '
-                         'read tools and the outside session queue nothing')
+                         'read tools, the outside session and sub-agents queue nothing')
         for event in done:
             self.assertNotIn('prompt', event, 'Hook metadata must never persist transcript text')
 
