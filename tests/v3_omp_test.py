@@ -112,7 +112,7 @@ class OMPHarnessTest(unittest.TestCase):
         self.assertTrue(self.hook_file.is_file())
         text = self.hook_file.read_text(encoding='utf-8')
         self.assertIn('--harness", "omp"', text)
-        self.assertIn(json.dumps(str(self.vault.resolve())), text, 'Vault is pinned because OMP loads copies from outside it')
+        self.assertIn(json.dumps(str(self.vault.resolve())), text, 'Vault is pinned at install time')
         self.assertIn(json.dumps(sys.executable), text, 'Interpreter is pinned like the hook commands')
         self.assertNotIn(str(self.state), text, 'State comes from .beyin-runtime.json, not the hook')
         installed = json.loads((self.state / 'v3-install.json').read_text(encoding='utf-8'))

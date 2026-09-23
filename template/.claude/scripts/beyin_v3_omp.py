@@ -13,9 +13,8 @@ import { readFileSync, realpathSync } from "node:fs"
 import { isAbsolute, join, resolve } from "node:path"
 
 // OMP loads project hooks from <project>/.omp/hooks/pre/*.ts when the session cwd
-// matches. A user may also copy this file to ~/.omp/agent/hooks/pre/ to cover every
-// session; the same VAULT pin serves both, and BEYIN_VAULT/BEYIN_PYTHON override it
-// like the Hermes shim does.
+// matches. VAULT and PYTHON are pinned at install time; BEYIN_VAULT/BEYIN_PYTHON
+// override them like the Hermes shim does.
 const PYTHON = process.env.BEYIN_PYTHON || __PYTHON__
 const VAULT = process.env.BEYIN_VAULT || __VAULT__
 const HOOK = join(VAULT, ".claude", "scripts", "beyin_v3_hook.py")
@@ -174,7 +173,7 @@ export default function (pi) {
 
 
 def plan_plugin(vault, state):
-    """Return hook bytes; the vault is pinned because OMP loads copies from outside it."""
+    """Return hook bytes; vault and interpreter are pinned, state comes from .beyin-runtime.json."""
     if any(char in sys.executable for char in '\r\n\x00'):
         raise ValueError('Unsupported interpreter path')
     source = (PLUGIN.replace('__PYTHON__', json.dumps(sys.executable))
