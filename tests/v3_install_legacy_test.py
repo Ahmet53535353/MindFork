@@ -315,7 +315,8 @@ class InstallLegacyExemptionTest(unittest.TestCase):
         update = run_python(self.vault / 'beyin.py', ['update', '--package', package], self.vault, self.env)
         self.assertEqual(update.returncode, 0, update.stderr.decode('utf-8', errors='replace'))
         self.assertNotIn('session-end.sh', settings.read_text(encoding='utf-8'))
-        edit(lambda group: [h.update(timeout=99) for h in group['hooks'] if 'beyin_v3_hook.py' in h['command']])
+        # V3's own entries; on Windows the command is an encoded PowerShell launcher, so select by exclusion.
+        edit(lambda group: [h.update(timeout=99) for h in group['hooks'] if 'session-end.sh' not in json.dumps(h)])
         with self.assertRaisesRegex(ValueError, 'Reinstall conflict: managed file changed .claude/settings.local.json'):
             self.installer.install(self.vault, self.state, plan_only=True)
 
