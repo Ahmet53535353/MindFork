@@ -85,8 +85,8 @@ class OMPHarnessTest(unittest.TestCase):
                                '--state', str(self.state), '--harness', harness, *extra],
                               input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8')
 
-    def drive(self):
-        env = dict(os.environ, PLUGIN_PATH=str(self.hook_file), OMP_CWD=str(self.vault),
+    def drive(self, cwd=None):
+        env = dict(os.environ, PLUGIN_PATH=str(self.hook_file), OMP_CWD=str(cwd or self.vault),
                    OMP_OUTSIDE=str(Path(self.temp.name) / 'elsewhere'))
         result = subprocess.run([BUN, 'run', str(self.driver)], env=env,
                                 capture_output=True, text=True, encoding='utf-8', cwd=self.vault)
@@ -151,6 +151,17 @@ class OMPHarnessTest(unittest.TestCase):
                          'read tools and the outside session queue nothing')
         for event in done:
             self.assertNotIn('prompt', event, 'Hook metadata must never persist transcript text')
+
+    @unittest.skipUnless(BUN, 'bun is required to execute the OMP hook')
+    def test_omp_hook_matches_vault_through_path_alias(self):
+        alias = Path(self.temp.name) / 'vault-link'
+        try:
+            alias.symlink_to(self.vault, target_is_directory=True)
+        except OSError:
+            self.skipTest('symlinks are unavailable')
+        result = self.drive(alias)
+        self.assertIn('OMP köprüsü kuruldu', result['first'] or '',
+                      'OMP reports cwd without resolving symlinks or /private; the hook must still match the vault')
 
     @unittest.skipUnless(BUN, 'bun is required to execute the OMP hook')
     def test_omp_hook_fails_open(self):

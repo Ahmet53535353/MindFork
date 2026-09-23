@@ -8,8 +8,8 @@ WRITE_TOOLS = ('edit', 'write', 'patch', 'apply_patch', 'multiedit')
 
 PLUGIN = r'''// Beyin V3 OMP hook; installer-owned, removed by rollback and uninstall.
 import { execFile } from "node:child_process"
-import { readFileSync } from "node:fs"
-import { isAbsolute, join } from "node:path"
+import { readFileSync, realpathSync } from "node:fs"
+import { isAbsolute, join, resolve } from "node:path"
 
 // OMP loads project hooks from <project>/.omp/hooks/pre/*.ts when the session cwd
 // matches. A user may also copy this file to ~/.omp/agent/hooks/pre/ to cover every
@@ -30,10 +30,26 @@ function runtimeState() {
   }
 }
 
+// OMP reports cwd without macOS /private (/var vs /private/var) and does not resolve
+// symlinks, while the pinned vault is fully resolved; compare canonical paths on both sides.
+// The native realpath also expands Windows 8.3 short names, as Python's resolve() does.
+function canonical(path) {
+  const text = String(path ?? "")
+  if (!text) return ""
+  let real
+  try {
+    real = (realpathSync.native || realpathSync)(text)
+  } catch {
+    real = resolve(text)
+  }
+  return real.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase()
+}
+
+const VAULT_KEY = canonical(VAULT)
+
 function inVault(ctx) {
   try {
-    const normalize = (path) => String(path ?? "").replace(/[\\/]+/g, "/").toLowerCase()
-    return normalize(ctx?.cwd) === normalize(VAULT)
+    return Boolean(VAULT_KEY) && canonical(ctx?.cwd) === VAULT_KEY
   } catch {
     return false
   }
