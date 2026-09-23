@@ -20,7 +20,7 @@ OMP turn. A vault without a valid runtime file registers no hooks.
 `session_start` is `SessionStart`; `before_agent_start` is `UserPromptSubmit` with `event.prompt`
 as the prompt and is the only request-time injection channel, so the `SessionStart` context is
 pinned and carried into the first prompt, while each later prompt gets its own turn context.
-`tool_result` for edit, write and patch tools is `PostToolUse`, `session_stop` is `Stop`,
+`tool_result` for the `edit`, `write` and `ast_edit` tools is `PostToolUse`, `session_stop` is `Stop`,
 `session_before_compact` is `PreCompact`, and `session_shutdown` is `SessionEnd`. Like Claude,
 the first prompt queues both `SessionStart` and a real `UserPromptSubmit` event.
 

@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import sys
 
-WRITE_TOOLS = ('edit', 'write', 'patch', 'apply_patch', 'multiedit')
+# OMP 18 built-in tools that change files (tools/builtin-names.ts); edit covers every edit mode.
+WRITE_TOOLS = ('edit', 'write', 'ast_edit')
 
 PLUGIN = r'''// Beyin V3 OMP hook; installer-owned, removed by rollback and uninstall.
 import { execFile } from "node:child_process"
