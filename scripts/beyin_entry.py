@@ -87,6 +87,15 @@ def human_result(result, command, installed_version=None):
                          str(jev.get('last_24h', {}).get('calls', 0)) + ' cagri')
         if result.get('secrets_redacted'):
             lines.append('Sir suzgeci ' + str(result['secrets_redacted']) + ' eslesmeyi [REDACTED] olarak yazdi.')
+        cov = result.get('receipt_coverage')
+        if isinstance(cov, dict) and cov.get('total', 0) > 0:
+            ratio = cov.get('ratio')
+            pct = int(round(ratio * 100)) if ratio is not None else 0
+            d7 = cov.get('last_7d', {})
+            d7_text = ''
+            if d7.get('total', 0) > 0 and d7.get('ratio') is not None:
+                d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
+            lines.append('Makbuz kapsami: %' + str(pct) + ' (' + str(cov['covered']) + '/' + str(cov['total']) + ' oturum' + d7_text + ')')
         if result.get('skill_conflicts'):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):

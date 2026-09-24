@@ -192,6 +192,16 @@ class SyncEngine:
         with self.store._connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS markdown_sources(id TEXT PRIMARY KEY, source TEXT NOT NULL)')
 
+    @classmethod
+    def reader(cls, store):
+        """Read-only view over an open MemoryStore for doctor: no journal directory, no schema write."""
+        engine = cls.__new__(cls)
+        engine.store = store
+        engine.root = store.vault_root
+        engine.state = store.state_dir
+        engine.journal = engine.state / 'markdown-journal'
+        return engine
+
     def snapshot_context(self, **kwargs):
         return self.store.snapshot_context(**kwargs)
 

@@ -161,6 +161,17 @@ prompt events are reported as a terminal-only limitation. Explicit `no_memory`
 hook metadata suppresses the
 checkpoint signal. Respect a user's no-memory request regardless of that signal.
 
+`doctor` also reports `receipt_coverage`: the share of finished sessions with a
+matching receipt, for all time and for the last 7 and 30 days, measured when
+`doctor` runs. Only sessions with an observed user prompt count, either a
+UserPromptSubmit or a SessionStart that carries the first prompt (Hermes,
+OpenCode); the queue keeps only that fact, never the prompt text. Its `missing`
+count can therefore be smaller than `potential_missing_receipts`, which counts
+every finished checkpoint. Checkpoints recorded before this field existed have
+no prompt marker, so the ratio starts with sessions after the upgrade and stays
+`null` until one is observed. A receipt whose `created_at` cannot be read never
+covers a session.
+
 ## Validation boundary
 
 Synthetic tests cover byte preservation, idempotent watermarking, inflight

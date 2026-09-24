@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 
 def default_state(vault: Path) -> Path:
@@ -220,11 +221,19 @@ def main(argv=None):
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
+            gaps_info = result['receipt-gaps.json']
+            result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts') if gaps_info is not None else None
+            if gaps_info is not None:
+                from beyin_v3_projections import receipt_coverage
+                with store._connect() as db:
+                    result['receipt_coverage'] = receipt_coverage(db, now=time.time())
+            else:
+                result['receipt_coverage'] = None
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
             try:
-                result['task_completion'] = load_sync()(vault, state).completion_health()
+                result['task_completion'] = load_sync().reader(store).completion_health()
             except Exception as exc:
                 result['task_completion'] = {
                     'strict_issue_count': 0, 'strict_issues': [], 'legacy_done_count': 0,
