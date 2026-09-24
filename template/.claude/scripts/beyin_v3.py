@@ -439,13 +439,10 @@ class MemoryStore:
     STRICT_MIN_WEIGHT = 0.30
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
-    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False):
+    def _eligible(self, audience="internal", project=None):
+        """Visibility, trust, project and source-freshness gates shared by every retrieval path."""
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
-        if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
-            raise ValueError("invalid query or budget")
-        if isinstance(statuses, str):
-            statuses = [statuses]
         with self._connect() as db:
             records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
         allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
@@ -466,6 +463,16 @@ class MemoryStore:
                 stale_count += 1
                 continue
             eligible.append(record)
+        return eligible, stale_count
+
+    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False):
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
+            raise ValueError("invalid query or budget")
+        if isinstance(statuses, str):
+            statuses = [statuses]
+        eligible, stale_count = self._eligible(audience, project)
         superseded = {rid for record in eligible for rid in record["supersedes"]}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
