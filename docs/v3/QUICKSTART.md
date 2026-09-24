@@ -103,8 +103,9 @@ options. Command-line `--status` can be repeated. `--limit` defaults to 5 and
 choose its harness using `--harness`. Reuse an event ID only for the same outcome.
 Task patch JSON requires `id`, `expected_revision`, and `changes`. A revision
 conflict requires reading current state and reconciling the intended change.
-`history RECORD_ID` returns ordered revision snapshots, including the original
-source synchronization and subsequent updates, so changes can be reviewed from local state.
+`history RECORD_ID` synchronizes first, like `context`, and returns ordered revision
+snapshots, including the original source synchronization, subsequent updates and a
+final `delete` event for removed sources, so changes can be reviewed from local state.
 
 By default, `context` refreshes the local index before retrieval. `--no-sync`
 instead opens an already initialized SQLite index in read-only mode and does not

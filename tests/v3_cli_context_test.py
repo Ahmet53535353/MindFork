@@ -125,4 +125,49 @@ class ContextRefreshTest(unittest.TestCase):
         self.assertEqual(events[-1]['record']['rejected_reason'],
                          'User corrected this inference.')
 
+    def test_history_syncs_edits_and_keeps_deleted_audit_trail(self):
+        def write(name, **metadata):
+            (self.vault / 'notes' / (name + '.md')).write_text(
+                '---\n' + json.dumps(dict({'id': name, 'kind': 'inference'}, **metadata)) +
+                '\n---\nSynthetic user prefers ' + name + ' diagrams.\n', encoding='utf-8')
+        write('amber', validity='current')
+        write('teal', validity='current')
+        self.assertEqual(self.run_cli('sync').returncode, 0)
+        # SKILL.md flow: mark the inference rejected, then run history with no explicit sync.
+        write('amber', validity='rejected', rejected_reason='User corrected this inference.', rejected_at='2026-09-24')
+        edited = self.run_cli('history', 'amber')
+        self.assertEqual(edited.returncode, 0, edited.stderr)
+        events = json.loads(edited.stdout)
+        self.assertEqual([e['event_type'] for e in events], ['ingest', 'update'])
+        self.assertEqual([e['record']['validity'] for e in events], ['current', 'rejected'])
+        (self.vault / 'notes/amber.md').unlink()
+        deleted = self.run_cli('history', 'amber')
+        self.assertEqual(deleted.returncode, 0, deleted.stderr)
+        self.assertEqual([e['event_type'] for e in json.loads(deleted.stdout)], ['ingest', 'update', 'delete'])
+        # A rejection without its reason fails validation: the record leaves context,
+        # and history shows the drop instead of an empty list.
+        write('teal', validity='rejected', rejected_at='2026-09-24')
+        dropped = self.run_cli('history', 'teal')
+        self.assertEqual(dropped.returncode, 0, dropped.stderr)
+        events = json.loads(dropped.stdout)
+        self.assertEqual([e['event_type'] for e in events], ['ingest', 'delete'])
+        self.assertEqual(events[-1]['record']['validity'], 'current')
+        context = self.run_cli('context', 'teal diagrams', '--no-sync')
+        self.assertNotIn('teal', [row['id'] for row in json.loads(context.stdout)['records']])
+        # A deleted private record stays hidden from the default internal audience.
+        private = self.vault / 'notes/private.md'
+        private.write_text('---\n{"id":"hidden","kind":"fact","visibility":"private"}\n---\nSynthetic private canary.\n', encoding='utf-8')
+        self.assertEqual(self.run_cli('sync').returncode, 0)
+        private.unlink()
+        hidden = self.run_cli('history', 'hidden')
+        self.assertEqual(hidden.returncode, 0, hidden.stderr)
+        self.assertEqual(json.loads(hidden.stdout), [])
+
+    def test_history_refuses_conflict_without_stale_result(self):
+        (self.vault / 'notes/duplicate.md').write_bytes(self.source.read_bytes())
+        result = self.run_cli('history', 'calibration')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('conflict', result.stderr.lower())
+
 if __name__=='__main__':unittest.main()

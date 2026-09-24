@@ -266,6 +266,12 @@ class RuntimeContractTest(unittest.TestCase):
             db.execute('UPDATE records SET payload=? WHERE id=?', (json.dumps(record), 'missing-source'))
         self.assertEqual(self.store.history('missing-source'), [])
 
+    def test_history_without_current_row_or_delete_event_fails_closed(self):
+        self.store.ingest(self.record('orphan'))
+        with self.store._connect() as db:
+            db.execute('DELETE FROM records WHERE id=?', ('orphan',))
+        self.assertEqual(self.store.history('orphan'), [])
+
     def test_deleted_source_not_retrieved_as_verified_fact(self):
         self.store.ingest(self.record())
         (self.vault / 'notes/record.md').unlink()

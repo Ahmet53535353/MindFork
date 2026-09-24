@@ -302,28 +302,32 @@ class MemoryStore:
 
         Databases created before events were added have no invented prehistory.
         A verified current source authorizes historical revisions of that record;
-        each event still has to pass the requested visibility boundary.
+        each event still has to pass the requested visibility boundary. A record
+        that synchronization deleted (source removed or no longer valid) keeps its
+        audit trail: the snapshot stored in its final delete event sets the
+        boundary instead, because there is no current source left to verify.
         """
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
         with self._connect() as db:
             current = db.execute("SELECT payload FROM records WHERE id=?", (record_id,)).fetchone()
-            if not current:
-                return []
-            current = json.loads(current[0])
-            if (current.get("visibility") not in allowed or current.get("trust") == "untrusted" or
-                    current.get("trusted") is False or current.get("status") == "untrusted" or
-                    current.get("kind") == "untrusted"):
-                return []
+            rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
+        if not rows or (not current and rows[-1][1] != "delete"):
+            return []
+        boundary = json.loads(current[0] if current else rows[-1][4])
+        if (boundary.get("visibility") not in allowed or boundary.get("trust") == "untrusted" or
+                boundary.get("trusted") is False or boundary.get("status") == "untrusted" or
+                boundary.get("kind") == "untrusted"):
+            return []
+        if current:
             try:
-                source = self._source(current.get("source"))
+                source = self._source(boundary.get("source"))
                 actual = hashlib.sha256((self.vault_root / source).read_bytes()).hexdigest()
-                if actual != current.get("source_sha256"):
+                if actual != boundary.get("source_sha256"):
                     return []
             except (ValueError, OSError, TypeError):
                 return []
-            rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
         return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
                 for row in rows if (record := json.loads(row[4])).get("visibility") in allowed and
                 record.get("trust") != "untrusted" and record.get("trusted") is not False and
