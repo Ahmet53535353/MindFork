@@ -2,6 +2,10 @@
 
 Kullanıcı ayarı `.beyin-preferences.json` içinde; yönetilen release dosyası değildir. Installer, updater ve rollback bu dosyayı değiştirmez. Dosya yoksa mevcut normal davranış korunur. Ortak Python uygulaması Windows, macOS ve Linux'ta aynı ayarları okur; yeni servis veya model bağımlılığı yoktur.
 
+## Stop'ta receipt hatırlatması
+
+Claude veya Codex oturumu dosya düzenleme araçlarından birini kullandıysa ve transcript'te receipt komutu yoksa, Stop hook'u bir kez `python3 beyin.py receipt --file RECEIPT_JSON --harness claude` (veya mevcut istemci) komutunu hatırlatır; transcript yoksa ya da bozuksa akış durdurulmaz. Kullanıcı mesajında `[kaydetme]` yazarak bu oturumdaki hatırlatmayı atlayabilir veya `BEYIN_V3_NO_RECEIPT_REMINDER=1` ile özelliği kapatabilir.
+
 `python3 beyin.py preferences --profile economical` ile ekonomik, `--profile normal` ile normal, `--profile manual` ile manuel kullanım. Argüman verilmezse ayarlar okunur. Ajan bunları beyin skill'i üzerinden uygular. `--human` okunabilir çıktı sağlar.
 
 Alanlar: `auto_sync` boolean; `interval_minutes` 0–1440 (0 her olay); `context_mode` turn/session/off; `context_chars` 1000–12000. Karakter sınırı ek hook bağlamının tamamına uygulanır; token kotası değildir. Sayısal ve bilinmeyen alanlar doğrulanır, hatalı dosya sessizce ezilmez.

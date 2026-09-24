@@ -80,6 +80,11 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(len(lines), 1, 'Hook stdout must contain exactly one JSON response')
         return json.loads(lines[0])
 
+    def transcript(self, name, *rows):
+        path = self.root / name
+        path.write_text('\n'.join(json.dumps(row) for row in rows) + '\n', encoding='utf-8')
+        return path
+
     def install(self, uninstall=False):
         self.assertTrue(INSTALLER.is_file(), 'Installer not implemented')
         result = subprocess.run([sys.executable, str(INSTALLER), '--vault', str(self.vault), '--state', str(self.state)] +
@@ -227,6 +232,61 @@ class HookInstallerTest(unittest.TestCase):
         drained = self.invoke({}, 'claude', extra=['--drain-queue'])
         self.assertEqual(drained['processed'], 1)
         self.assertEqual(drained['pending'], 0)
+
+    def test_stop_receipt_reminder_blocks_once_for_claude_and_codex(self):
+        transcript = self.transcript(
+            'edited.jsonl',
+            {'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'name': 'Edit', 'input': {}}]}},
+        )
+        for harness in ('claude', 'codex'):
+            payload = {'hook_event_name': 'Stop', 'session_id': 'reminder-' + harness,
+                       'event_id': 'reminder-' + harness + '-first', 'transcript_path': str(transcript)}
+            first = self.invoke(payload, harness)
+            self.assertEqual(first['decision'], 'block')
+            self.assertIn('python3 beyin.py receipt --file RECEIPT_JSON --harness ' + harness, first['reason'])
+            second = self.invoke(dict(payload, event_id=payload['event_id'] + '-second'), harness)
+            self.assertEqual(second, {})
+
+    def test_stop_receipt_reminder_passes_when_receipt_is_present(self):
+        transcript = self.transcript(
+            'receipt.jsonl',
+            {'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'name': 'Edit', 'input': {}}]}},
+            {'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'name': 'Bash',
+                                                            'input': {'command': 'python3 beyin.py receipt --file receipt.json --harness claude'}}]}},
+        )
+        response = self.invoke({'hook_event_name': 'Stop', 'session_id': 'receipt-session',
+                                'event_id': 'receipt-event', 'transcript_path': str(transcript)}, 'claude')
+        self.assertEqual(response, {})
+
+    def test_stop_receipt_reminder_passes_without_edits(self):
+        transcript = self.transcript('no-edits.jsonl', {'message': {'role': 'assistant', 'content': []}})
+        response = self.invoke({'hook_event_name': 'Stop', 'session_id': 'no-edits-session',
+                                'event_id': 'no-edits-event', 'transcript_path': str(transcript)}, 'claude')
+        self.assertEqual(response, {})
+
+    def test_stop_receipt_reminder_passes_for_missing_or_garbage_transcript(self):
+        missing = self.invoke({'hook_event_name': 'Stop', 'session_id': 'missing-session',
+                               'event_id': 'missing-event', 'transcript_path': str(self.root / 'missing.jsonl')}, 'codex')
+        self.assertEqual(missing, {})
+        garbage = self.root / 'garbage.jsonl'
+        garbage.write_text('{not json}\n', encoding='utf-8')
+        response = self.invoke({'hook_event_name': 'Stop', 'session_id': 'garbage-session',
+                                'event_id': 'garbage-event', 'transcript_path': str(garbage)}, 'codex')
+        self.assertEqual(response, {})
+
+    def test_stop_receipt_reminder_honours_user_opt_out(self):
+        transcript = self.transcript(
+            'opt-out.jsonl',
+            {'message': {'role': 'user', 'content': '[kaydetme]'}},
+            {'message': {'role': 'assistant', 'content': [{'type': 'tool_use', 'name': 'Write', 'input': {}}]}},
+        )
+        response = self.invoke({'hook_event_name': 'Stop', 'session_id': 'opt-out-session',
+                                'event_id': 'opt-out-event', 'transcript_path': str(transcript)}, 'claude')
+        self.assertEqual(response, {})
+        self.env['BEYIN_V3_NO_RECEIPT_REMINDER'] = '1'
+        env_response = self.invoke({'hook_event_name': 'Stop', 'session_id': 'env-opt-out-session',
+                                    'event_id': 'env-opt-out-event', 'transcript_path': str(transcript)}, 'claude')
+        self.assertEqual(env_response, {})
 
     def test_antigravity_start_only_first_invocation_and_final_idle_stop(self):
         self.seed()

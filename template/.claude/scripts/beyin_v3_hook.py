@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 sys.dont_write_bytecode = True
@@ -13,6 +14,12 @@ import uuid
 
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+RECEIPT_RE = re.compile(r"\bbeyin\.py[\"']?\s+receipt\b")
+RECEIPT_REMINDER = (
+    "Bu oturumda dosya değişiklikleri yapıldı; bitirdiyseniz şimdi şu komutla receipt yazın: "
+    "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}."
+)
 
 
 def atomic(path, data):
@@ -41,6 +48,88 @@ def receipt_context(vault):
     with path.open(encoding="utf-8") as source:
         content = source.read(1200)
     return "\nLatest receipt (historical agent claim, not independently verified):\n" + content
+
+
+def _text_blocks(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                yield item
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                yield item["text"]
+
+
+def _tool_blocks(value):
+    if not isinstance(value, list):
+        return
+    for item in value:
+        if isinstance(item, dict) and item.get("type") == "tool_use":
+            yield item
+
+
+def _scan_receipt_transcript(path):
+    edits = False
+    receipt = False
+    opt_out = False
+    with path.open("r", encoding="utf-8", errors="replace") as source:
+        for line in source:
+            if "tool_use" not in line and "[kaydetme]" not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(row, dict):
+                continue
+            message = row.get("message")
+            if not isinstance(message, dict):
+                message = row
+            role = message.get("role") or row.get("role")
+            content = message.get("content")
+            if role == "user" and any("[kaydetme]" in text for text in _text_blocks(content)):
+                opt_out = True
+            if role != "assistant":
+                continue
+            for block in _tool_blocks(content):
+                name = block.get("name")
+                if name in EDIT_TOOLS:
+                    edits = True
+                tool_input = block.get("input")
+                if isinstance(tool_input, dict):
+                    command = tool_input.get("command") or tool_input.get("cmd")
+                    if isinstance(command, str) and RECEIPT_RE.search(command):
+                        receipt = True
+    return edits, receipt, opt_out
+
+
+def receipt_reminder(payload, state, harness):
+    """Return a one-time Stop decision, or None when the session may finish."""
+    if harness not in ("claude", "codex") or payload.get("stop_hook_active") is True:
+        return None
+    if os.environ.get("BEYIN_V3_NO_RECEIPT_REMINDER") == "1":
+        return None
+    try:
+        session_id = payload.get("session_id")
+        transcript = payload.get("transcript_path")
+        if not isinstance(session_id, str) or not session_id or not isinstance(transcript, str):
+            return None
+        transcript_path = Path(transcript)
+        if not transcript_path.is_file():
+            return None
+        marker = Path(state) / "receipt-reminders" / (hashlib.sha256(session_id.encode("utf-8")).hexdigest() + ".done")
+        if marker.exists():
+            return None
+        edits, receipt, opt_out = _scan_receipt_transcript(transcript_path)
+        if not edits or receipt or opt_out:
+            return None
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        with marker.open("x", encoding="utf-8"):
+            pass
+        return {"decision": "block", "reason": RECEIPT_REMINDER.format(harness=harness)}
+    except Exception:
+        return None
 
 
 def enqueue_event(vault, state, payload, harness):
@@ -162,8 +251,9 @@ def main():
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
         settings = read(vault)
+        reminder = receipt_reminder(payload, state, args.harness) if event == "Stop" else None
         if not settings['auto_sync']:
-            print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
+            print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))
             return
         enqueue_event(vault, state, payload, args.harness)
         command = [sys.executable, str(Path(__file__).resolve()), "--vault", str(vault),
@@ -179,7 +269,7 @@ def main():
         process = subprocess.Popen(command, **options) if due else None
         inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
         if not inject or args.metadata_only:
-            print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
+            print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))
             return
         if event in ("SessionStart", "UserPromptSubmit"):
             if not due and not disabled:
@@ -251,7 +341,7 @@ def main():
             output = output_context(args.harness, event, (notice + text)[:settings['context_chars']])
             print(json.dumps(output))
         else:
-            print('{"decision":"stop"}' if args.harness == "antigravity" else "{}")
+            print(json.dumps(reminder) if reminder else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}"))
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if not args.metadata_only and locals().get("event") in ("SessionStart", "UserPromptSubmit"):
