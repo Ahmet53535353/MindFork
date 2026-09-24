@@ -153,5 +153,40 @@ class MigrationTest(unittest.TestCase):
         engine.sync()
         self.assertEqual(json.loads((self.state/'receipt-gaps.json').read_text())['potential_missing_receipts'], 1)
 
+    def install_manifest(self, *kept):
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / 'v3-install.json').write_text(
+            json.dumps({'files': {}, 'kept_legacy': list(kept)}), encoding='utf-8')
+
+    def test_guard_plan_reports_kept_legacy_runners_from_the_install_manifest(self):
+        self.install_manifest('.claude/scripts/flush.py')
+        self.source('.claude/scripts/flush.py', 'print("user owned flush")\n')
+        with self.m.migration_guard(self.root, self.state) as plan:
+            self.assertEqual(plan['kept_legacy'], ['.claude/scripts/flush.py'])
+
+    def test_kept_legacy_runner_finalizes_unretired_and_unchanged(self):
+        self.install_manifest('.claude/scripts/flush.py')
+        runner = self.source('.claude/scripts/flush.py', 'print("user owned flush")\n')
+        before = runner.read_bytes()
+        result = self.m.migrate_v2(self.root, self.state)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(runner.read_bytes(), before)
+        self.assertNotIn(b'BEYIN_V3_LEGACY_RETIRED', runner.read_bytes())
+        self.assertTrue((self.state / 'v2-migration.json').exists())
+
+    def test_kept_legacy_runner_symlink_is_still_refused(self):
+        self.install_manifest('.claude/scripts/flush.py')
+        external = Path(self.temp.name) / 'external-flush.py'
+        external.write_text('print("external writer")\n')
+        parent = self.root / '.claude/scripts'
+        parent.mkdir(parents=True)
+        try:
+            (parent / 'flush.py').symlink_to(external)
+        except OSError:
+            self.skipTest('symlink unavailable')
+        with self.assertRaisesRegex(RuntimeError, 'symlink'):
+            self.m.migrate_v2(self.root, self.state)
+        self.assertFalse((self.state / 'v2-migration.json').exists())
+
 if __name__ == '__main__':
     unittest.main()
