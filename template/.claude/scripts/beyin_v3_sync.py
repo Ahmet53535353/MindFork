@@ -223,6 +223,56 @@ class SyncEngine:
             raise ValueError('source missing')
         return path
 
+    def _completion_issue(self, metadata, task_source=None):
+        """Validate an opt-in task contract without changing its evidence sources."""
+        contract = metadata.get('completion_contract')
+        if contract is not None and contract != 'strict':
+            return 'completion_contract must be strict when set'
+        criterion = metadata.get('completion_criterion')
+        if criterion is not None and (not isinstance(criterion, str) or not criterion.strip()):
+            return 'completion_criterion must be nonempty text'
+        refs = metadata.get('evidence_refs', [])
+        if not isinstance(refs, list) or not all(isinstance(ref, str) and ref.strip() for ref in refs):
+            return 'evidence_refs must be a list of source paths'
+        if len(refs) != len(set(refs)):
+            return 'evidence_refs must not repeat a source'
+        if contract == 'strict' and not criterion:
+            return 'strict task requires completion_criterion'
+        if contract == 'strict' and metadata.get('status') == 'done' and not refs:
+            return 'strict done task requires evidence_refs'
+        task_path = None
+        if task_source is not None and refs:
+            try:
+                task_path = self._path(task_source)
+            except ValueError:
+                return 'task source is unavailable or outside vault'
+        for ref in refs:
+            try:
+                path = self._path(ref, existing=True)
+            except ValueError:
+                return 'evidence ref must be an existing vault source'
+            if task_path is not None and path == task_path:
+                return 'evidence ref cannot be the task source itself'
+        return None
+
+    def completion_health(self):
+        """Report legacy done tasks and invalid strict contracts without editing sources."""
+        with self.store._connect() as db:
+            records = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')]
+        legacy_done, strict_issues = [], []
+        for record in records:
+            if record.get('kind') != 'task':
+                continue
+            if record.get('completion_contract') == 'strict':
+                issue = self._completion_issue(record, record['source'])
+                if issue:
+                    strict_issues.append({'id': record['id'], 'source': record['source'], 'reason': issue})
+            elif record.get('status') == 'done':
+                legacy_done.append({'id': record['id'], 'source': record['source']})
+        return {'strict_issue_count': len(strict_issues), 'strict_issues': strict_issues[:20],
+                'legacy_done_count': len(legacy_done), 'legacy_done': legacy_done[:20],
+                'truncated': len(strict_issues) > 20 or len(legacy_done) > 20}
+
     def _scan(self):
         records, warnings, conflicts = {}, [], []
         duplicate = set()
@@ -340,7 +390,7 @@ class SyncEngine:
         return entry
 
     def update_task(self, id, expected_revision, changes):
-        allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes'}
+        allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if not isinstance(changes, dict) or set(changes) - allowed:
             raise ValueError('unsupported task metadata changes')
         with self.store._connect() as db:
@@ -353,6 +403,8 @@ class SyncEngine:
                 raise ValueError('explicit task source required')
             if type(expected_revision) is not int or record['revision'] != expected_revision:
                 raise RevisionConflict('revision conflict')
+            if record.get('completion_contract') == 'strict' and changes.get('completion_contract', 'strict') != 'strict':
+                raise ValueError('strict completion_contract cannot be removed by task-update')
             path = self._path(record['source'], existing=True)
             raw = path.read_bytes()
             if _hash(raw) != record['source_sha256']:
@@ -362,6 +414,9 @@ class SyncEngine:
                 raise RevisionConflict('source revision conflict')
             metadata.update(changes)
             metadata['revision'] = expected_revision + 1
+            issue = self._completion_issue(metadata, record['source'])
+            if issue:
+                raise ValueError(issue)
             self.store._validate(dict(metadata, source=record['source'], text=body))
             intended = render(metadata, body)
             self._intent(record['source'], record['source_sha256'], intended, 'task')
@@ -442,7 +497,7 @@ class SyncEngine:
             raise ValueError('task body and metadata required')
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
-        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at'}
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
@@ -463,6 +518,9 @@ class SyncEngine:
             if field in metadata and not isinstance(metadata[field], str):
                 raise ValueError('task metadata text fields must be strings')
         metadata.update(kind='task', revision=1)
+        issue = self._completion_issue(metadata, source)
+        if issue:
+            raise ValueError(issue)
         path = self._path(source)
         intended = render(metadata, text+'\n')
         with self.store._connect() as db:
