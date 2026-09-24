@@ -193,7 +193,7 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
             >= (bar['keep'] if r['id'] in known else bar['rescue'])]
     dropped = len([r for r in strict if r not in keep])
     rescued = len([r for r in keep if r['id'] not in known])
-    # Unmeasured thresholds (Laya until a benchmark sets them) only ever log, even in `on`.
+    # Laya never reaches `on` (client.SHADOW_ONLY); unmeasured thresholds would only log as well.
     client.log_event(store.state_dir, dict(outcome, outcome='scored' if bar['verified'] else 'scored_unverified',
                                            gate_passed=passed, dropped=dropped, rescued=rescued))
     if advice['mode'] != 'on' or not bar['verified'] or not (dropped or rescued):

@@ -13,6 +13,13 @@ sys.dont_write_bytecode = True
 JEV_MODES = {'off': 'kapali', 'shadow': 'golge', 'on': 'acik'}
 
 
+def jev_mode(mode, provider):
+    """Laya is shadow-only: a saved or hand-edited `on` still runs as shadow."""
+    if provider == 'laya' and mode in ('shadow', 'on'):
+        return 'golge (yalniz)'
+    return JEV_MODES.get(mode, 'bilinmiyor')
+
+
 def update_lines(result):
     status = result.get('status', 'unknown')
     if status == 'available':
@@ -41,11 +48,14 @@ def jev_lines(result):
                      ' ilk 600 karakteri ' + ('yerel Laya sunucusuna' if laya else 'saglayiciya') +
                      ' gider. Ozel notlar gonderilmez.')
         if laya and not result.get('auto_context_applied'):
-            lines.append('Laya esikleri henuz olculmedi: otomatik baglam puanlari yalniz kaydedilir, baglami degistirmez.')
+            lines.append('Laya yalniz golge modda calisir: otomatik baglam puanlari yalniz kaydedilir, baglami degistirmez.')
     if laya:
+        if result.get('mode_refused') == 'laya_shadow_only':
+            lines.append('jev.json acik mod istiyor ama Laya yalniz golge modda calisir; sonuclar degismez.'
+                         ' Acik mod icin: jev on --provider typesafe.')
         if result.get('mode', 'off') != 'off':
             lines.append('Laya yerel sunucusu: ' + ascii_text(result.get('laya', {}).get('base_url')) +
-                         '; LAYA_HOST=127.0.0.1 ile baslat, once golge modda olc.')
+                         '; LAYA_HOST=127.0.0.1 ile baslat. Puanlar olcum icin kaydedilir, sonuclari degistirmez.')
     elif result.get('mode', 'off') != 'off' and not result.get('key_present'):
         lines.append('TYPESAFE_API_KEY yok: cagrilar yerel sonuca duser.')
     server = result.get('server')
@@ -69,11 +79,13 @@ def ascii_text(value):
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
-        return 'Islem tamamlanamadi: ' + str(result.get('message', result['error']))
+        return ('Islem tamamlanamadi: ' + str(result.get('message', result['error'])) +
+                ('\n' + ascii_text(result['hint']) if result.get('hint') else ''))
     if command == 'jev':
         features = result.get('features', {})
-        lines = ['Jev: ' + JEV_MODES.get(result.get('mode'), 'bilinmiyor') +
-                 (' (kayitli: ' + JEV_MODES.get(result.get('saved_mode'), 'bilinmiyor') + ')'
+        provider = result.get('provider')
+        lines = ['Jev: ' + jev_mode(result.get('mode'), provider) +
+                 (' (kayitli: ' + jev_mode(result.get('saved_mode'), provider) + ')'
                   if result.get('kill_switch') else ''),
                  'Ozellikler: ' + (', '.join(name + ' ' + ('acik' if value else 'kapali')
                                              for name, value in features.items()) or 'yok')]
@@ -109,8 +121,8 @@ def human_result(result, command, installed_version=None):
         if jev.get('mode', 'off') == 'off':
             lines.append('Jev: kapali')
         else:
-            lines.append('Jev: ' + JEV_MODES.get(jev['mode'], 'bilinmiyor') + ' (' +
-                         ('saglayici: laya, ' if jev.get('provider') == 'laya' else '') + 'otomatik baglam: ' +
+            lines.append('Jev: ' + jev_mode(jev['mode'], jev.get('provider')) +
+                         (', saglayici: laya (' if jev.get('provider') == 'laya' else ' (') + 'otomatik baglam: ' +
                          ('acik' if jev.get('automatic_model_calls') else 'kapali') + '), son 24 saat ' +
                          str(jev.get('last_24h', {}).get('calls', 0)) + ' cagri')
         if result.get('secrets_redacted'):

@@ -52,10 +52,15 @@ JEV_NOTICE = ("auto_context is on: every turn sends the prompt plus the title an
               "candidate internal/public notes to the provider. Private notes are never sent.")
 JEV_NOTICE_LAYA = ("auto_context is on: every turn sends the prompt plus the title and first 600 characters of up to 8 "
                    "candidate internal/public notes to the local Laya server, one request per note. Private notes are never sent. "
-                   "Until Laya thresholds are measured, its scores are only logged and never change the context.")
+                   "Laya is shadow-only: its scores are only logged and never change the context.")
 JEV_WARNING = "TYPESAFE_API_KEY is not set; calls degrade to local results."
 LAYA_NOTICE = ("provider laya: calls go only to the local laya-serve at {base_url}; start it with LAYA_HOST=127.0.0.1. "
-               "Thresholds were measured on Jev, not Laya: run shadow first.")
+               "Laya is shadow-only: scores are logged for measurement and never change results.")
+# Coded refusals that deserve a next step. ASCII Turkish, like the other human lines.
+ERROR_HINTS = {
+    "laya_shadow_only": ("Laya yalniz golge modda calisir: puanlari olcum icin kaydedilir, gordugun sonucu degistirmez. "
+                         "Laya icin: jev shadow --provider laya. Acik mod icin: jev on --provider typesafe."),
+}
 
 
 def jev_client():
@@ -143,7 +148,7 @@ def parser():
     jev.add_argument("mode", choices=("status", "off", "shadow", "on"))
     jev.add_argument("--enable", action="append", choices=JEV_FEATURES, default=[])
     jev.add_argument("--disable", action="append", choices=JEV_FEATURES, default=[])
-    jev.add_argument("--provider", choices=JEV_PROVIDERS, help="typesafe (default) or laya, a local laya-serve")
+    jev.add_argument("--provider", choices=JEV_PROVIDERS, help="typesafe (default) or laya, a local laya-serve (shadow only)")
     jev.add_argument("--base-url", dest="base_url", help="laya only: loopback URL, default http://127.0.0.1:8765")
     jev.add_argument("--model", choices=LAYA_MODELS, help="laya only: pinned checkpoint, default multilingual")
     jev.add_argument("--check", action="store_true", help="with status: one GET /health to the local Laya server")
@@ -324,7 +329,10 @@ def main(argv=None):
         return 0
     except Exception as exc:
         # No traceback or raw input dump: callers retain their local source files.
-        print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=True), file=sys.stderr)
+        error = {"error": type(exc).__name__, "message": str(exc)}
+        if isinstance(exc, ValueError) and str(exc) in ERROR_HINTS:
+            error["hint"] = ERROR_HINTS[str(exc)]
+        print(json.dumps(error, ensure_ascii=True), file=sys.stderr)
         return 1
 
 

@@ -86,8 +86,13 @@ def check(candidate, baseline):
         chosen = cli('jev', 'shadow', '--provider', 'laya', '--disable', 'auto_context')
         assert chosen['provider'] == 'laya' and chosen['config_valid'] and 'warning' not in chosen
         assert chosen['laya']['base_url'].startswith('http://127.0.0.1:') and chosen['laya']['model'] == 'multilingual'
+        assert chosen['shadow_only'] is True and chosen['mode'] == 'shadow'
         configured = (state / 'jev.json').read_bytes()
         assert set(json.loads(configured)['laya']) == {'base_url', 'model'}
+        # Laya is shadow-only: the installed command refuses `on` and leaves the file alone.
+        refused = run_python(vault / 'beyin.py', ['jev', 'on'], root, laya_env)
+        assert refused.returncode == 1 and json.loads(refused.stderr)['message'] == 'laya_shadow_only', refused.stderr
+        assert (state / 'jev.json').read_bytes() == configured
         cli('note-create', '--file', '-', payload=dict(source='notes/laya-proof.md', text='Laya geri alma kaniti.',
             metadata=dict(id='laya-proof', kind='fact', project='demo', aliases=['laya-proof-alias'])))
         assert cli('rollback')['status'] == 'rolled_back'
@@ -103,7 +108,7 @@ def check(candidate, baseline):
         assert restored['config_valid'] and restored['provider'] == 'laya' and restored['mode'] == 'shadow'
         back = cli('jev', 'off', '--provider', 'typesafe')
         assert back['provider'] == 'typesafe' and 'laya' in json.loads((state / 'jev.json').read_text(encoding='utf-8'))
-        checks.append(dict(initial_mode='shadow', provider='laya', mode_after_rollback='off',
+        checks.append(dict(initial_mode='shadow', provider='laya', on_refused='laya_shadow_only', mode_after_rollback='off',
                            config_valid_after_rollback=False, provider_cache_created=False,
                            restored_after_update=True))
         clean = root / 'Clean'; clean.mkdir(); state = root / 'clean-state'

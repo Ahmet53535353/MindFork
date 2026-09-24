@@ -87,7 +87,7 @@ def assess_memory(store, proposal, *, project, transport=None):
         return result
     if advice['mode'] != 'on':
         result['diagnostics'] = ['shadow_not_applied']
-        return result
+        return _calibration(result, mode)
     choices = advice['relations']
     result['dimensions'] = {name: choices[name] for name in ('support', 'commitment', 'kind')}
     result['prior_relations'] = [dict(record_id=record['id'], **choices['relation_p' + str(i)])

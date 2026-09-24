@@ -47,13 +47,19 @@ DEFAULTS = dict(mode='off', model='jev-1.13.0', provider='typesafe',
 FEATURES = ('context', 'review', 'answer', 'auto_context')
 # Providers the jev command can select. A hand-written other value still behaves like typesafe.
 PROVIDERS = ('typesafe', 'vercel', 'laya')
+# Providers whose scores are logged for measurement but never change what the user sees.
+# Saving `on` with one of them is refused (laya_shadow_only); a hand-edited `on` is read as
+# `shadow` by load_config, the one place every advisor path takes its mode from. The
+# 2026-09-24 benchmark (docs/v3/JEV.md) found zero-shot Laya far weaker than Jev on these
+# decisions, so Laya stays an opt-in local shadow for measurement and privacy experiments.
+SHADOW_ONLY = ('laya',)
 FEATURE_OF = dict(retrieval='context', memory_review='review', evidence_review='review',
                   answer_check='answer', auto_context='auto_context', memory_assessment='review')
 # Decision thresholds per (provider, checkpoint): the one table a benchmark updates.
 # Jev values were calibrated live on synthetic sets (docs/v3/JEV.md); every provider other than
-# laya uses them. The Laya rows copy them and are NOT measured: while `verified` is False,
-# auto_context on Laya only logs its scores and never changes the delivered context, and
-# status reports the calibration as unverified.
+# laya uses them. The Laya rows copy them and are NOT measured (`verified` False), so status
+# reports the calibration as unverified. SHADOW_ONLY keeps Laya out of `on` regardless of this
+# flag; `verified` alone would still keep auto_context from changing the delivered context.
 THRESHOLDS = {
     ('typesafe', '*'): dict(gate=0.25, keep=0.4, rescue=0.6, confidence=0.8, verified=True),
     ('laya', 'multilingual'): dict(gate=0.25, keep=0.4, rescue=0.6, confidence=0.8, verified=False),
@@ -179,6 +185,9 @@ def load_config(vault):
         # survive a switch back. Releases before the block existed reject it: rollback is off.
         block = config['laya']
         config.update(base_url=block['base_url'], model=block['model'], timeout=block['timeout'])
+    if config['provider'] in SHADOW_ONLY and config['mode'] == 'on':
+        # A hand-edited `on` never applies a shadow-only provider's scores; status shows why.
+        config['mode'] = 'shadow'
     if killed(vault): config['mode'] = 'off'
     return config
 
@@ -638,13 +647,17 @@ def status(vault):
                 automatic_model_calls=info['mode']!='off' and 'auto_context' in features,last_24h=_recent(vault))
     if provider:
         result['provider']=provider
+    if provider in SHADOW_ONLY:
+        # Scores are logged, never applied. A saved `on` (hand-edited) is reported, not obeyed.
+        result['shadow_only']=True
+        if saved=='on': result['mode_refused']='laya_shadow_only'
     if laya:
         # Only the loopback server is echoed; the TypeSafe base_url stays private to jev.json.
         config=load_config(vault)
         result.update(laya=dict(base_url=config['base_url'],model=config['model'],timeout=config['timeout']),
                       endpoint_local=True,key_required=False,
                       calibration='measured' if thresholds('laya',config['model'])['verified'] else 'jev_thresholds_unverified_for_laya',
-                      auto_context_applied=thresholds('laya',config['model'])['verified'])
+                      auto_context_applied=False)
     return result
 
 
@@ -668,13 +681,16 @@ def set_mode(vault, mode=None, enable=(), disable=(), provider=None, laya=None):
 
     provider='laya' always writes a `laya` block, so a release that predates it rejects the
     file after a rollback (advisor off) instead of sending the TypeSafe key to a local port.
-    Switching back to typesafe keeps the block for later.
+    Switching back to typesafe keeps the block for later. A shadow-only provider is never
+    saved with mode `on` (laya_shadow_only), whichever of the two arguments changes.
     """
     supplied=_supplied(vault)
     if mode is not None: supplied['mode']=mode
     if provider is not None:
         if provider not in PROVIDERS: raise ValueError('provider_unknown')
         supplied['provider']=provider
+    if supplied.get('provider') in SHADOW_ONLY and supplied.get('mode',DEFAULTS['mode'])=='on':
+        raise ValueError('laya_shadow_only')
     if laya and supplied.get('provider',DEFAULTS['provider'])!='laya':
         raise ValueError('laya_option_requires_laya_provider')
     if supplied.get('provider')=='laya':

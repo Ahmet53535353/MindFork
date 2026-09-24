@@ -132,8 +132,13 @@ class LayaCase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def config(self, mode='on', url=None, **kw):
+    def config(self, mode='shadow', url=None, **kw):
         return client.set_mode(self.state, mode, provider='laya', laya=dict(base_url=url or self.laya.url), **kw)
+
+    def hand_edit(self, **changes):
+        """What a user typing into jev.json gets: set_mode refuses `on` for Laya, the file cannot."""
+        path = self.state / 'jev.json'
+        path.write_text(json.dumps(dict(json.loads(path.read_text(encoding='utf-8')), **changes)), encoding='utf-8')
 
     def cards(self, count=3):
         return [dict(id='c%d' % i, title='Kart %d' % i, statement=('RELEVANT ' if i == 0 else '') + 'MARKERCARD%d not metni.' % i,
@@ -188,7 +193,7 @@ class ConfigTest(LayaCase):
 
     def test_cli_options_are_checked_and_need_the_laya_provider(self):
         with self.assertRaisesRegex(ValueError, 'laya_option_invalid'):
-            client.set_mode(self.state, 'on', provider='laya', laya=dict(base_url='http://example.com'))
+            client.set_mode(self.state, 'shadow', provider='laya', laya=dict(base_url='http://example.com'))
         self.assertFalse((self.state / 'jev.json').exists())
         with self.assertRaisesRegex(ValueError, 'laya_option_requires_laya_provider'):
             client.set_mode(self.state, 'on', laya=dict(model='english'))
@@ -197,7 +202,7 @@ class ConfigTest(LayaCase):
 
     def test_switching_back_to_typesafe_keeps_the_block_and_restores_jev(self):
         self.config()
-        client.set_mode(self.state, 'on', laya=dict(model='english'))
+        client.set_mode(self.state, 'shadow', laya=dict(model='english'))
         switched = client.set_mode(self.state, 'on', provider='typesafe')
         written = json.loads((self.state / 'jev.json').read_text(encoding='utf-8'))
         self.assertEqual(written['laya'], dict(base_url=self.laya.url, model='english'))
@@ -215,6 +220,58 @@ class ConfigTest(LayaCase):
         self.assertIs(client.thresholds('typesafe', 'jev-1.13.0')['verified'], True)
         self.assertEqual(client.thresholds('vercel', 'x'), client.THRESHOLDS[('typesafe', '*')])
         self.assertEqual((advisor.AUTO_GATE, advisor.AUTO_KEEP, advisor.AUTO_RESCUE, advisor.CONFIDENCE_GATE), (0.25, 0.4, 0.6, 0.8))
+
+
+class ShadowOnlyTest(LayaCase):
+    def test_saving_on_with_laya_is_refused_on_every_path(self):
+        with self.assertRaisesRegex(ValueError, 'laya_shadow_only'):
+            client.set_mode(self.state, 'on', provider='laya')
+        with self.assertRaisesRegex(ValueError, 'laya_shadow_only'):
+            client.set_mode(self.state, 'on', provider='laya', laya=dict(model='english'), enable=['auto_context'])
+        self.assertFalse((self.state / 'jev.json').exists())
+        self.config()
+        before = (self.state / 'jev.json').read_bytes()
+        for arguments in (dict(mode='on'), dict(mode='on', enable=['auto_context']), dict(mode='on', laya=dict(model='english'))):
+            with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, 'laya_shadow_only'):
+                client.set_mode(self.state, **arguments)
+        self.assertEqual((self.state / 'jev.json').read_bytes(), before)
+        # A saved typesafe `on` cannot be carried over to laya either.
+        client.set_mode(self.state, 'on', provider='typesafe')
+        before = (self.state / 'jev.json').read_bytes()
+        with self.assertRaisesRegex(ValueError, 'laya_shadow_only'):
+            client.set_mode(self.state, provider='laya')
+        self.assertEqual((self.state / 'jev.json').read_bytes(), before)
+        self.assertEqual(client.set_mode(self.state, 'shadow', provider='laya')['mode'], 'shadow')
+        self.assertEqual(client.set_mode(self.state, 'on', provider='typesafe')['mode'], 'on')
+        self.assertEqual(client.set_mode(self.state, 'off', provider='laya')['mode'], 'off')
+
+    def test_a_hand_edited_on_runs_as_shadow_and_status_says_so(self):
+        self.config(enable=['auto_context'])
+        self.hand_edit(mode='on')
+        self.assertEqual(client.load_config(self.state)['mode'], 'shadow')
+        self.assertEqual(client.inspect_config(self.state)['mode'], 'shadow')
+        status = client.status(self.state)
+        self.assertEqual((status['mode'], status['saved_mode'], status['config_valid']), ('shadow', 'on', True))
+        self.assertIs(status['shadow_only'], True)
+        self.assertEqual(status['mode_refused'], 'laya_shadow_only')
+        self.assertIs(status['auto_context_applied'], False)
+        advice = client.evaluate(self.state, '', self.items(1), purpose='answer_check')
+        self.assertFalse(advice['degraded'], advice['diagnostics'])
+        self.assertEqual(advice['mode'], 'shadow')
+        self.assertIs(advice['confidence_provenance']['used_for_selection'], False)
+        # Shadow-only is independent of the threshold table: a measured row changes nothing.
+        with patch.dict(client.THRESHOLDS, {('laya', 'multilingual'): dict(client.THRESHOLDS[('laya', 'multilingual')], verified=True)}):
+            self.assertEqual(client.inspect_config(self.state)['mode'], 'shadow')
+            self.assertIs(client.status(self.state)['auto_context_applied'], False)
+        (self.state / 'jev.disabled').write_text('', encoding='utf-8')
+        self.assertEqual(client.status(self.state)['mode'], 'off')
+        (self.state / 'jev.disabled').unlink()
+        self.hand_edit(mode='shadow')
+        self.assertNotIn('mode_refused', client.status(self.state))
+        self.hand_edit(mode='on', provider='typesafe')
+        typesafe = client.status(self.state)
+        self.assertEqual(typesafe['mode'], 'on')
+        self.assertNotIn('shadow_only', typesafe)
 
 
 class IsolationTest(LayaCase):
@@ -502,21 +559,22 @@ class GateTest(StoreCase):
             self.assertNotIn(marker, raw)
 
     def test_secret_kill_switch_and_disabled_feature_send_nothing(self):
-        self.config('on', enable=['auto_context'])
+        self.config(enable=['auto_context'])
         leaking = self.QUERY + ' ' + SECRET
         self.assertEqual(self.auto(leaking), self.local(leaking))
         (self.state / 'jev.disabled').write_text('', encoding='utf-8')
         self.assertEqual(self.auto(), self.local())
         (self.state / 'jev.disabled').unlink()
-        self.config('on', disable=['auto_context'])
+        self.config(disable=['auto_context'])
         self.assertEqual(self.auto(), self.local())
         item = dict(id='k0', claim='Iddia.', quotes=['alinti'], context=[])
-        self.config('on', disable=['answer'])
+        self.config(disable=['answer'])
         self.assertIn('feature_disabled', client.evaluate(self.state, '', [item], purpose='answer_check')['diagnostics'])
         self.assertEqual(self.laya.hits, [])
 
-    def test_unmeasured_thresholds_only_log_even_in_on_mode(self):
-        self.config('on', enable=['auto_context'])
+    def test_auto_context_with_laya_only_logs_even_from_a_hand_edited_on(self):
+        self.config(enable=['auto_context'])
+        self.hand_edit(mode='on')
         local = self.local()
         self.assertEqual(sorted(r['id'] for r in local['records']), ['deploy', 'pricing'])
         self.laya.noul = lambda state: 0.1 if 'pricing' in json.dumps(state) else 0.9
@@ -524,15 +582,46 @@ class GateTest(StoreCase):
         self.assertEqual(len(self.laya.hits), 4)  # topical + deploy, pricing, rollback
         rows = [json.loads(line) for line in (self.state / 'jev-calls.jsonl').read_text(encoding='utf-8').splitlines()]
         scored = [row for row in rows if row.get('event') == 'auto_context']
-        self.assertEqual((scored[-1]['outcome'], scored[-1]['dropped'], scored[-1]['rescued']), ('scored_unverified', 1, 1))
-        # The same scores apply once the table marks the row as measured.
+        self.assertEqual((scored[-1]['mode'], scored[-1]['outcome'], scored[-1]['dropped'], scored[-1]['rescued']),
+                         ('shadow', 'scored_unverified', 1, 1))
+        # Even a measured threshold row never applies Laya scores: the provider is shadow-only.
         measured = dict(client.THRESHOLDS[('laya', 'multilingual')], verified=True)
         with patch.dict(client.THRESHOLDS, {('laya', 'multilingual'): measured}):
-            applied = self.auto()
+            self.assertEqual(self.auto(), local)
+        # The same scores and a measured row would change a typesafe `on` context: the gate is the provider.
+        self.hand_edit(mode='on', provider='typesafe')
+        def typesafe(endpoint, body, key, timeout):
+            return dict(answers={name: dict(type='noul', noul=0.1 if 'pricing' in json.dumps(body['state'].get('notes', {}).get(name, {})) else 0.9)
+                                 for name in body['questions']})
+        applied = advisor.auto_context(self.store, 'claude', self.QUERY, local, budget_chars=6000, transport=typesafe)
         self.assertEqual(sorted(r['id'] for r in applied['records']), ['deploy', 'rollback'])
 
+    def test_manual_context_with_laya_never_reorders_from_a_hand_edited_on(self):
+        for ident in ('qdeploy', 'qsteps'):
+            self.record(ident, 'Quartz site deploy steps for %s: push to main.' % ident, project='quartz')
+        self.config(enable=['context'])
+        self.hand_edit(mode='on')
+        original = self.laya.answer
+        def low(body):
+            reply = original(body)
+            for answer in reply['answers'].values():
+                answer.update(score=0.2, probabilities={'0': 0.8, '1': 0.2, '2': 0.0})
+            return reply
+        self.laya.answer = low
+        plain = [r['id'] for r in self.store.retrieve(self.QUERY, project='quartz', limit=5, budget_chars=8000)['records']]
+        self.assertEqual(sorted(plain), ['qdeploy', 'qsteps'])
+        advised = advisor.advise_context(self.store, self.QUERY, project='quartz')
+        self.assertEqual((advised['jev']['mode'], advised['jev']['degraded']), ('shadow', False))
+        self.assertEqual(set(advised['jev']['scores'].values()), {0.2})
+        self.assertEqual([r['id'] for r in advised['records']], plain)
+        # The same low scores drop every card from a typesafe `on` result.
+        self.hand_edit(mode='on', provider='typesafe')
+        def typesafe(endpoint, body, key, timeout):
+            return dict(answers={name: dict(type='score', score=0.2) for name in body['questions']})
+        self.assertEqual(advisor.advise_context(self.store, self.QUERY, project='quartz', transport=typesafe)['records'], [])
+
     def test_server_down_keeps_the_local_result(self):
-        self.config('on', url='http://127.0.0.1:%d' % closed_port(), enable=['auto_context'])
+        self.config(url='http://127.0.0.1:%d' % closed_port(), enable=['auto_context'])
         self.assertEqual(self.auto(), self.local())
 
 
@@ -545,25 +634,30 @@ class AnswerTest(StoreCase):
         long = self.record('long', 'Quartz long note. ' + 'detay ' * 300, project='quartz')
         self.assertLess(len(advisor.source_context(long)), advisor.CONTEXT_LIMIT)
         self.assertGreater(len(advisor.source_context(long)), laya.CONTEXT_CHARS['multilingual'])
-        self.config('on')
+        self.config()
+        self.hand_edit(mode='on')
         self.laya.delay = 0.02
         claims = [self.claim(short, 'Short notes %d.' % i) for i in range(10)] + [self.claim(long, 'Long note.')]
         result = advisor.verify_answer(self.store, claims, project='quartz')
-        verdicts = [c['verdict'] for c in result['claims']]
-        self.assertEqual(verdicts, ['supported'] * 10 + ['uncertain'])
+        # Scored by the fake server (supports, 0.8) but never turned into a verdict: shadow-only.
+        self.assertEqual([c['verdict'] for c in result['claims']], ['uncertain'] * 11)
+        self.assertEqual([c['diagnostics'] for c in result['claims'][:10]], [['semantic_shadow']] * 10)
+        self.assertNotIn('relation', result['claims'][0])
         self.assertEqual(result['claims'][10]['diagnostics'], ['source_context_incomplete'])
         self.assertEqual((len(self.laya.hits), self.laya.peak), (10, 1))
         self.assertEqual(result['calibration'], 'unverified_for_provider')
 
-    def test_memory_assessment_marks_unverified_calibration(self):
+    def test_memory_assessment_is_shadow_only_and_marks_unverified_calibration(self):
         note = self.record('note', 'Quartz project prefers short notes.', project='quartz')
-        self.config('on')
+        self.config()
+        self.hand_edit(mode='on')
         proposal = dict(status='proposed', project='quartz', claim='Quartz prefers short notes.', prior_record_ids=[],
                         evidence=[dict(record_id='note', source_sha256=note['source_sha256'], quote='prefers short notes')])
         result = assess_memory(self.store, proposal, project='quartz')
         self.assertEqual(result['calibration'], 'unverified_for_provider')
-        self.assertEqual(result['dimensions']['support']['choice'], 'supports')
-        self.assertEqual(result['dimensions']['support']['confidence'], 0.8)
+        self.assertEqual((result['diagnostics'], result['dimensions'], result['route']), (['shadow_not_applied'], {}, 'local_source_review'))
+        # The logged shadow scores stay visible for measurement.
+        self.assertEqual(result['jev']['relations']['support']['confidence'], 0.8)
         self.assertEqual(len(self.laya.hits), 3)
         self.assertFalse(result['memory_written'])
 
@@ -604,8 +698,10 @@ class HookTest(unittest.TestCase):
                                          str(vault), str(state)], capture_output=True, timeout=60, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 return json.loads(result.stdout.decode('utf-8').split('REPORT:', 1)[1])
-            client.set_mode(state.resolve(), 'on', provider='laya', enable=['auto_context'],
+            client.set_mode(state.resolve(), 'shadow', provider='laya', enable=['auto_context'],
                             laya=dict(base_url='http://127.0.0.1:%d' % closed_port()))
+            config = state.resolve() / 'jev.json'
+            config.write_text(json.dumps(dict(json.loads(config.read_text(encoding='utf-8')), mode='on')), encoding='utf-8')
             report = run()
             context = json.loads(report['output'])['hookSpecificOutput']['additionalContext']
             self.assertIn('Quartz deploy steps', context)
