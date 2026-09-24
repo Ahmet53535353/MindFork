@@ -506,7 +506,6 @@ class SourceSyncTest(unittest.TestCase):
         self.assertNotEqual(self.records()[0]['status'], 'waiting')
 
 
-
 class ReceiptStateResetTest(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
@@ -577,7 +576,7 @@ class ReceiptStateResetTest(unittest.TestCase):
         receipts_dir.mkdir(exist_ok=True)
 
         # 1. Filename does not match hash of event_id
-        bad_hash_file = receipts_dir / 'wrong_hash.md'
+        bad_hash_file = receipts_dir / f'{self._hash("another-event")}.md'
         bad_hash_file.write_text('---\n{"kind": "receipt", "event_id": "ev-1", "refs": ["notes/task.md"], "harness": "codex"}\n---\nSummary\n', encoding='utf-8')
 
         # 2. Invalid harness
@@ -592,7 +591,7 @@ class ReceiptStateResetTest(unittest.TestCase):
 
         report = engine.sync()
         warn_sources = {w['source'] for w in report['warnings']}
-        self.assertIn('receipts/wrong_hash.md', warn_sources)
+        self.assertIn(f'receipts/{self._hash("another-event")}.md', warn_sources)
         self.assertIn(f'receipts/{self._hash(harness_eid)}.md', warn_sources)
         self.assertIn(f'receipts/{self._hash(refs_eid)}.md', warn_sources)
 
@@ -643,19 +642,112 @@ class ReceiptStateResetTest(unittest.TestCase):
         outside.mkdir()
         secret_receipt = outside / f'{self._hash("ev-symlink")}.md'
         secret_receipt.write_text(f'---\n{{"kind": "receipt", "event_id": "ev-symlink", "refs": ["notes/task.md"], "harness": "codex"}}\n---\nSecret Outside Content\n', encoding='utf-8')
-        receipts_link = self.vault / 'receipts'
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_sym')
+        outcomes = self.vault / 'knowledge/v3/outcomes.md'
+        (self.vault / 'receipts').mkdir()
+        file_link = self.vault / 'receipts' / secret_receipt.name
         try:
-            receipts_link.symlink_to(outside, target_is_directory=True)
+            file_link.symlink_to(secret_receipt)
         except OSError:
             self.skipTest('Symlink creation not permitted')
-        state = self.root / 'state_sym'
-        engine = self.module.SyncEngine(self.vault, state)
         report = engine.sync()
-        outcomes = self.vault / 'knowledge/v3/outcomes.md'
-        if outcomes.exists():
-            self.assertNotIn('Secret Outside Content', outcomes.read_text(encoding='utf-8'))
+        self.assertIn(f'receipts/{secret_receipt.name}', {w['source'] for w in report['warnings']})
+        self.assertFalse(outcomes.exists())
+        file_link.unlink()
+        (self.vault / 'receipts').rmdir()
+        (self.vault / 'receipts').symlink_to(outside, target_is_directory=True)
+        report = engine.sync()
+        self.assertIn('receipts', {w['source'] for w in report['warnings']})
+        self.assertFalse(outcomes.exists())
+
+    def test_carriage_return_summary_does_not_block_later_receipts(self):
+        """Windows CRLF summaries are written, read back and recovered byte-exact, never as a journal collision."""
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_cr1')
+        engine.sync()
+        summaries = {'event-crlf': 'Line1\r\nLine2', 'event-cr': 'Done.\r'}
+        for event_id, summary in summaries.items():
+            self.assertEqual(engine.receipt(event_id, summary, ['notes/task.md'], 'codex')['status'], 'succeeded')
+        self.assertEqual(engine.receipt('event-after-cr', 'Next.', ['notes/task.md'], 'codex')['status'], 'succeeded')
+        self.assertEqual(engine.sync()['conflicts'], [])
+        reset = self.module.SyncEngine(self.vault, self.root / 'state_cr2')
+        self.assertEqual(reset.sync()['conflicts'], [])
+        for event_id, summary in summaries.items():
+            self.assertEqual(reset.receipt(event_id, summary, ['notes/task.md'], 'codex')['status'], 'succeeded')
+        self.assertEqual(reset.receipt('event-after-reset', 'Later.', ['notes/task.md'], 'codex')['status'], 'succeeded')
+
+    def test_renamed_ref_does_not_degrade_sync_or_block_recovery(self):
+        """Refs were valid at write time; a later rename must not warn on every sync or break recovery."""
+        (self.vault / 'notes/old.md').write_text('# Old\n', encoding='utf-8')
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_ref1')
+        engine.sync()
+        engine.receipt('event-old', 'Worked on old note.', ['notes/old.md'], 'codex')
+        (self.vault / 'notes/old.md').rename(self.vault / 'notes/renamed.md')
+        self.assertEqual(engine.sync()['status'], 'succeeded')
+        reset = self.module.SyncEngine(self.vault, self.root / 'state_ref2')
+        self.assertEqual(reset.sync()['conflicts'], [])
+        self.assertEqual(reset.receipt('event-new', 'After reset.', ['notes/task.md'], 'codex')['status'], 'succeeded')
+
+    def test_malformed_receipt_metadata_is_reported_not_fatal(self):
+        """Disk metadata is untrusted: bad created_at or session is a warning, never a crash or a new path."""
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_meta')
+        engine.sync()
+        receipts_dir = self.vault / 'receipts'
+        receipts_dir.mkdir()
+        bad = {'ev-int-date': {'created_at': 5}, 'ev-slash-date': {'created_at': '2026/09/24T10:00:00'},
+               'ev-dots-date': {'created_at': '../../evil'}, 'ev-bad-session': {'session': '../x'}}
+        for event_id, extra in bad.items():
+            metadata = dict({'kind': 'receipt', 'event_id': event_id, 'harness': 'codex', 'refs': ['notes/task.md']}, **extra)
+            (receipts_dir / f'{self._hash(event_id)}.md').write_text(self.module.render(metadata, 'Crafted.\n'), encoding='utf-8')
+        report = engine.sync()
+        self.assertEqual({w['source'] for w in report['warnings']}, {f'receipts/{self._hash(e)}.md' for e in bad})
+        self.assertEqual(engine.receipt('event-ok', 'Still writable.', ['notes/task.md'], 'codex')['status'], 'succeeded')
+        self.assertFalse((self.vault / 'daily/v3/2026').exists())
+
+    def test_non_receipt_files_in_receipts_dir_are_ignored(self):
+        """Human notes and V2 historical files under receipts/ were never indexed and must not degrade sync."""
+        (self.vault / 'receipts').mkdir()
+        (self.vault / 'receipts/README.md').write_text('Human note about receipts\n', encoding='utf-8')
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_foreign')
+        engine.receipt('event-1', 'Done.', ['notes/task.md'], 'codex')
+        self.assertEqual(engine.sync()['status'], 'succeeded')
+
+    def test_warm_sync_skips_receipt_scan_until_directory_changes(self):
+        """A warm sync stops at one stat of receipts/; any new entry changes its signature and is scanned."""
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_warm')
+        engine.receipt('event-1', 'First device.', ['notes/task.md'], 'codex')
+        receipts_dir = self.vault / 'receipts'
+        past = (int(datetime.now().timestamp()) - 60) * 10**9
+        os.utime(receipts_dir, ns=(past, past))  # Older than the same-tick window, so the signature is stored.
+        self.assertEqual(engine.sync()['status'], 'succeeded')
+        crafted = receipts_dir / f'{self._hash("ev-crafted")}.md'
+        crafted.write_text('Not a receipt.\n', encoding='utf-8')
+        os.utime(receipts_dir, ns=(past, past))  # Same signature: nothing is listed or parsed.
+        self.assertEqual(engine.sync()['status'], 'succeeded')
+        os.utime(receipts_dir)
+        self.assertIn(f'receipts/{crafted.name}', {w['source'] for w in engine.sync()['warnings']})
+        crafted.unlink()
+        other = self.module.SyncEngine(self.vault, self.root / 'state_warm_other')
+        self.assertEqual(other.sync()['conflicts'], [])
+        self.assertEqual(other.receipt('event-2', 'Second device.', ['notes/task.md'], 'codex')['status'], 'succeeded')
+        self.assertEqual(engine.sync()['conflicts'], [])
+        self.assertIn('Second device.', (self.vault / 'knowledge/v3/outcomes.md').read_text(encoding='utf-8'))
+
+    def test_receipt_hidden_by_unchanged_directory_mtime_heals_on_next_sync(self):
+        """Where a filesystem keeps the directory mtime, a missed receipt costs one conflicted sync, not a deadlock."""
+        engine = self.module.SyncEngine(self.vault, self.root / 'state_heal')
+        engine.receipt('event-1', 'First device.', ['notes/task.md'], 'codex')
+        receipts_dir = self.vault / 'receipts'
+        past = (int(datetime.now().timestamp()) - 60) * 10**9
+        os.utime(receipts_dir, ns=(past, past))
+        self.assertEqual(engine.sync()['status'], 'succeeded')
+        other = self.module.SyncEngine(self.vault, self.root / 'state_heal_other')
+        self.assertEqual(other.sync()['conflicts'], [])
+        self.assertEqual(other.receipt('event-2', 'Second device.', ['notes/task.md'], 'codex')['status'], 'succeeded')
+        os.utime(receipts_dir, ns=(past, past))
+        self.assertTrue(engine.sync()['conflicts'])
+        self.assertEqual(engine.sync()['conflicts'], [])
+        self.assertEqual(engine.receipt('event-3', 'Back in step.', ['notes/task.md'], 'codex')['status'], 'succeeded')
 
 
 if __name__ == '__main__':
     unittest.main()
-
