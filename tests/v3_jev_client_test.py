@@ -235,4 +235,84 @@ class ClientTests(unittest.TestCase):
         raw={'answers':{'x':dict(type='score',score=1,probabilities=[.34,.34,.33])}}
         self.assertEqual(j._scores(raw,['x'],allow_quantized=True),{'x':1.0})
 
+    def test_endpoint_malformed_ports_raise_endpoint_invalid(self):
+        malformed_urls = [
+            'https://api.typesafe.ai:99999',
+            'https://api.typesafe.ai:notaport',
+            'https://api.typesafe.ai:-1',
+        ]
+        for url in malformed_urls:
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError) as cm:
+                    j._endpoint(url)
+                self.assertEqual(str(cm.exception), 'endpoint_invalid')
+
+    def test_evaluate_with_malformed_port_returns_endpoint_invalid_diagnostic(self):
+        self.config(base_url='https://api.typesafe.ai:99999')
+        result = j.evaluate(self.vault, 'test query', self.cards)
+        self.assertTrue(result['degraded'])
+        self.assertIn('endpoint_invalid', result['diagnostics'])
+        self.assertNotIn('request_failed', result['diagnostics'])
+
+    def test_cache_hit_race_configuration_changed_not_swallowed(self):
+        self.config()
+        transport_calls = []
+
+        def transport(url, body, key, timeout):
+            transport_calls.append(body)
+            return dict(answers={q: dict(type='score', score=1.8) for q in body['questions']})
+
+        first = j.evaluate(self.vault, 'query', self.cards, transport=transport)
+        self.assertFalse(first['degraded'])
+        self.assertFalse(first['cache_hit'])
+        self.assertEqual(len(transport_calls), 1)
+
+        calls = [0]
+        original_inspect = j.inspect_config
+
+        def changing_inspect(vault):
+            calls[0] += 1
+            res = original_inspect(vault)
+            if calls[0] >= 3:
+                res = dict(res, policy_revision='changed_policy_revision')
+            return res
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(j, 'inspect_config', side_effect=changing_inspect):
+                second = j.evaluate(self.vault, 'query', self.cards, transport=transport)
+                self.assertTrue(second['degraded'])
+                self.assertEqual(second['diagnostics'], ['configuration_changed'])
+                self.assertNotIn('cache_unavailable', second['diagnostics'])
+                self.assertNotIn('credentials_missing', second['diagnostics'])
+                self.assertEqual(len(transport_calls), 1)
+
+    def test_cache_hit_race_at_final_check_aborts_without_stale_scores(self):
+        self.config()
+        transport_calls = []
+
+        def transport(url, body, key, timeout):
+            transport_calls.append(body)
+            return dict(answers={q: dict(type='score', score=1.8) for q in body['questions']})
+
+        first = j.evaluate(self.vault, 'query', self.cards, transport=transport)
+        self.assertFalse(first['degraded'])
+
+        calls = [0]
+        original_inspect = j.inspect_config
+
+        def changing_inspect(vault):
+            calls[0] += 1
+            res = original_inspect(vault)
+            if calls[0] >= 4:
+                res = dict(res, policy_revision='changed_policy_revision')
+            return res
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(j, 'inspect_config', side_effect=changing_inspect):
+                second = j.evaluate(self.vault, 'query', self.cards, transport=transport)
+                self.assertTrue(second['degraded'])
+                self.assertEqual(second['scores'], {})
+                self.assertEqual(second['diagnostics'], ['configuration_changed'])
+                self.assertNotIn('cache_unavailable', second['diagnostics'])
+
 if __name__=='__main__': unittest.main()

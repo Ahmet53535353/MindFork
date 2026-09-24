@@ -198,26 +198,64 @@ class SyncEngine:
             return text, 0
         return redact_secrets(text, self.state)
 
-    def _protect_data(self, data):
-        if not read_preferences(self.root)['secret_filter'] or data is None:
-            return data, 0
+    def _protect_metadata(self, metadata):
+        if not read_preferences(self.root)['secret_filter'] or not metadata:
+            return metadata, 0
         total_redacted = 0
+        protected = dict(metadata)
 
-        def _walk(item):
-            nonlocal total_redacted
-            if isinstance(item, str):
-                redacted_text, count = redact_secrets(item, self.state)
+        for field in ('title', 'next_action'):
+            if field in protected and isinstance(protected[field], str):
+                redacted_text, count = redact_secrets(protected[field], self.state)
                 total_redacted += count
-                return redacted_text
-            elif isinstance(item, dict):
-                return {k: _walk(v) for k, v in item.items()}
-            elif isinstance(item, list):
-                return [_walk(v) for v in item]
-            elif isinstance(item, tuple):
-                return tuple(_walk(v) for v in item)
-            return item
+                protected[field] = redacted_text
 
-        return _walk(data), total_redacted
+        if 'facts' in protected and isinstance(protected['facts'], dict):
+            def _walk_facts(facts_dict):
+                nonlocal total_redacted
+                result = {}
+                for k, v in facts_dict.items():
+                    if isinstance(v, str):
+                        v_redacted, count = redact_secrets(v, self.state)
+                        if count > 0:
+                            result[k] = v_redacted
+                            total_redacted += count
+                        else:
+                            cand_redacted, c2 = redact_secrets(f'{k}: {json.dumps(v)}', self.state)
+                            if c2 > 0:
+                                result[k] = '[REDACTED]'
+                                total_redacted += c2
+                            else:
+                                result[k] = v
+                    elif isinstance(v, dict):
+                        result[k] = _walk_facts(v)
+                    elif isinstance(v, list):
+                        new_list = []
+                        for item in v:
+                            if isinstance(item, str):
+                                item_redacted, count = redact_secrets(item, self.state)
+                                if count > 0:
+                                    new_list.append(item_redacted)
+                                    total_redacted += count
+                                else:
+                                    cand_redacted, c2 = redact_secrets(f'{k}: {json.dumps(item)}', self.state)
+                                    if c2 > 0:
+                                        new_list.append('[REDACTED]')
+                                        total_redacted += c2
+                                    else:
+                                        new_list.append(item)
+                            elif isinstance(item, dict):
+                                new_list.append(_walk_facts(item))
+                            else:
+                                new_list.append(item)
+                        result[k] = new_list
+                    else:
+                        result[k] = v
+                return result
+
+            protected['facts'] = _walk_facts(protected['facts'])
+
+        return protected, total_redacted
 
     def _record_redactions(self, count):
         if count:
@@ -364,7 +402,7 @@ class SyncEngine:
         allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes'}
         if not isinstance(changes, dict) or set(changes) - allowed:
             raise ValueError('unsupported task metadata changes')
-        changes, redacted = self._protect_data(changes)
+        changes, redacted = self._protect_metadata(changes)
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
@@ -433,7 +471,7 @@ class SyncEngine:
         if metadata.get('generated') or metadata.get('kind') == 'receipt':
             raise ValueError('managed note kinds require their dedicated command')
         text, redacted = self._protect(text)
-        metadata, meta_redacted = self._protect_data(metadata)
+        metadata, meta_redacted = self._protect_metadata(metadata)
         redacted += meta_redacted
         path = self._path(source)
         intended = render(metadata, text+'\n')
@@ -487,7 +525,7 @@ class SyncEngine:
         for field in ('title', 'project', 'next_action', 'updated_at'):
             if field in metadata and not isinstance(metadata[field], str):
                 raise ValueError('task metadata text fields must be strings')
-        metadata, meta_redacted = self._protect_data(metadata)
+        metadata, meta_redacted = self._protect_metadata(metadata)
         redacted += meta_redacted
         metadata.update(kind='task', revision=1)
         path = self._path(source)

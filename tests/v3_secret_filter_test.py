@@ -78,5 +78,166 @@ class SecretFilterTest(unittest.TestCase):
         database = (self.state/'secret-filter.sqlite3').read_bytes()
         self.assertNotIn(literal.encode(), database)
 
+    def test_quoted_json_secrets_are_redacted_and_natural_text_preserved(self):
+        """JSON credentials must be redacted while natural text phrases with spaces are not."""
+        fixtures = [
+            ('{"api_key": "synthetic_key_123456"}', 'synthetic_key_123456'),
+            ('{"access_token": "synthetic_token_123"}', 'synthetic_token_123'),
+            ('{"token": "synthetic_token_val_123"}', 'synthetic_token_val_123'),
+            ('{"secret": "synthetic_secret_val_123"}', 'synthetic_secret_val_123'),
+            ('{"password": "synthetic_password_123"}', 'synthetic_password_123'),
+            ('{"passwd": "synthetic_passwd_val_123"}', 'synthetic_passwd_val_123'),
+            ('{\'api_key\': \'synthetic_key_123456\'}', 'synthetic_key_123456'),
+            ('api_key: "synthetic_key_123456"', 'synthetic_key_123456'),
+        ]
+        for text, secret in fixtures:
+            with self.subTest(text=text):
+                filtered, count = redact(text, self.state)
+                self.assertGreaterEqual(count, 1)
+                self.assertNotIn(secret, filtered)
+                self.assertIn('[REDACTED]', filtered)
+
+        natural_phrases = [
+            'password: "must be rotated every month"',
+            '{"password": "must be rotated every month"}',
+            'secret: "follow the instructions carefully"',
+        ]
+        for phrase in natural_phrases:
+            with self.subTest(phrase=phrase):
+                filtered, count = redact(phrase, self.state)
+                self.assertEqual(count, 0)
+                self.assertEqual(filtered, phrase)
+
+    def test_url_query_parameter_delimiter(self):
+        """URL query parameter secret redaction must stop at & delimiter."""
+        url = "https://api.example.com/v1?api_key=synthetic_secret_token_123&format=json"
+        filtered, count = redact(url, self.state)
+        self.assertGreaterEqual(count, 1)
+        self.assertNotIn("synthetic_secret_token_123", filtered)
+        self.assertIn("&format=json", filtered)
+
+    def test_unquoted_secrets_capture_special_characters(self):
+        """Unquoted credential values must capture &, ), }, ] rather than splitting or leaking."""
+        cases = [
+            ('password=abc&defghijk', 'abc&defghijk', '[REDACTED]'),
+            ('password=p@ss)word123', 'p@ss)word123', '[REDACTED]'),
+            ('token=abcdefgh}ijklmn', 'abcdefgh}ijklmn', '[REDACTED]'),
+        ]
+        for text, secret, expected in cases:
+            with self.subTest(text=text):
+                filtered, count = redact(text, self.state)
+                self.assertGreaterEqual(count, 1)
+                self.assertNotIn(secret, filtered)
+                self.assertEqual(filtered, expected)
+
+    def test_database_uri_credentials_redaction(self):
+        """Database connection strings with auth must have their credentials redacted, including @ in passwords."""
+        fixtures = [
+            ('postgres://user:password123@localhost:5432/mydb', 'password123', 'postgres://[REDACTED]@localhost:5432/mydb'),
+            ('postgres://user:p@ss@host:5432/mydb', 'p@ss', 'postgres://[REDACTED]@host:5432/mydb'),
+            ('postgresql://admin:secret_pass@db.internal:5432/app', 'secret_pass', 'postgresql://[REDACTED]@db.internal:5432/app'),
+            ('mysql://root:supersecret@127.0.0.1:3306/db', 'supersecret', 'mysql://[REDACTED]@127.0.0.1:3306/db'),
+            ('mongodb+srv://appuser:clusterpass99@cluster0.mongodb.net/test', 'clusterpass99', 'mongodb+srv://[REDACTED]@cluster0.mongodb.net/test'),
+            ('redis://:myredispass123@cache.host:6379/0', 'myredispass123', 'redis://[REDACTED]@cache.host:6379/0'),
+            ('redis://appuser:myredispass123@cache.host:6379/0', 'myredispass123', 'redis://[REDACTED]@cache.host:6379/0'),
+            ('amqp://guest:secretguest@localhost:5672/', 'secretguest', 'amqp://[REDACTED]@localhost:5672/'),
+        ]
+        for url, secret, expected in fixtures:
+            with self.subTest(url=url):
+                filtered, count = redact(url, self.state)
+                self.assertGreaterEqual(count, 1, f"URI auth not redacted in: {url}")
+                self.assertNotIn(secret, filtered)
+                self.assertEqual(filtered, expected)
+
+        clean_urls = [
+            'https://normal-domain.com/path?query=value',
+            'http://localhost:8080/health',
+            'postgres://localhost:5432/mydb',
+        ]
+        for url in clean_urls:
+            with self.subTest(clean_url=url):
+                filtered, count = redact(url, self.state)
+                self.assertEqual(count, 0)
+                self.assertEqual(filtered, url)
+
+    def test_metadata_redaction_scope_and_key_aware_facts(self):
+        """Free-text metadata fields and key-aware facts must be redacted without mutating structural fields like task id and supersedes."""
+        save(self.vault, {'secret_filter': True})
+
+        # 1. task-create with task ID starting with sk- and facts with password key
+        task_meta = {
+            'id': 'sk-quarterly-planning-review',
+            'title': 'Setup postgres://admin:dbpass123@host:5432/db',
+            'status': 'active',
+            'owner': 'lead-dev',
+            'next_action': 'token=mysecrettokenval123',
+            'facts': {'password': 'hunter2hunter2', 'environment': 'production'},
+        }
+        res = self.engine.task_create('tasks/plan.md', 'Clean task body.', metadata=task_meta)
+        self.assertGreaterEqual(res.get('secrets_redacted', 0), 3)
+
+        # Structural id must be preserved exactly, NOT redacted to [REDACTED]
+        self.assertEqual(res['id'], 'sk-quarterly-planning-review')
+        content = (self.vault / 'tasks/plan.md').read_text(encoding='utf-8')
+        self.assertNotIn('dbpass123', content)
+        self.assertNotIn('mysecrettokenval123', content)
+        self.assertNotIn('hunter2hunter2', content)
+        self.assertIn('sk-quarterly-planning-review', content)
+
+        # 2. A second task with an sk- id must succeed without id collision
+        task2_meta = {
+            'id': 'sk-second-planning-review',
+            'title': 'Second task',
+            'status': 'active',
+            'owner': 'lead-dev',
+        }
+        res2 = self.engine.task_create('tasks/plan2.md', 'Second body.', metadata=task2_meta)
+        self.assertEqual(res2['id'], 'sk-second-planning-review')
+
+        # 3. note_create with supersedes containing sk- id
+        note_meta = {
+            'id': 'sk-note-record',
+            'title': 'Note superseding sk-quarterly-planning-review',
+            'supersedes': ['sk-quarterly-planning-review'],
+        }
+        note_res = self.engine.note_create('notes/superseding.md', 'Note text.', metadata=note_meta)
+        self.assertEqual(note_res['status'], 'succeeded')
+        note_content = (self.vault / 'notes/superseding.md').read_text(encoding='utf-8')
+        self.assertIn('sk-quarterly-planning-review', note_content)
+        self.assertIn('sk-note-record', note_content)
+
+        # 4. update_task changes redaction
+        updated = self.engine.update_task('sk-quarterly-planning-review', 1, {
+            'next_action': 'password=updatedsecretpass123',
+            'facts': {'api_key': 'newkeytokenval123'},
+            'supersedes': ['sk-second-planning-review'],
+        })
+        self.assertGreaterEqual(updated.get('secrets_redacted', 0), 2)
+        content_up = (self.vault / 'tasks/plan.md').read_text(encoding='utf-8')
+        self.assertNotIn('updatedsecretpass123', content_up)
+        self.assertNotIn('newkeytokenval123', content_up)
+        self.assertIn('sk-second-planning-review', content_up)
+
+    def test_jev_safe_blocks_cards_with_json_secrets(self):
+        """Jev _safe must raise ValueError('advisor_sensitive_input') when card payload contains JSON secrets."""
+        from beyin_v3 import MemoryStore
+        from beyin_v3_jev import _safe
+        store = MemoryStore(self.state, self.vault)
+        card_with_secret = [
+            "search query",
+            [
+                {
+                    "id": "card-1",
+                    "title": "Secret Note",
+                    "statement": json.dumps({"text": 'config: {"api_key": "synthetic_key_123456"}'}),
+                    "scope": "project:test",
+                    "domains": ["note"],
+                }
+            ],
+        ]
+        with self.assertRaises(ValueError) as cm:
+            _safe(store, card_with_secret)
+        self.assertEqual(str(cm.exception), 'advisor_sensitive_input')
+
 
 if __name__ == '__main__': unittest.main()
