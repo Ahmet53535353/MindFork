@@ -185,7 +185,7 @@ def _destination(vault, state, operation):
     if Path(name).is_absolute() or '..' in Path(name).parts:
         raise ValueError('unsafe transaction path')
     path = root / name
-    if not path.resolve().is_relative_to(root):
+    if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError('transaction target escapes root')
     return path
 
