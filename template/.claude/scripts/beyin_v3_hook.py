@@ -17,7 +17,7 @@ HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 RECEIPT_RE = re.compile(r"\bbeyin\.py[\"']?\s+receipt\b")
 RECEIPT_REMINDER = (
-    "Bu oturumda dosya değişiklikleri yapıldı; bitirdiyseniz şimdi şu komutla receipt yazın: "
+    "Files were edited in this session but no receipt was written. If the work is done, write one now: "
     "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}."
 )
 
