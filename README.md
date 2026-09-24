@@ -92,7 +92,7 @@ Ajanına **“ekonomik moda geç”**, **“otomatik kontrolleri kapat”** veya
 
 Süre dolunca kendi başına çalışan bir zamanlayıcı kurulmaz; bir sonraki istemci olayı kontrolü başlatır. İstemciler kapalıyken işlem yapılmaz. Yerel Python kontrolleri **model çağırmaz**; otomatik Luna/Sonnet maliyeti yoktur. Ajana yaptırdığın işler ve eklenen bağlam normal istemci tüketimine girer. Ekonomik veya manuel modda gerektiğinde kaynaklar açık `context`/`sync` komutuyla tazelenir.
 
-İsteğe bağlı Jev danışmanı bundan ayrıdır: varsayılan kapalıdır, yalnız kendi TypeSafe API anahtarı olanlar içindir ve kurucu onu ne sorar ne kurar. Durumu `python3 beyin.py jev status` gösterir; `jev shadow`, `jev on` ve `jev off` ile değiştirilir. [Ayrıntılar ve sınırlar](docs/v3/JEV.md).
+İsteğe bağlı Jev danışmanı bundan ayrıdır: varsayılan kapalıdır, yalnız kendi TypeSafe API anahtarı olanlar içindir ve kurucu onu ne sorar ne kurar. Durumu `python3 beyin.py jev status` gösterir; `jev shadow`, `jev on` ve `jev off` ile değiştirilir. Anahtar istemeyen yerel seçenek olarak ayrı kurulan açık ağırlıklı Laya sunucusu da seçilebilir (`jev shadow --provider laya`); Beyin'e PyTorch veya model girmez. Laya yalnız gölge modda çalışır: ölçümde Jev'den çok daha zayıf çıktığı için puanları ölçüm ve gizlilik denemeleri için kaydedilir, gördüğün sonucu değiştirmez. [Ayrıntılar ve sınırlar](docs/v3/JEV.md).
 
 Tercihler: `python3 beyin.py preferences`. Ekonomik: `preferences --profile economical`. Manuel: `preferences --profile manual`. Aralık: `preferences --interval-minutes 30`. Opt-in sır süzgeci: `preferences --secret-filter on`. Windows'ta `py -3` kullan. [Ayrıntılar](docs/v3/PREFERENCES.md).
 

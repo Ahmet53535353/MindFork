@@ -44,12 +44,24 @@ def load_sync():
     return SyncEngine
 
 
-# Mirrors beyin_v3_jev_client.FEATURES; duplicated so argument parsing never imports
-# the optional client. tests/v3_jev_toggle_test.py pins the two lists together.
+# Mirror beyin_v3_jev_client.FEATURES and PROVIDERS and beyin_v3_laya.CHECKPOINTS; duplicated
+# so argument parsing never imports the optional client. tests/v3_jev_toggle_test.py pins them.
 JEV_FEATURES = ("context", "review", "answer", "auto_context")
+JEV_PROVIDERS = ("typesafe", "vercel", "laya")
+LAYA_MODELS = ("multilingual", "english")
 JEV_NOTICE = ("auto_context is on: every turn sends the prompt plus the title and first 600 characters of up to 8 "
               "candidate internal/public notes to the provider. Private notes are never sent.")
+JEV_NOTICE_LAYA = ("auto_context is on: every turn sends the prompt plus the title and first 600 characters of up to 8 "
+                   "candidate internal/public notes to the local Laya server, one request per note. Private notes are never sent. "
+                   "Laya is shadow-only: its scores are only logged and never change the context.")
 JEV_WARNING = "TYPESAFE_API_KEY is not set; calls degrade to local results."
+LAYA_NOTICE = ("provider laya: calls go only to the local laya-serve at {base_url}; start it with LAYA_HOST=127.0.0.1. "
+               "Laya is shadow-only: scores are logged for measurement and never change results.")
+# Coded refusals that deserve a next step. ASCII Turkish, like the other human lines.
+ERROR_HINTS = {
+    "laya_shadow_only": ("Laya yalniz golge modda calisir: puanlari olcum icin kaydedilir, gordugun sonucu degistirmez. "
+                         "Laya icin: jev shadow --provider laya. Acik mod icin: jev on --provider typesafe."),
+}
 
 
 def jev_client():
@@ -67,9 +79,12 @@ def jev_status(state: Path):
 
 
 def jev_advice(result):
+    laya = result.get("provider") == "laya"
     if result.get("automatic_model_calls"):
-        result["notice"] = JEV_NOTICE
-    if result.get("mode") != "off" and not result.get("key_present"):
+        result["notice"] = JEV_NOTICE_LAYA if laya else JEV_NOTICE
+    if laya:
+        result["provider_notice"] = LAYA_NOTICE.format(base_url=result.get("laya", {}).get("base_url", "?"))
+    elif result.get("mode") != "off" and not result.get("key_present"):
         result["warning"] = JEV_WARNING
     return result
 
@@ -134,6 +149,10 @@ def parser():
     jev.add_argument("mode", choices=("status", "off", "shadow", "on"))
     jev.add_argument("--enable", action="append", choices=JEV_FEATURES, default=[])
     jev.add_argument("--disable", action="append", choices=JEV_FEATURES, default=[])
+    jev.add_argument("--provider", choices=JEV_PROVIDERS, help="typesafe (default) or laya, a local laya-serve (shadow only)")
+    jev.add_argument("--base-url", dest="base_url", help="laya only: loopback URL, default http://127.0.0.1:8765")
+    jev.add_argument("--model", choices=LAYA_MODELS, help="laya only: pinned checkpoint, default multilingual")
+    jev.add_argument("--check", action="store_true", help="with status: one GET /health to the local Laya server")
     answer = sub.add_parser("jev-answer", help="Advisory answer claim verification against exact source quotes")
     answer.add_argument("--file", required=True, help="JSON list of claims (maximum 32,000 characters)")
     answer.add_argument("--project", required=True)
@@ -188,12 +207,19 @@ def main(argv=None):
             if args.update_notifications is not None:
                 result['status'] = 'saved'
         elif args.command == "jev":
+            laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
-                if args.enable or args.disable:
-                    raise ValueError("jev status reads only; use jev off/shadow/on with --enable/--disable")
-                result = jev_advice(jev_client().status(state))
+                if args.enable or args.disable or args.provider or laya:
+                    raise ValueError("jev status reads only; use jev off/shadow/on with --enable/--disable/--provider")
+                result = jev_client().status(state)
+                if args.check:
+                    result["server"] = jev_client().probe(state)
+                result = jev_advice(result)
             else:
-                result = jev_advice(jev_client().set_mode(state, args.mode, enable=args.enable, disable=args.disable))
+                if args.check:
+                    raise ValueError("--check works only with jev status")
+                result = jev_advice(jev_client().set_mode(state, args.mode, enable=args.enable, disable=args.disable,
+                                                          provider=args.provider, laya=laya or None))
                 result["changed"] = True
         elif args.command == "doctor":
             result = {"pending_events": len(list((state / "hook-queue").glob("*.json"))),
@@ -325,7 +351,10 @@ def main(argv=None):
         return 0
     except Exception as exc:
         # No traceback or raw input dump: callers retain their local source files.
-        print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=True), file=sys.stderr)
+        error = {"error": type(exc).__name__, "message": str(exc)}
+        if isinstance(exc, ValueError) and str(exc) in ERROR_HINTS:
+            error["hint"] = ERROR_HINTS[str(exc)]
+        print(json.dumps(error, ensure_ascii=True), file=sys.stderr)
         return 1
 
 

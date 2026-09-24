@@ -134,9 +134,17 @@ AUTO_LIMIT = 5
 # past the gate, off-topic notes stayed <= 0.31 and on-topic ones >= 0.76. A strict local match
 # already has lexical evidence, so it is kept unless clearly off topic. A loose match enters
 # only when Jev is confident. Shadow mode is how a vault checks these on its own notes.
-AUTO_GATE = 0.25
-AUTO_KEEP = 0.4
-AUTO_RESCUE = 0.6
+# The values live in client.THRESHOLDS, keyed by (provider, checkpoint); these names stay for
+# existing importers and are the Jev row.
+_JEV = client.THRESHOLDS[('typesafe', '*')]
+AUTO_GATE = _JEV['gate']
+AUTO_KEEP = _JEV['keep']
+AUTO_RESCUE = _JEV['rescue']
+
+
+def limits(mode):
+    """Thresholds for the configured provider and checkpoint (Jev's unless provider is laya)."""
+    return client.thresholds(mode.get('provider'), mode.get('model'))
 
 
 def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.0, transport=None, project=None):
@@ -192,14 +200,17 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
     scores = advice['scores']
     if advice['degraded'] or advice['mode'] == 'off' or not scores:
         return context
-    passed = scores['topical'] >= AUTO_GATE
+    bar = limits(mode)
+    passed = scores['topical'] >= bar['gate']
     by_record = {r['id']: scores[k] for k, r in keys.items()}
     keep = [r for r in records if passed and by_record.get(r['id'], 1.0 if r['id'] in known else 0.0)
-            >= (AUTO_KEEP if r['id'] in known else AUTO_RESCUE)]
+            >= (bar['keep'] if r['id'] in known else bar['rescue'])]
     dropped = len([r for r in strict if r not in keep])
     rescued = len([r for r in keep if r['id'] not in known])
-    client.log_event(store.state_dir, dict(outcome, outcome='scored', gate_passed=passed, dropped=dropped, rescued=rescued))
-    if advice['mode'] != 'on' or not (dropped or rescued):
+    # Laya never reaches `on` (client.SHADOW_ONLY); unmeasured thresholds would only log as well.
+    client.log_event(store.state_dir, dict(outcome, outcome='scored' if bar['verified'] else 'scored_unverified',
+                                           gate_passed=passed, dropped=dropped, rescued=rescued))
+    if advice['mode'] != 'on' or not bar['verified'] or not (dropped or rescued):
         return context
     if not _fresh(store, records) or client.inspect_config(store.state_dir) != mode:
         return context
@@ -268,7 +279,7 @@ def review_candidate(store, proposal, *, project, transport=None):
     contexts = []
     if enabled:
         try:
-            contexts = _context(refs, evidence)
+            contexts = _context(refs, evidence, context_limit(mode))
             _safe(store, contexts)
         except (ValueError, OSError):
             return dict(status='advisory_only', approved=False, memory_written=False,
@@ -293,8 +304,8 @@ def review_candidate(store, proposal, *, project, transport=None):
 
 BATCH = 8            # claims per request; hard items weaken late in a longer list
 CONTEXT_CHARS = 400  # retained public constant; new checks require complete bounded context
-CONTEXT_LIMIT = 4000
-CONFIDENCE_GATE = 0.8
+CONTEXT_LIMIT = 4000  # Jev; a provider with a smaller window reports context_limit
+CONFIDENCE_GATE = _JEV['confidence']
 VERDICTS = dict(supports='supported', contradicts='contradicted', says_nothing='insufficient')
 
 
@@ -305,12 +316,23 @@ def source_context(record):
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _context(refs, citations):
+def _context(refs, citations, limit=CONTEXT_LIMIT):
     """A cancelled status or far-away correction must not disappear around a quote."""
     windows = list(dict.fromkeys(source_context(r) for r in refs))
-    if sum(len(text) for text in windows) > CONTEXT_LIMIT:
+    if sum(len(text) for text in windows) > limit:
         raise ValueError('source_context_incomplete')
     return windows
+
+
+def context_limit(mode):
+    return mode.get('context_limit') or CONTEXT_LIMIT
+
+
+def _calibration(result, mode):
+    """Mark decisions made with thresholds nobody measured for this provider."""
+    if mode.get('valid') and mode.get('mode') != 'off' and not limits(mode)['verified']:
+        result['calibration'] = 'unverified_for_provider'
+    return result
 
 
 def verify_answer(store, claims, *, project, transport=None):
@@ -358,7 +380,7 @@ def verify_answer(store, claims, *, project, transport=None):
             item.update(verdict='uncertain', diagnostics=['source_local_only'])
             continue
         try:
-            context = _context(refs, claim['citations'])
+            context = _context(refs, claim['citations'], context_limit(mode))
         except ValueError:
             item.update(verdict='uncertain', diagnostics=['source_context_incomplete'])
             continue
@@ -384,7 +406,8 @@ def verify_answer(store, claims, *, project, transport=None):
                 return {**ask(indexes[:half]), **ask(indexes[half:])}
             return {i: advice for i in indexes}
         order = list(items)
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        # A local single-worker server (laya) would only queue parallel batches.
+        with ThreadPoolExecutor(max_workers=1 if mode.get('provider') == 'laya' else 4) as pool:
             advices = {}
             for part in pool.map(ask, [order[i:i + BATCH] for i in range(0, len(order), BATCH)]):
                 advices.update(part)
@@ -410,9 +433,9 @@ def verify_answer(store, claims, *, project, transport=None):
             else:
                 relation = advice['relations']['k' + str(index)]
                 item.update(relation=relation['choice'], confidence=relation['confidence'])
-                if relation['confidence'] >= CONFIDENCE_GATE:
+                if relation['confidence'] >= limits(mode)['confidence']:
                     item['verdict'] = VERDICTS[relation['choice']]
                 else:
                     item.update(verdict='uncertain', diagnostics=['low_confidence'])
-    return dict(status='advisory_only', claims=results, approved=False,
-                memory_written=False, rewrites=False)
+    return _calibration(dict(status='advisory_only', claims=results, approved=False,
+                             memory_written=False, rewrites=False), mode)

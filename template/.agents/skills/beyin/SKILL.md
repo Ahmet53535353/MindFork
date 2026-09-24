@@ -138,6 +138,11 @@ yeni danışma işi kurma. `python3 beyin.py jev status` ile mevcut ayarı oku.
 Kullanıcı kapatmayı istediğinde `python3 beyin.py jev off` çalıştır ve sonucu doğrula.
 Açık proje içinde isteğe bağlı arama: `python3 beyin.py context "konu" --project PROJE --jev`.
 Otomatik tur danışması ayrıca `jev on --enable auto_context` gerektirir.
+Kullanıcı anahtarsız yerel model isterse ayrı kurulmuş `laya-serve` (`LAYA_HOST=127.0.0.1`,
+`LAYA_PORT=8765`) için `python3 beyin.py jev shadow --provider laya`, ardından `jev status --check`.
+Laya'yı veya PyTorch'u Beyin ortamına kurma. Laya yalnız gölge modda çalışır: puanları ölçüm için
+kaydedilir, hiçbir sonucu değiştirmez; `jev on --provider laya` reddedilir (`laya_shadow_only`).
+Gönderim kuralları Jev ile aynıdır. Jev'e dönüş: `jev on --provider typesafe`.
 
 Önerilen kalıcı bilgi için önce özgün kaynağı, kapsamı, tarihi ve tam alıntıyı incele.
 Kullanıcı bu danışmanı etkinleştirmişse `python3 beyin.py jev-memory --project PROJE

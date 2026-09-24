@@ -21,6 +21,7 @@
 # SOFTWARE.
 # Adapted from Forn hafiza-os 524fd07; MIT, see docs/v3/THIRD-PARTY-JEV.txt.
 """Bounded optional semantic advisor. Callers own source and scope eligibility."""
+import functools
 import hashlib
 import json
 import math
@@ -44,8 +45,34 @@ DEFAULTS = dict(mode='off', model='jev-1.13.0', provider='typesafe',
                 features=['context', 'review', 'answer'])
 # Explicit commands are on once a mode is set; the per-turn hook path never is by default.
 FEATURES = ('context', 'review', 'answer', 'auto_context')
+# Providers the jev command can select. A hand-written other value still behaves like typesafe.
+PROVIDERS = ('typesafe', 'vercel', 'laya')
+# Providers whose scores are logged for measurement but never change what the user sees.
+# Saving `on` with one of them is refused (laya_shadow_only); a hand-edited `on` is read as
+# `shadow` by load_config, the one place every advisor path takes its mode from. The
+# 2026-09-24 benchmark (docs/v3/JEV.md) found zero-shot Laya far weaker than Jev on these
+# decisions, so Laya stays an opt-in local shadow for measurement and privacy experiments.
+SHADOW_ONLY = ('laya',)
 FEATURE_OF = dict(retrieval='context', memory_review='review', evidence_review='review',
                   answer_check='answer', auto_context='auto_context', memory_assessment='review')
+# Decision thresholds per (provider, checkpoint): the one table a benchmark updates.
+# Jev values were calibrated live on synthetic sets (docs/v3/JEV.md); every provider other than
+# laya uses them. The Laya rows copy them and are NOT measured (`verified` False), so status
+# reports the calibration as unverified. SHADOW_ONLY keeps Laya out of `on` regardless of this
+# flag; `verified` alone would still keep auto_context from changing the delivered context.
+THRESHOLDS = {
+    ('typesafe', '*'): dict(gate=0.25, keep=0.4, rescue=0.6, confidence=0.8, verified=True),
+    ('laya', 'multilingual'): dict(gate=0.25, keep=0.4, rescue=0.6, confidence=0.8, verified=False),
+    ('laya', 'english'): dict(gate=0.25, keep=0.4, rescue=0.6, confidence=0.8, verified=False),
+}
+
+
+def thresholds(provider, model):
+    if provider == 'laya':
+        return THRESHOLDS.get(('laya', model), dict(THRESHOLDS[('typesafe', '*')], verified=False))
+    return THRESHOLDS[('typesafe', '*')]
+
+
 CRITERIA = ['Unrelated or unsupported, including unsupported exact values or unapproved domain transfer.',
             'Related background, but not direct evidence for any requested part.',
             'Direct evidence for at least one requested part, including implicit paraphrases within its original domain.']
@@ -146,13 +173,21 @@ def _supplied(vault):
     if path.is_symlink() or path.stat().st_size > 16000: raise ValueError('config_invalid')
     try: supplied = json.loads(path.read_text(encoding='utf-8'))
     except (json.JSONDecodeError, UnicodeDecodeError): raise ValueError('config_invalid') from None
-    if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS) - {'env_file'}:
+    if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS) - {'env_file', 'laya'}:
         raise ValueError('config_invalid')
     return supplied
 
 
 def load_config(vault):
     config = _validated(dict(DEFAULTS, **_supplied(vault)))
+    if config['provider'] == 'laya':
+        # The local server lives only in the laya block, so the top-level TypeSafe values
+        # survive a switch back. Releases before the block existed reject it: rollback is off.
+        block = config['laya']
+        config.update(base_url=block['base_url'], model=block['model'], timeout=block['timeout'])
+    if config['provider'] in SHADOW_ONLY and config['mode'] == 'on':
+        # A hand-edited `on` never applies a shadow-only provider's scores; status shows why.
+        config['mode'] = 'shadow'
     if killed(vault): config['mode'] = 'off'
     return config
 
@@ -174,6 +209,9 @@ def _validated(config):
             raise ValueError('config_invalid')
     if 'env_file' in config and (not isinstance(config['env_file'],str) or not Path(config['env_file']).is_absolute()):
         raise ValueError('config_invalid')
+    if 'laya' in config or config['provider'] == 'laya':
+        import beyin_v3_laya as laya
+        config['laya'] = laya.validate(config.get('laya', {}))
     return config
 
 
@@ -184,13 +222,13 @@ def _environment(config):
         if not path.is_absolute() or not path.is_file():
             raise ValueError('env_file_invalid')
         for line in path.read_text(encoding='utf-8').splitlines():
-            match = re.fullmatch(r'\s*(?:export\s+)?(TYPESAFE_API_KEY|TYPESAFE_BASE_URL)\s*=\s*(.*?)\s*',line)
+            match = re.fullmatch(r'\s*(?:export\s+)?(TYPESAFE_API_KEY|TYPESAFE_BASE_URL|LAYA_API_KEY)\s*=\s*(.*?)\s*',line)
             if match:
                 value = match[2]
                 if len(value)>=2 and value[0]==value[-1] and value[0] in "\"'":
                     value=value[1:-1]
                 values[match[1]]=value
-    for name in ('TYPESAFE_API_KEY','TYPESAFE_BASE_URL'):
+    for name in ('TYPESAFE_API_KEY','TYPESAFE_BASE_URL','LAYA_API_KEY'):
         if name in os.environ: values[name]=os.environ[name]
     return values
 
@@ -358,7 +396,7 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
     result=dict(mode='off',scores={},facet_scores={},relations={},diagnostics=[],degraded=False,cache_hit=False,
                 usage={},latency_ms=0,request_hash=None,reported_model=None,network_requests=0,http_requests=0,
                 confidence_provenance={'present':0,'missing':0,'used_for_selection':False})
-    provider=None
+    provider=None; sent=None
     try:
         config=load_config(vault); result['mode']=config['mode']; provider=config['provider']
         policy = inspect_config(vault)
@@ -422,10 +460,19 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                     j,ident=question_map[key]; result['facet_scores'][j][ident]=score
                 result['scores']={ident:max(result['facet_scores'][j][ident] for j in range(len(facets))) for ident in ids}
         if len(json.dumps(body,ensure_ascii=False))>config['max_input_chars']: raise ValueError('budget_exceeded')
+        laya=None
+        if provider=='laya':
+            import beyin_v3_laya as laya
+            # Split and size-check before any cache, key or network access.
+            requests=laya.plan(purpose,body,config['model'])
         if inspect_config(vault) != policy: raise ValueError('configuration_changed')
-        env=_environment(config); endpoint=_endpoint(env.get('TYPESAFE_BASE_URL',config['base_url']))
+        env=_environment(config)
+        # TYPESAFE_BASE_URL and TYPESAFE_API_KEY never apply to the local backend.
+        endpoint=laya.endpoint(config['base_url']) if laya else _endpoint(env.get('TYPESAFE_BASE_URL',config['base_url']))
         fingerprint=dict(body=body,scope=scope,sources=source_versions or {},endpoint=endpoint,
                          provider=config['provider'],rubric_version=config['rubric_version'],purpose=purpose,purpose_version=MEMORY_VERSION if purpose=='memory_assessment' else 3 if purpose=='answer_check' else 1,policy=policy.get('policy_revision'),probability_adapter=2,schema=3)
+        if laya: fingerprint['adapter']=laya.REVISION
+        origin='laya_max_probability' if laya else 'provider_response_unverified'
         digest=hashlib.sha256(json.dumps(fingerprint,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         result['request_hash']=digest
         path=None
@@ -441,7 +488,7 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                     if isinstance(reported,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}',reported): result['reported_model']=reported
                     provenance=cached.get('confidence_provenance',{})
                     if isinstance(provenance,dict) and all(type(provenance.get(k)) is int and 0<=provenance[k]<=len(question_map) for k in ('present','missing')):
-                        result['confidence_provenance']={k:provenance[k] for k in ('present','missing')} | {'used_for_selection':purpose in ('answer_check', 'memory_assessment') and config['mode']=='on','origin':'cached_provider_response_unverified'}
+                        result['confidence_provenance']={k:provenance[k] for k in ('present','missing')} | {'used_for_selection':purpose in ('answer_check', 'memory_assessment') and config['mode']=='on','origin':'cached_'+origin}
                     count=cached.get('quantized_probability_count',0)
                     if type(count) is int and 0<=count<=len(question_map):
                         result['quantized_probability_count']=count
@@ -453,15 +500,22 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
             if isinstance(exc, ValueError) and str(exc) == 'configuration_changed':
                 raise
             result['diagnostics'].append('cache_unavailable')
-        key=env.get('TYPESAFE_API_KEY')
-        if not key: raise ValueError('credentials_missing')
+        # laya-serve needs a key only when it was started with LAYA_API_KEY.
+        key=(env.get('LAYA_API_KEY') or '') if laya else env.get('TYPESAFE_API_KEY')
+        if not key and not laya: raise ValueError('credentials_missing')
         remaining=config['timeout']-(time.monotonic()-started)
         if remaining<=0: raise ValueError('deadline_exceeded')
         if inspect_config(vault) != policy: raise ValueError('configuration_changed')
         # One logical call; http_requests counts wire requests separately.
         result['network_requests'] = 1
-        result['http_requests'] = 1
-        raw=_bounded_transport(transport or _transport,endpoint,body,key,remaining)
+        if laya and transport is None:
+            sent=[]
+            sender=functools.partial(laya.call,requests=requests,model=config['model'],sent=sent,
+                                     guard=lambda: inspect_config(vault)==policy)
+        else:
+            result['http_requests'] = 1
+            sender=transport or _transport
+        raw=_bounded_transport(sender,endpoint,body,key,remaining)
         if inspect_config(vault) != policy: raise ValueError('configuration_changed')
         if time.monotonic()-started>config['timeout']: raise ValueError('deadline_exceeded')
         # Usage can be valid even when typed answers fail; retain bounded counters.
@@ -480,7 +534,7 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
         answers=raw['answers']
         present=sum('confidence' in answer for answer in answers.values())
         result['confidence_provenance']=dict(present=present,missing=len(answers)-present,
-            used_for_selection=purpose in ('answer_check', 'memory_assessment') and config['mode']=='on',origin='provider_response_unverified')
+            used_for_selection=purpose in ('answer_check', 'memory_assessment') and config['mode']=='on',origin=origin)
         if path:
             try:
                 # Store only validated score output: no prompts, credentials or raw provider metadata.
@@ -494,18 +548,23 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                 os.replace(temporary,path)
             except OSError: result['diagnostics'].append('cache_write_failed')
     except Exception as exc:
-        safe_codes={'config_invalid','env_file_invalid','endpoint_invalid','payload_invalid','budget_exceeded','answers_invalid','credentials_missing','deadline_exceeded','purpose_invalid','configuration_changed'}
+        safe_codes={'config_invalid','env_file_invalid','endpoint_invalid','payload_invalid','budget_exceeded','answers_invalid','credentials_missing','deadline_exceeded','purpose_invalid','configuration_changed',
+                    'laya_state_too_large','laya_state_truncated','laya_checkpoint_mismatch'}
         code=str(exc) if isinstance(exc,ValueError) and str(exc) in safe_codes else 'request_failed'
-        if isinstance(exc,_AnswerInvalid): result['answer_issue']=exc.issue
+        issue=getattr(exc,'issue',None)
+        if code=='answers_invalid' and isinstance(issue,str) and re.fullmatch(r'[a-z_]{1,64}',issue): result['answer_issue']=issue
         if isinstance(exc,urllib.error.HTTPError):
             result['http_status']=exc.code if type(exc.code) is int and 100<=exc.code<=599 else None
             code=({401:'http_unauthorized',403:'http_forbidden',429:'http_rate_limited'}.get(exc.code)
                   or ('http_server_error' if 500<=exc.code<=599 else 'http_error'))
         elif isinstance(exc,(TimeoutError,socket.timeout)) or (isinstance(exc,urllib.error.URLError) and isinstance(exc.reason,(TimeoutError,socket.timeout))):
             code='deadline_exceeded'
+        elif isinstance(exc,ConnectionRefusedError) or (isinstance(exc,urllib.error.URLError) and isinstance(exc.reason,ConnectionRefusedError)):
+            code='provider_unreachable'
         result.update(scores={},facet_scores={},relations={},degraded=True)
         result['diagnostics'].append(code)
     finally:
+        if sent is not None: result['http_requests']=len(sent)
         result['latency_ms']=round((time.monotonic()-started)*1000,3)
         if result['mode']!='off' and (result['request_hash'] or result['degraded']):
             log_event(vault,dict(purpose=result.get('purpose'),mode=result['mode'],provider=provider,cache_hit=result['cache_hit'],
@@ -567,7 +626,13 @@ def inspect_config(vault):
         # This token contains no credentials and is safe to compare after provider I/O.
         generation = [stat.st_mtime_ns, stat.st_size, stat.st_ino] if stat else None
         revision = hashlib.sha256(json.dumps([config, generation], sort_keys=True).encode()).hexdigest()
-        return dict(mode=config['mode'],valid=True,features=sorted(config['features']),policy_revision=revision)
+        # Callers read provider, model and context_limit for provider-aware limits and thresholds.
+        limit = None
+        if config['provider'] == 'laya':
+            import beyin_v3_laya as laya
+            limit = laya.CONTEXT_CHARS[config['model']]
+        return dict(mode=config['mode'],valid=True,features=sorted(config['features']),policy_revision=revision,
+                    provider=config['provider'],model=config['model'],context_limit=limit)
     except Exception:
         return dict(mode='off',valid=False,diagnostics=['config_invalid'])
 
@@ -576,22 +641,74 @@ def status(vault):
     """What doctor and `jev status` show. Reports whether a key exists, never the key."""
     info=inspect_config(vault)
     features=info.get('features',[])
+    provider=info.get('provider')
+    laya=provider=='laya'
     key_present = False
     key_checked = info['valid'] and info['mode'] != 'off' and bool(features)
     if key_checked:
-        try: key_present=bool(_environment(load_config(vault)).get('TYPESAFE_API_KEY'))
+        try: key_present=bool(_environment(load_config(vault)).get('LAYA_API_KEY' if laya else 'TYPESAFE_API_KEY'))
         except Exception: pass
     try: saved=_validated(dict(DEFAULTS,**_supplied(vault)))['mode']
     except Exception: saved='off'
-    return dict(mode=info['mode'],saved_mode=saved,config_valid=info['valid'],configured=(Path(vault)/'jev.json').exists(),
+    result=dict(mode=info['mode'],saved_mode=saved,config_valid=info['valid'],configured=(Path(vault)/'jev.json').exists(),
                 kill_switch=killed(vault),features={name:name in features for name in FEATURES},key_present=key_present,key_checked=key_checked,
                 automatic_model_calls=info['mode']!='off' and 'auto_context' in features,last_24h=_recent(vault))
+    if provider:
+        result['provider']=provider
+    if provider in SHADOW_ONLY:
+        # Scores are logged, never applied. A saved `on` (hand-edited) is reported, not obeyed.
+        result['shadow_only']=True
+        if saved=='on': result['mode_refused']='laya_shadow_only'
+    if laya:
+        # Only the loopback server is echoed; the TypeSafe base_url stays private to jev.json.
+        config=load_config(vault)
+        result.update(laya=dict(base_url=config['base_url'],model=config['model'],timeout=config['timeout']),
+                      endpoint_local=True,key_required=False,
+                      calibration='measured' if thresholds('laya',config['model'])['verified'] else 'jev_thresholds_unverified_for_laya',
+                      auto_context_applied=False)
+    return result
 
 
-def set_mode(vault, mode=None, enable=(), disable=()):
-    """The only writer of jev.json. Valid keys a user added by hand are kept; _supplied rejects the rest."""
+def probe(vault):
+    """`jev status --check`: one GET /health to the configured local Laya server, 1 second.
+
+    Sends no note text and no key. TypeSafe is never probed; doctor never calls this.
+    """
+    try: config=load_config(vault)
+    except Exception: return dict(checked=False,reason='config_invalid')
+    if config['provider']!='laya': return dict(checked=False,reason='not_applicable')
+    if killed(vault): return dict(checked=False,reason='kill_switch')
+    import beyin_v3_laya as laya
+    server=laya.health(config['base_url'],timeout=1.0)
+    server.update(checked=True,pinned_model=config['model'],pinned_model_loaded=config['model'] in server.get('loaded',[]))
+    return server
+
+
+def set_mode(vault, mode=None, enable=(), disable=(), provider=None, laya=None):
+    """The only writer of jev.json. Valid keys a user added by hand are kept; _supplied rejects the rest.
+
+    provider='laya' always writes a `laya` block, so a release that predates it rejects the
+    file after a rollback (advisor off) instead of sending the TypeSafe key to a local port.
+    Switching back to typesafe keeps the block for later. A shadow-only provider is never
+    saved with mode `on` (laya_shadow_only), whichever of the two arguments changes.
+    """
     supplied=_supplied(vault)
     if mode is not None: supplied['mode']=mode
+    if provider is not None:
+        if provider not in PROVIDERS: raise ValueError('provider_unknown')
+        supplied['provider']=provider
+    if supplied.get('provider') in SHADOW_ONLY and supplied.get('mode',DEFAULTS['mode'])=='on':
+        raise ValueError('laya_shadow_only')
+    if laya and supplied.get('provider',DEFAULTS['provider'])!='laya':
+        raise ValueError('laya_option_requires_laya_provider')
+    if supplied.get('provider')=='laya':
+        import beyin_v3_laya as adapter
+        if not isinstance(supplied.get('laya',{}),dict): raise ValueError('config_invalid')
+        block=dict(supplied.get('laya',{}),**(laya or {}))
+        try: effective=adapter.validate(block)
+        except ValueError: raise ValueError('laya_option_invalid' if laya else 'config_invalid') from None
+        # Record where calls go and which checkpoint is pinned; timeout only when set by hand.
+        supplied['laya']=dict(block,base_url=effective['base_url'],model=effective['model'])
     features=list(supplied.get('features',DEFAULTS['features']))
     for name in list(enable)+list(disable):
         if name not in FEATURES: raise ValueError('feature_unknown')
