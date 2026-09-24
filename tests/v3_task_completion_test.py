@@ -60,6 +60,12 @@ class TaskCompletionTest(unittest.TestCase):
         evidence = self.engine.note_create('notes/calibration-result.md',
                                            'Synthetic calibration result reviewed.', {'kind': 'fact'})
         self.assertEqual(evidence['status'], 'succeeded')
+        with self.assertRaisesRegex(ValueError, 'repeat a source'):
+            self.engine.update_task('synthetic-task', 1,
+                                    {'status': 'done', 'evidence_refs': [
+                                        'notes/calibration-result.md', 'notes/./calibration-result.md']})
+        self.assertEqual(task.read_bytes(), before)
+        self.assertEqual(len(self.engine.store.history('synthetic-task')), 1)
         updated = self.engine.update_task('synthetic-task', 1,
                                           {'status': 'done', 'evidence_refs': ['notes/calibration-result.md']})
         self.assertEqual(updated['revision'], 2)
@@ -94,6 +100,40 @@ class TaskCompletionTest(unittest.TestCase):
         reopened = self.engine.update_task('legacy-task', 1, {'status': 'waiting'})
         self.assertEqual(reopened['revision'], 2)
         self.assertEqual(reopened['status'], 'waiting')
+
+    def test_cancelled_task_can_leave_a_missing_evidence_source(self):
+        self.engine.task_create('tasks/synthetic.md', 'Strict task.', self.metadata)
+        self.engine.note_create('notes/result.md', 'Synthetic result.', {'kind': 'fact'})
+        self.engine.update_task('synthetic-task', 1,
+                                {'status': 'done', 'evidence_refs': ['notes/result.md']})
+        (self.vault / 'notes/result.md').unlink()
+        cancelled = self.engine.update_task('synthetic-task', 2, {'status': 'cancelled'})
+        self.assertEqual(cancelled['status'], 'cancelled')
+        self.assertEqual(self.doctor()['task_completion']['strict_issue_count'], 0)
+
+    def test_doctor_flags_manual_invalid_contract_as_strict_issue(self):
+        self.engine.task_create('tasks/synthetic.md', 'Strict task.', self.metadata)
+        task = self.vault / 'tasks/synthetic.md'
+        metadata, body = parse(task.read_text(encoding='utf-8'))
+        metadata['completion_contract'] = 'strcit'
+        task.write_text('---\n' + json.dumps(metadata) + '\n---\n' + body, encoding='utf-8')
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        report = self.doctor()
+        self.assertEqual(report['status'], 'needs_attention')
+        self.assertEqual(report['task_completion']['strict_issue_count'], 1)
+        self.assertEqual(report['task_completion']['legacy_done_count'], 0)
+        self.assertIn('completion_contract', report['task_completion']['strict_issues'][0]['reason'])
+
+    def test_doctor_reports_corrupt_index_without_changing_source(self):
+        self.engine.task_create('tasks/synthetic.md', 'Strict task.', self.metadata)
+        task = self.vault / 'tasks/synthetic.md'
+        before = task.read_bytes()
+        with self.engine.store._connect() as db:
+            db.execute('UPDATE records SET payload=? WHERE id=?', ('{broken', 'synthetic-task'))
+        report = self.doctor()
+        self.assertEqual(report['status'], 'needs_attention')
+        self.assertIn('JSONDecodeError', report['task_completion']['error'])
+        self.assertEqual(task.read_bytes(), before)
 
     def test_doctor_flags_manual_strict_done_without_evidence_and_lost_ref(self):
         self.engine.task_create('tasks/synthetic.md', 'Strict task.', self.metadata)

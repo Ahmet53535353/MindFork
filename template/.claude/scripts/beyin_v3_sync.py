@@ -234,8 +234,6 @@ class SyncEngine:
         refs = metadata.get('evidence_refs', [])
         if not isinstance(refs, list) or not all(isinstance(ref, str) and ref.strip() for ref in refs):
             return 'evidence_refs must be a list of source paths'
-        if len(refs) != len(set(refs)):
-            return 'evidence_refs must not repeat a source'
         if contract == 'strict' and not criterion:
             return 'strict task requires completion_criterion'
         if contract == 'strict' and metadata.get('status') == 'done' and not refs:
@@ -246,11 +244,15 @@ class SyncEngine:
                 task_path = self._path(task_source)
             except ValueError:
                 return 'task source is unavailable or outside vault'
+        seen_paths = set()
         for ref in refs:
             try:
-                path = self._path(ref, existing=True)
+                path = self._path(ref, existing=metadata.get('status') != 'cancelled')
             except ValueError:
                 return 'evidence ref must be an existing vault source'
+            if path in seen_paths:
+                return 'evidence_refs must not repeat a source'
+            seen_paths.add(path)
             if task_path is not None and path == task_path:
                 return 'evidence ref cannot be the task source itself'
         return None
@@ -263,12 +265,12 @@ class SyncEngine:
         for record in records:
             if record.get('kind') != 'task':
                 continue
-            if record.get('completion_contract') == 'strict':
-                issue = self._completion_issue(record, record['source'])
+            if record.get('completion_contract') is not None:
+                issue = self._completion_issue(record, record.get('source'))
                 if issue:
-                    strict_issues.append({'id': record['id'], 'source': record['source'], 'reason': issue})
+                    strict_issues.append({'id': record.get('id'), 'source': record.get('source'), 'reason': issue})
             elif record.get('status') == 'done':
-                legacy_done.append({'id': record['id'], 'source': record['source']})
+                legacy_done.append({'id': record.get('id'), 'source': record.get('source')})
         return {'strict_issue_count': len(strict_issues), 'strict_issues': strict_issues[:20],
                 'legacy_done_count': len(legacy_done), 'legacy_done': legacy_done[:20],
                 'truncated': len(strict_issues) > 20 or len(legacy_done) > 20}
