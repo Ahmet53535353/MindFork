@@ -97,7 +97,7 @@ def main(argv=None):
         if not isinstance(payload, dict):
             raise ValueError('Invalid hook payload')
         event = payload.get('hook_event_name')
-        if event not in events or payload.get('no_memory') is True or os.environ.get('BEYIN_V3_INTERNAL') or os.environ.get('BEYIN_V3_SKIP'):
+        if event not in events or payload.get('no_memory') is True or os.environ.get('BEYIN_V3_INTERNAL') or os.environ.get('BEYIN_V3_SKIP') == '1':
             print('{}'); return 0
         cwd = working_directory(payload, args.harness)
         if not isinstance(payload.get('session_id'), str) or payload['session_id'] in ('', 'unknown'):

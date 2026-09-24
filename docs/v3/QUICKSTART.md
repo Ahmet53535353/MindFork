@@ -205,7 +205,12 @@ interactive operation.
 
 Set `BEYIN_V3_SKIP=1` in a delegated or headless agent process to keep the V3
 memory hooks out of that run; the hook and bridge return `{}` without queuing an
-event. `BEYIN_V3_INTERNAL` remains available as the internal recursion guard.
+event, injecting context or starting a worker (a non-idle Antigravity `Stop`
+still answers `decision: stop`). Only the exact value `1` skips; any other value,
+including `0`, `false` or an empty value, leaves the hooks on. Child processes
+inherit the variable, so set it on the delegated process only, not in a shell
+profile or shared environment file where it would also silence the main session.
+`BEYIN_V3_INTERNAL` remains available as the internal recursion guard.
 
 Windows command definitions use an encoded PowerShell invocation solely to
 quote the Python executable and arguments safely, including spaces and Unicode.

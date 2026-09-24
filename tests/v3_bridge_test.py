@@ -91,6 +91,14 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(self.invoke(), {})
         self.assertEqual(self.queued(), [])
 
+    def test_public_skip_guard_honours_only_exact_one(self):
+        for count, value in enumerate(('0', 'false', ''), start=1):
+            with self.subTest(value=value):
+                self.env['BEYIN_V3_SKIP'] = value
+                result = self.invoke(dict(self.payload, event_id='start-%d' % count))
+                self.assertIn('receipt --harness codex', result['hookSpecificOutput']['additionalContext'])
+                self.assertEqual(len(self.queued()), count)
+
     def test_independent_budget_events_and_local_context_off(self):
         for budget in ('0', '20'):
             self.assertEqual(self.invoke(extra=['--context-chars', budget]), {})
