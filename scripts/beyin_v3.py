@@ -233,7 +233,7 @@ def main(argv=None):
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
             try:
-                result['task_completion'] = load_sync()(vault, state).completion_health()
+                result['task_completion'] = load_sync().reader(store).completion_health()
             except Exception as exc:
                 result['task_completion'] = {
                     'strict_issue_count': 0, 'strict_issues': [], 'legacy_done_count': 0,
