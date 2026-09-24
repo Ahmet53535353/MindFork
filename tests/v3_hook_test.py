@@ -247,6 +247,19 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(self.invoke(self.payload), {})
         self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
 
+    def test_public_skip_guard_skips_queue(self):
+        self.env['BEYIN_V3_SKIP'] = '1'
+        self.assertEqual(self.invoke(self.payload), {})
+        self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
+
+    def test_public_skip_guard_honours_only_exact_one(self):
+        # Same convention as BEYIN_V3_NO_SPAWN: 0, false or empty must not silently disable memory.
+        for count, value in enumerate(('0', 'false', ''), start=1):
+            with self.subTest(value=value):
+                self.env['BEYIN_V3_SKIP'] = value
+                self.assertEqual(self.invoke(dict(self.payload, event_id='synthetic-skip-%d' % count)), {})
+                self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), count)
+
     def test_install_repeat_preserves_unrelated_configuration_and_trust(self):
         originals = {}
         for relative, payload in [('.claude/settings.local.json', {'hooks': {'SessionStart': [{'matcher': 'synthetic-other', 'hooks': [{'type': 'command', 'command': 'synthetic-unrelated'}]}]}, 'permissions': {'allow': ['Read']}}),
