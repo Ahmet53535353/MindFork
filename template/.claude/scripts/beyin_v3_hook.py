@@ -155,7 +155,7 @@ def main():
                 return
             payload["session_id"] = payload.get("conversationId", "unknown")
         payload["hook_event_name"] = event
-        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or payload.get('no_memory') is True:
+        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") or payload.get('no_memory') is True:
             print("{}")
             return
         if event == 'SessionStart' and not args.metadata_only:

@@ -86,6 +86,11 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(self.invoke(), {})
         self.assertEqual(self.queued(), [])
 
+    def test_public_skip_guard_is_inert(self):
+        self.env['BEYIN_V3_SKIP'] = '1'
+        self.assertEqual(self.invoke(), {})
+        self.assertEqual(self.queued(), [])
+
     def test_independent_budget_events_and_local_context_off(self):
         for budget in ('0', '20'):
             self.assertEqual(self.invoke(extra=['--context-chars', budget]), {})

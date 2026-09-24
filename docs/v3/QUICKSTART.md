@@ -203,6 +203,10 @@ workers; use the hook's `--drain-queue` option to drain explicitly. This testing
 mode may return previously indexed context and should not be used for normal
 interactive operation.
 
+Set `BEYIN_V3_SKIP=1` in a delegated or headless agent process to keep the V3
+memory hooks out of that run; the hook and bridge return `{}` without queuing an
+event. `BEYIN_V3_INTERNAL` remains available as the internal recursion guard.
+
 Windows command definitions use an encoded PowerShell invocation solely to
 quote the Python executable and arguments safely, including spaces and Unicode.
 The Python implementation does not require Bash or third-party modules; Windows

@@ -247,6 +247,11 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(self.invoke(self.payload), {})
         self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
 
+    def test_public_skip_guard_skips_queue(self):
+        self.env['BEYIN_V3_SKIP'] = '1'
+        self.assertEqual(self.invoke(self.payload), {})
+        self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
+
     def test_install_repeat_preserves_unrelated_configuration_and_trust(self):
         originals = {}
         for relative, payload in [('.claude/settings.local.json', {'hooks': {'SessionStart': [{'matcher': 'synthetic-other', 'hooks': [{'type': 'command', 'command': 'synthetic-unrelated'}]}]}, 'permissions': {'allow': ['Read']}}),
