@@ -280,7 +280,7 @@ class MemoryStore:
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
         return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": json.loads(row[4])} for row in rows]
 
-    def submit_receipt(self, event_id, summary, refs, harness, created_at=None, session=None):
+    def submit_receipt(self, event_id, summary, refs, harness):
         self._require_writable()
         if not isinstance(event_id, str) or not event_id.strip():
             raise ValueError("event_id required")
@@ -291,10 +291,6 @@ class MemoryStore:
         if not isinstance(refs, list) or not refs:
             raise ValueError("source refs required")
         event = {"event_id": event_id, "summary": summary, "refs": [self._source(ref) for ref in refs], "harness": harness}
-        if created_at is not None:
-            event["created_at"] = created_at
-        if session is not None:
-            event["session"] = session
         payload = _json(event)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")

@@ -506,5 +506,156 @@ class SourceSyncTest(unittest.TestCase):
         self.assertNotEqual(self.records()[0]['status'], 'waiting')
 
 
+
+class ReceiptStateResetTest(unittest.TestCase):
+    def setUp(self):
+        self.module = load_module()
+        self.tmp = tempfile.TemporaryDirectory(prefix='beyin-receipt-reset-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.vault = self.root / 'vault'
+        self.vault.mkdir()
+        (self.vault / 'notes').mkdir()
+        (self.vault / 'notes/task.md').write_text('# Task\nInitial work item.\n', encoding='utf-8')
+        from beyin_v3 import ReceiptConflict
+        self.ReceiptConflict = ReceiptConflict
+        self._hash = self.module._hash
+
+    def test_receipt_submission_after_state_reset_does_not_deadlock(self):
+        """State reset or multi-device vault sync must not cause receipt projection deadlock."""
+        state1 = self.root / 'state1'
+        engine1 = self.module.SyncEngine(self.vault, state1)
+        engine1.sync()
+        engine1.receipt('event-1', 'Initial calibration completed.', ['notes/task.md'], 'codex', session='s1')
+
+        outcomes1 = (self.vault / 'knowledge/v3/outcomes.md').read_text(encoding='utf-8')
+        self.assertIn('Initial calibration completed.', outcomes1)
+
+        # Simulate state reset (wiped cache, new machine, Obsidian Sync)
+        state2 = self.root / 'state2'
+        engine2 = self.module.SyncEngine(self.vault, state2)
+        engine2.sync()
+
+        res = engine2.receipt('event-2', 'Second phase verified.', ['notes/task.md'], 'codex', session='s2')
+        self.assertEqual(res['status'], 'succeeded')
+
+        outcomes2 = (self.vault / 'knowledge/v3/outcomes.md').read_text(encoding='utf-8')
+        self.assertIn('Initial calibration completed.', outcomes2)
+        self.assertIn('Second phase verified.', outcomes2)
+
+    def test_receipt_with_whitespace_and_newlines_recovers_cleanly(self):
+        """Review Point 1 & 2: Summaries with trailing newlines or spaces must not cause false event id collision."""
+        summaries = ['Done.\n', '  Done.', 'Line1\nLine2  ']
+        for i, s in enumerate(summaries):
+            state1 = self.root / f'ws_state1_{i}'
+            engine1 = self.module.SyncEngine(self.vault, state1)
+            engine1.sync()
+            eid = f'event-ws-{i}'
+            engine1.receipt(eid, s, ['notes/task.md'], 'codex', session=f's{i}')
+
+            # Reset state and re-sync
+            state2 = self.root / f'ws_state2_{i}'
+            engine2 = self.module.SyncEngine(self.vault, state2)
+            report = engine2.sync()
+            self.assertEqual(report['conflicts'], [])
+
+            # Reasserting same receipt on reset state must succeed without conflict
+            res = engine2.receipt(eid, s, ['notes/task.md'], 'codex', session=f's{i}')
+            self.assertEqual(res['status'], 'succeeded')
+
+            # Following with another receipt must succeed without projection conflict
+            res_next = engine2.receipt(f'event-next-{i}', 'Next step.', ['notes/task.md'], 'codex', session=f's{i}')
+            self.assertEqual(res_next['status'], 'succeeded')
+
+    def test_receipt_validation_reports_warnings(self):
+        """Review Point 4: At-rest receipt files with bad filename hash, harness or refs report warnings."""
+        state = self.root / 'state_val'
+        engine = self.module.SyncEngine(self.vault, state)
+        engine.sync()
+
+        receipts_dir = self.vault / 'receipts'
+        receipts_dir.mkdir(exist_ok=True)
+
+        # 1. Filename does not match hash of event_id
+        bad_hash_file = receipts_dir / 'wrong_hash.md'
+        bad_hash_file.write_text('---\n{"kind": "receipt", "event_id": "ev-1", "refs": ["notes/task.md"], "harness": "codex"}\n---\nSummary\n', encoding='utf-8')
+
+        # 2. Invalid harness
+        harness_eid = 'ev-bad-harness'
+        bad_harness_file = receipts_dir / f'{self._hash(harness_eid)}.md'
+        bad_harness_file.write_text(f'---\n{{"kind": "receipt", "event_id": "{harness_eid}", "refs": ["notes/task.md"], "harness": "unsupported"}}\n---\nSummary\n', encoding='utf-8')
+
+        # 3. Missing refs
+        refs_eid = 'ev-bad-refs'
+        bad_refs_file = receipts_dir / f'{self._hash(refs_eid)}.md'
+        bad_refs_file.write_text(f'---\n{{"kind": "receipt", "event_id": "{refs_eid}", "refs": [], "harness": "codex"}}\n---\nSummary\n', encoding='utf-8')
+
+        report = engine.sync()
+        warn_sources = {w['source'] for w in report['warnings']}
+        self.assertIn('receipts/wrong_hash.md', warn_sources)
+        self.assertIn(f'receipts/{self._hash(harness_eid)}.md', warn_sources)
+        self.assertIn(f'receipts/{self._hash(refs_eid)}.md', warn_sources)
+
+    def test_existing_receipt_reassertion_after_state_reset(self):
+        """Calling receipt() on an existing receipt after state reset must not trigger false source change conflict."""
+        state1 = self.root / 'state_reassert1'
+        engine1 = self.module.SyncEngine(self.vault, state1)
+        engine1.sync()
+        engine1.receipt('event-1', 'Initial calibration completed.', ['notes/task.md'], 'codex', session='s1')
+
+        state2 = self.root / 'state_reassert2'
+        engine2 = self.module.SyncEngine(self.vault, state2)
+        engine2.sync()
+
+        res = engine2.receipt('event-1', 'Initial calibration completed.', ['notes/task.md'], 'codex', session='s1')
+        self.assertEqual(res['status'], 'succeeded')
+
+    def test_direct_receipt_call_without_prior_sync_recovers_receipt(self):
+        """Calling receipt() before sync() on fresh state must recover on-disk receipt without conflict."""
+        state1 = self.root / 'state_direct1'
+        engine1 = self.module.SyncEngine(self.vault, state1)
+        engine1.sync()
+        engine1.receipt('event-1', 'Initial calibration completed.', ['notes/task.md'], 'codex', session='s1')
+
+        state3 = self.root / 'state_direct3'
+        engine3 = self.module.SyncEngine(self.vault, state3)
+        res = engine3.receipt('event-1', 'Initial calibration completed.', ['notes/task.md'], 'codex', session='s1')
+        self.assertEqual(res['status'], 'succeeded')
+
+    def test_manual_receipt_tampering_still_fails(self):
+        """Genuine manual tampering with receipt content must still raise ReceiptConflict."""
+        state1 = self.root / 'state_tamper1'
+        engine1 = self.module.SyncEngine(self.vault, state1)
+        engine1.sync()
+        res1 = engine1.receipt('event-1', 'Original text.', ['notes/task.md'], 'codex', session='s1')
+
+        receipt_file = self.vault / res1['source']
+        receipt_file.write_text(receipt_file.read_text(encoding='utf-8').replace('Original text.', 'Tampered text.'), encoding='utf-8')
+
+        state2 = self.root / 'state_tamper2'
+        engine2 = self.module.SyncEngine(self.vault, state2)
+        with self.assertRaises(self.ReceiptConflict):
+            engine2.receipt('event-1', 'Original text.', ['notes/task.md'], 'codex', session='s1')
+
+    def test_receipts_symlink_rejected(self):
+        """Review Point 3: A symlinked receipts/ directory or file inside must be rejected and not projected."""
+        outside = self.root / 'outside'
+        outside.mkdir()
+        secret_receipt = outside / f'{self._hash("ev-symlink")}.md'
+        secret_receipt.write_text(f'---\n{{"kind": "receipt", "event_id": "ev-symlink", "refs": ["notes/task.md"], "harness": "codex"}}\n---\nSecret Outside Content\n', encoding='utf-8')
+        receipts_link = self.vault / 'receipts'
+        try:
+            receipts_link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            self.skipTest('Symlink creation not permitted')
+        state = self.root / 'state_sym'
+        engine = self.module.SyncEngine(self.vault, state)
+        report = engine.sync()
+        outcomes = self.vault / 'knowledge/v3/outcomes.md'
+        if outcomes.exists():
+            self.assertNotIn('Secret Outside Content', outcomes.read_text(encoding='utf-8'))
+
+
 if __name__ == '__main__':
     unittest.main()
+
