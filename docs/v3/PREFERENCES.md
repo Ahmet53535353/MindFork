@@ -21,3 +21,55 @@ Aralığa takılmış bir kontrolde turn bağlamı istenirse eski kayıtları g�
 Özel V2 cron/LaunchAgent/Task Scheduler işleri veya kullanıcının ayrı kurduğu 15 dakikalık ücretli ajan otomasyonları bu tercihlerle kapatılmaz. Önce ilgili işi tespit edip ayrı yönetmek gerekir. V3 kendiliğinden Luna/Sonnet çalıştırmaz.
 
 Bu değişiklik yerel adaydır; yayımlanmış v3.0.0 paketine otomatik olarak eklenmez. Yeni paket yayımlanmadan kullanıcılara mevcut sürüm özelliği diye duyurulmamalıdır.
+
+## Tur başı bağlam: pasaj düzeyinde strict arama
+
+Her mesajda hook'un eklediği bağlam (`context_mode: turn`) strict aramadan gelir. Bu arama notun tamamını tek bir kelime kümesi olarak puanlamaz; notu Markdown bloklarına böler ve her kaynaktan soruyla en iyi eşleşen bloğu, başlık yoluyla birlikte teslim eder (#83). Cevap uzun bir notun ortasındaysa notun ilk karakterleri değil cevabı taşıyan blok gelir; neredeyse her kelimeyi içeren uzun bir oturum arşivi de her soruda öne çıkamaz. Model çağrısı ve yeni bağımlılık yoktur.
+
+- Bölme: başlıklar (kod blokları içindekiler hariç) bölüm açar, boş satırlar paragrafları ayırır, yaklaşık 900 karakteri aşan bloklar cümle sınırından 200 karakter örtüşen pencerelere bölünür. Frontmatter okunmaz; başlık, takma ad ve `facts` alanları her bloğun arama kelimelerine eklenir.
+- Kabul ve sıralama: bir blok en az iki ortak kelime ister. Ağırlık mevcut göreli idf ailesiyle hesaplanır, soru kapsamasıyla (`ortak kelime / soru kelimesi`, payda en fazla 4) çarpılır ve `strict_floor` altında kalırsa blok elenir. Kabul blok frekansıyla, kabul edilen kaynakların sıralaması kaynak frekansıyla yapılır; çok bölüme ayrılmış bir not kendi kelimelerini yaygın göstermez. Uzun, sohbet havasında yazılmış bir mesaj uzunluğu yüzünden elenmez. Proje seçiliyse proje kelimeleri eşleşme sayılmaz.
+- Kapılar aynıdır: görünürlük, güven, proje, tazelik ve supersede kuralları not düzeyindeki yolla aynı `_eligible()` fonksiyonundan geçer; bütçe ve citation sözleşmesi aynı `pack_context`'tir.
+- Boş sonuç bir cevaptır. Not düzeyindeki eski yola yalnız gerçek bir hata olduğunda ya da indeks ilk kez kurulurken dönülür.
+
+İndeks türetilmiş veridir ve vault dışındaki runtime klasöründe `passages.json` olarak durur (JSON, 0600 izin, atomik yazım, 64 MB sınırı; pickle yoktur). Yalnız değişen kayıtlar yeniden işlenir; kelime ayırıcı değişirse önbellek kendiliğinden yeniden kurulur. İlk kurulum her turda en fazla yaklaşık 1 saniye çalışır ve kaldığı yerden devam eder; tamamlanana kadar o turlar eski yolu kullanır, böylece büyük bir vault hook süresini aşmaz.
+
+### `retrieval.json`
+
+Runtime klasöründeki (konumu için bkz. QUICKSTART) isteğe bağlı `retrieval.json` iki ayar taşır:
+
+```json
+{"strict_floor": 0.2, "strict_exclude": ["📦 900-Archive/", "Arsiv/Oturumlar/"]}
+```
+
+- `strict_floor`: 0 ile 2 arası sayı, varsayılan 0,20. Yükseltmek yanlış eklemeyi azaltır, cevabı bulma oranını da düşürür.
+- `strict_exclude`: vault köküne göre en fazla 64 yol öneki. `daily/` ve `receipts/` her zaman dışarıdadır, liste bunlara eklenir. Karşılaştırma büyük/küçük harfe ve Unicode biçimine (NFC/NFD) duyarsızdır, `\` ayırıcısı da kabul edilir. Arşiv ya da oturum dökümü klasörleri için uygundur.
+- Dosya bozuksa ya da bir değer geçersizse varsayılanlar kullanılır; hook bozulmaz.
+
+Bu ayar makineye özeldir ve `.beyin-preferences.json` şemasına girmez: eski bir sürüme dönüldüğünde tanımadığı bir tercih alanı yüzünden hook'un durması istenmedi.
+
+### Ölçüm ve varsayılan `strict_floor`
+
+`python3 scripts/evaluate_v3_passages.py` iki yolu hook'un teslim yolundan (`context_for(strict=True)` ve `render_context`) 2000 ve 5000 bütçede ölçer. Varsayılan korpus sentetik ve deterministiktir; `--vault DIR --questions FILE` aynı ölçümü kendi vault'unuzda salt okunur yapar. `answerable`, etiketli notun teslim edilmesi ve cevap cümlesinin teslim edilen metinde birebir geçmesidir; gürültü, karşılığı olmayan kontrol mesajlarından kaçında kayıt eklendiğidir.
+
+Sentetik korpus (152 not, 42 soru, iki soru biçimi; 15 gündelik, 15 ajan komutu ve 10 genel kelime kontrolü), `strict_floor` 0,20:
+
+| | not düzeyi 2000 | pasaj 2000 | not düzeyi 5000 | pasaj 5000 |
+|---|---|---|---|---|
+| kısa soru, answerable | 19/42 | 32/42 | 24/42 | 33/42 |
+| uzun sohbet mesajı, answerable | 17/42 | 27/42 | 20/42 | 28/42 |
+| gürültü: gündelik / ajan komutu | 0/15, 0/15 | 0/15, 1/15 | 0/15, 0/15 | 0/15, 1/15 |
+
+Gerçek bir vault (1.285 not; 88 etiketli soru, her biri kısa, dolgu kelimeli ve uzun sohbet biçiminde, toplam 264 sorgu; 20 gündelik, 40 ajan komutu ve vault'un en sık kelimelerinden kurulmuş 20 kontrol mesajı), hook yolu:
+
+| | not düzeyi | 0,15 | 0,20 | 0,25 | 0,20 ve arşiv dışlaması |
+|---|---|---|---|---|---|
+| answerable, 2000 | 28/264 | 141/264 | 130/264 | 124/264 | 138/264 |
+| answerable, 5000 | 60/264 | 178/264 | 160/264 | 147/264 | 167/264 |
+| uzun sohbet mesajı, 5000 | 1/88 | 39/88 | 39/88 | 39/88 | 42/88 |
+| gürültü: gündelik | 4/20 | 5/20 | 1/20 | 0/20 | 2/20 |
+| gürültü: ajan komutu | 16/40 | 23/40 | 13/40 | 8/40 | 12/40 |
+| gürültü: vault'un sık kelimeleri | 0/20 | 19/20 | 16/20 | 5/20 | 16/20 |
+
+Varsayılan 0,20 bu kurala göre seçildi: gündelik ve ajan komutu gürültüsünü bugünkü not düzeyindeki yolun üstüne çıkarmayan en düşük eşik. 0,15 cevabı biraz daha sık getiriyor ama iki gürültü türünde de bugünkü yolu geçiyor; 0,25 daha sessiz, daha az cevap getiriyor. Bedel açık: yalnız vault'un en sık kelimelerinden kurulmuş mesajlarda pasaj yolu çoğu zaman bir blok ekliyor (0,20'de 16/20, not düzeyinde 0/20). Bu size fazla geliyorsa `strict_floor` değerini 0,25 yapın.
+
+Aynı vault'ta ilk indeks kurulumu yaklaşık 3 saniye (birkaç tura bölünür), önbellek 9,1 MB (arşiv dışlanınca 5,5 MB). Ağır yük altında (10 çekirdekte yük ortalaması 40 civarı) sorgu başına ortanca süre not düzeyinde 1,8 saniye, pasaj yolunda 0,5 saniye; ikisinin de yaklaşık 0,3 saniyesi kaynak tazeliği kontrolü. Tek vault ve Türkçe ağırlıklı bir korpus üzerinde ölçüldü; kendi vault'unuzda ölçüp eşiği ona göre ayarlayın.

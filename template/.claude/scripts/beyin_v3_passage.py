@@ -32,10 +32,11 @@ import unicodedata
 
 from beyin_v3 import HARNESSES, STOPWORDS, _json, _tokens, pack_context
 
-# #83 chose 0.15 on one 263-note Turkish vault without a coverage cap. With the cap, a
-# second 1,285-note bilingual vault and the synthetic benchmark both favour 0.20: see
-# docs/v3/PREFERENCES.md for the measured trade-off. Measure yours with
-# scripts/evaluate_v3_passages.py and set strict_floor in the runtime retrieval.json.
+# #83 chose 0.15 on one 263-note Turkish vault without a coverage cap. With the cap, on a
+# second 1,285-note vault 0.20 is the lowest floor that keeps everyday and agent-command
+# noise at or below the note-level path (0.15 exceeds it on both); docs/v3/PREFERENCES.md
+# has the numbers. Measure yours with scripts/evaluate_v3_passages.py and set
+# strict_floor in the runtime retrieval.json.
 FLOOR = 0.20
 MIN_SHARED = 2
 COVERAGE_CAP = 4
