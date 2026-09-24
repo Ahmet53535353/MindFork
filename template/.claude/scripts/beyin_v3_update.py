@@ -185,6 +185,8 @@ def _destination(vault, state, operation):
     if Path(name).is_absolute() or '..' in Path(name).parts:
         raise ValueError('unsafe transaction path')
     path = root / name
+    # Resolve both sides now: a root resolved before it existed gains a Windows redirect
+    # (MSIX-virtualised AppData, junction) once created. Links that leave it still fail.
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError('transaction target escapes root')
     return path
