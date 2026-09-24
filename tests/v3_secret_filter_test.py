@@ -287,6 +287,19 @@ class SecretFilterTest(unittest.TestCase):
         for fragment in ('Parola99', 'sasecret1', 'ssword123'):
             self.assertNotIn(fragment, content)
 
+    def test_completion_criterion_is_redacted_like_other_free_text_metadata(self):
+        save(self.vault, {'secret_filter': True})
+        created = self.engine.task_create('tasks/strict.md', 'Body.', {
+            'id': 'strict-task', 'title': 'Strict', 'status': 'active', 'owner': 'Synthetic Owner',
+            'completion_contract': 'strict', 'completion_criterion': 'Deploy with token=abcdefghijkl'})
+        self.assertEqual(created['completion_criterion'], 'Deploy with [REDACTED]')
+        updated = self.engine.update_task('strict-task', 1, {'completion_criterion': 'Rotate '+self.token})
+        self.assertGreaterEqual(updated['secrets_redacted'], 1)
+        self.assertEqual(updated['completion_criterion'], 'Rotate [REDACTED]')
+        content = (self.vault/'tasks/strict.md').read_text(encoding='utf-8')
+        self.assertNotIn('abcdefghijkl', content)
+        self.assertNotIn(self.token, content)
+
     def test_pathological_runs_stay_linear(self):
         for text in ('\\' * 20000 + 'password', 'x://' + ':' * 20000, 'x://' + 'a:' * 10000,
                      'password: "' + 'a' * 20000, 'password: "a' * 2000):

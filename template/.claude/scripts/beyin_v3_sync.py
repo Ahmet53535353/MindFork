@@ -205,7 +205,7 @@ class SyncEngine:
         total_redacted = 0
         protected = dict(metadata)
 
-        for field in ('title', 'next_action'):
+        for field in ('title', 'next_action', 'completion_criterion'):
             if field in protected and isinstance(protected[field], str):
                 redacted_text, count = redact_secrets(protected[field], self.state)
                 total_redacted += count
