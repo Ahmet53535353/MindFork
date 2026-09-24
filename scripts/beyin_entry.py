@@ -96,8 +96,6 @@ def human_result(result, command, installed_version=None):
             if d7.get('total', 0) > 0 and d7.get('ratio') is not None:
                 d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
             lines.append('Makbuz kapsami: %' + str(pct) + ' (' + str(cov['covered']) + '/' + str(cov['total']) + ' oturum' + d7_text + ')')
-        if result.get('unattended_checkpoints'):
-            lines.append('Gozetimsiz oturum: ' + str(result['unattended_checkpoints']) + ' (makbuz hesabindan muaf)')
         if result.get('skill_conflicts'):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):

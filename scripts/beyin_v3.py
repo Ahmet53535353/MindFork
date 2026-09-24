@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 
 def default_state(vault: Path) -> Path:
@@ -207,7 +208,7 @@ def main(argv=None):
                     seen[event['harness']].add(event.get('event', 'unknown'))
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
-            load_sync()
+            sync = load_sync()(vault, state)
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)
             import beyin_v3_releases as releases
@@ -218,10 +219,14 @@ def main(argv=None):
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
-            gaps_info = result['receipt-gaps.json'] or {}
-            result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts', 0)
-            result['unattended_checkpoints'] = gaps_info.get('unattended_checkpoints', 0)
-            result['receipt_coverage'] = gaps_info.get('receipt_coverage')
+            gaps_info = result['receipt-gaps.json']
+            result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts') if gaps_info is not None else None
+            if gaps_info is not None:
+                from beyin_v3_projections import receipt_coverage
+                with sync.store._connect() as db:
+                    result['receipt_coverage'] = receipt_coverage(db, now=time.time())
+            else:
+                result['receipt_coverage'] = None
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])

@@ -103,10 +103,7 @@ def make_hooks(vault, state=None, python=None):
         info["turns"] += 1
         event = "SessionStart" if first else "UserPromptSubmit"
         prompt = kw.get("user_message") if isinstance(kw.get("user_message"), str) else ""
-        payload = {"hook_event_name": event, "session_id": session_id, "prompt": prompt}
-        if info["platform"] in UNATTENDED_PLATFORMS:
-            payload["unattended"] = True
-        text = run_hook(vault, state, payload, python)
+        text = run_hook(vault, state, {"hook_event_name": event, "session_id": session_id, "prompt": prompt}, python)
         parts = [text] if text else []
         if info["turns"] % REMINDER_EVERY == 0 and info["platform"] not in UNATTENDED_PLATFORMS:
             parts.append(REMINDER.format(n=info["turns"]))

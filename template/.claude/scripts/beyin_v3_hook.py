@@ -54,10 +54,6 @@ def enqueue_event(vault, state, payload, harness):
         metadata.update(project)
     if payload.get('no_memory') is True:
         metadata['no_memory'] = True
-    if (os.environ.get('BEYIN_INVOKED_BY') or os.environ.get('BEYIN_UNATTENDED') or
-            payload.get('unattended') is True or payload.get('is_non_interactive') is True or
-            payload.get('non_interactive') is True):
-        metadata['unattended'] = True
     identity = str(payload.get("event_id") or uuid.uuid4().hex)
     key = hashlib.sha256(identity.encode()).hexdigest()
     path = state / "hook-queue" / (key + ".json")
@@ -204,9 +200,6 @@ def main():
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
             warning = ''
-            is_unattended = bool(os.environ.get('BEYIN_INVOKED_BY') or os.environ.get('BEYIN_UNATTENDED') or
-                                 payload.get('unattended') is True or payload.get('is_non_interactive') is True or
-                                 payload.get('non_interactive') is True)
             health = state / "hook-health.json"
             if health.exists():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
@@ -214,7 +207,7 @@ def main():
                     warning += "V3 sync needs attention; consult current sources and doctor.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
-                if not is_unattended and sync.get('potential_missing_receipts'):
+                if sync.get('potential_missing_receipts'):
                     warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
             from beyin_v3_companion import context as companion_context, relevant
             if event == 'SessionStart' or relevant(query):
