@@ -31,6 +31,15 @@ def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _rejected_inference(record):
+    """A rejected personal inference is history, not current context.
+
+    Old sources may use status=rejected; status is still the task lifecycle field.
+    """
+    return (record.get("kind") in ("inference", "preference") and
+            (record.get("validity") == "rejected" or record.get("status") == "rejected"))
+
+
 # Turkish is agglutinative, so exact token intersection loses "fark" against "farki" and
 # "not" against "notlar". Every token is replaced by ONE canonical stem, with the same
 # function on the query and the document side. Replacement, not expansion: the score stays
@@ -218,6 +227,12 @@ class MemoryStore:
         for field in ("project", "kind", "status", "updated_at"):
             if field in record and not isinstance(record[field], str):
                 raise ValueError(field + " must be a string")
+        if record.get("kind") in ("inference", "preference"):
+            if record.get("validity", "current") not in ("current", "rejected"):
+                raise ValueError("inference validity must be current or rejected")
+            for field in ("rejected_reason", "rejected_at"):
+                if field in record and not isinstance(record[field], str):
+                    raise ValueError(field + " must be a string")
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
@@ -271,14 +286,37 @@ class MemoryStore:
             db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('update',?,?,?)", (id, record["revision"], _json(record)))
         return record
 
-    def history(self, record_id):
-        """Committed immutable snapshots, ordered by global event sequence.
+    def history(self, record_id, audience="internal"):
+        """Source-verified immutable snapshots, ordered by global event sequence.
 
         Databases created before events were added have no invented prehistory.
+        A verified current source authorizes historical revisions of that record;
+        each event still has to pass the requested visibility boundary.
         """
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
         with self._connect() as db:
+            current = db.execute("SELECT payload FROM records WHERE id=?", (record_id,)).fetchone()
+            if not current:
+                return []
+            current = json.loads(current[0])
+            if (current.get("visibility") not in allowed or current.get("trust") == "untrusted" or
+                    current.get("trusted") is False or current.get("status") == "untrusted" or
+                    current.get("kind") == "untrusted"):
+                return []
+            try:
+                self._source(current["source"])
+                actual = hashlib.sha256((self.vault_root / current["source"]).read_bytes()).hexdigest()
+                if actual != current.get("source_sha256"):
+                    return []
+            except (ValueError, OSError):
+                return []
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
-        return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": json.loads(row[4])} for row in rows]
+        return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
+                for row in rows if (record := json.loads(row[4])).get("visibility") in allowed and
+                record.get("trust") != "untrusted" and record.get("trusted") is not False and
+                record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 
     def submit_receipt(self, event_id, summary, refs, harness):
         self._require_writable()
@@ -339,7 +377,7 @@ class MemoryStore:
         for record in records:
             if (record.get("visibility") not in allowed or record.get("trust") == "untrusted" or
                     record.get("trusted") is False or record.get("status") == "untrusted" or
-                    record.get("kind") == "untrusted"):
+                    record.get("kind") == "untrusted" or _rejected_inference(record)):
                 continue
             source = record.get("source", "")
             if source_directory is not None and Path(source).parent.as_posix() != source_directory:
@@ -452,7 +490,7 @@ class MemoryStore:
         eligible = []
         stale_count = 0
         for record in records:
-            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted":
+            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record):
                 continue
             if project is not None and record.get("project") != project:
                 continue

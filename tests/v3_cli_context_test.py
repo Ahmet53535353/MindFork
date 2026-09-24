@@ -97,4 +97,32 @@ class ContextRefreshTest(unittest.TestCase):
         self.assertEqual(result.stdout,'')
         self.assertIn('conflict',result.stderr.lower())
 
+    def test_rejected_inference_frontmatter_is_history_only(self):
+        from v3_package_helpers import snapshot
+        source = self.vault / 'notes/inference.md'
+        source.write_text(
+            '---\n{"id":"amber-preference","kind":"inference","validity":"current"}\n'
+            '---\nSynthetic user prefers amber diagrams.\n', encoding='utf-8')
+        self.assertEqual(self.run_cli('sync').returncode, 0)
+        current = self.run_cli('context', 'amber diagrams', '--no-sync')
+        self.assertEqual(current.returncode, 0, current.stderr)
+        self.assertIn('amber-preference', [row['id'] for row in json.loads(current.stdout)['records']])
+        source.write_text(
+            '---\n{"id":"amber-preference","kind":"inference","validity":"rejected",'
+            '"rejected_reason":"User corrected this inference.","rejected_at":"2026-09-24"}\n'
+            '---\nSynthetic user prefers amber diagrams.\n', encoding='utf-8')
+        self.assertEqual(self.run_cli('sync').returncode, 0)
+        before = snapshot(self.vault), snapshot(self.state)
+        for extra in ([], ['--status', 'rejected']):
+            result = self.run_cli('context', 'amber diagrams', '--no-sync', *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('amber-preference', [row['id'] for row in json.loads(result.stdout)['records']])
+        self.assertEqual((snapshot(self.vault), snapshot(self.state)), before)
+        history = self.run_cli('history', 'amber-preference')
+        self.assertEqual(history.returncode, 0, history.stderr)
+        events = json.loads(history.stdout)
+        self.assertEqual([event['record']['validity'] for event in events], ['current', 'rejected'])
+        self.assertEqual(events[-1]['record']['rejected_reason'],
+                         'User corrected this inference.')
+
 if __name__=='__main__':unittest.main()

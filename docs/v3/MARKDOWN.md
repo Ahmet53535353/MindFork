@@ -31,6 +31,12 @@ Flat scalar YAML fields are also accepted, including Unicode property names, quo
 
 The scanner skips hidden directories/files, node_modules, symlinks, known instruction/configuration Markdown names, receipt output directories and files explicitly marked as generated or `kind: receipt`. It does not assume that all ordinary prose is instruction-safe; untrusted content should be explicitly marked `kind: untrusted`. Visibility must be public, internal or private. Privacy-filtered context does not include private notes by default.
 
+### Inference and preference validity
+
+For `kind: inference` or `kind: preference`, optional `validity` is `current` (the default for existing sources) or `rejected`. When a user rejects an inference, keep its source and set `validity: rejected`; record `rejected_reason` and `rejected_at` (ISO date) in the frontmatter. A rejected inference is excluded from ordinary context, strict and candidate retrieval, current snapshots, and companion source snapshots even if it is an exact query match or a caller requests `--status rejected`. Legacy inference/preference notes with `status: rejected` receive the same treatment. Task statuses retain their task meaning; `status: cancelled` is unaffected.
+
+Use `beyin.py history RECORD_ID` to inspect a rejected inference and its reason/date deliberately. History requires the current source to pass the same visibility, trust and source-hash checks; older event snapshots are labeled history, not current evidence. If a rejected claim was also written into a broader current source such as `Core.md`, correct that source explicitly; metadata on a separate note cannot retract prose elsewhere.
+
 ## Synchronization and task updates
 
 Markdown is authoritative. `sync()` reads sources and replaces their derived record projection in one SQLite transaction. Edits, deletions and renames converge on the next explicit call. Ingest/update/delete events are recorded for real projection changes, with no extra events for an unchanged sync. Source hashes prevent retrieval from returning a changed source before synchronization. Duplicate source IDs are quarantined rather than choosing a winning file. Warnings and conflicts are returned explicitly; a conflict pass reports `status: conflict`, a warning-only pass reports `status: degraded`, and a clean pass reports `status: succeeded`.
