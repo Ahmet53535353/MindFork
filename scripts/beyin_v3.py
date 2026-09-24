@@ -210,7 +210,7 @@ def main(argv=None):
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
             manifest = state / 'v3-install.json'
             result['kept_legacy_runners'] = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', []) if manifest.exists() else []
-            sync = load_sync()(vault, state)
+            load_sync()
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)
             import beyin_v3_releases as releases
@@ -225,7 +225,7 @@ def main(argv=None):
             result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts') if gaps_info is not None else None
             if gaps_info is not None:
                 from beyin_v3_projections import receipt_coverage
-                with sync.store._connect() as db:
+                with store._connect() as db:
                     result['receipt_coverage'] = receipt_coverage(db, now=time.time())
             else:
                 result['receipt_coverage'] = None

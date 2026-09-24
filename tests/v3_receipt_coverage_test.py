@@ -1,4 +1,5 @@
 """Receipt coverage ratio tests (Issue #78)."""
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -137,6 +138,8 @@ class ReceiptCoverageTest(unittest.TestCase):
         doc = json.loads(proc.stdout)
         self.assertIsNone(doc.get('potential_missing_receipts'))
         self.assertIsNone(doc.get('receipt_coverage'))
+        # Doctor reads through its own store; it must not build a SyncEngine and its journal.
+        self.assertFalse((self.state / 'markdown-journal').exists())
 
     def test_doctor_dynamic_coverage_and_human_output(self):
         """Review Point 5 & Human Rendering: doctor computes coverage dynamically at invocation time."""
@@ -176,6 +179,52 @@ class ReceiptCoverageTest(unittest.TestCase):
         # Human rendering test
         human_text = beyin_entry.human_result(doc, 'doctor')
         self.assertIn('Makbuz kapsami: %50 (1/2 oturum, son 7 gun: %50)', human_text)
+
+    def test_first_prompt_delivered_as_session_start_counts(self):
+        """Hermes and OpenCode send the first user prompt as SessionStart; a one-prompt session still counts."""
+        flows = {'opencode': ('SessionStart', 'Stop'), 'hermes': ('SessionStart', 'SessionEnd'),
+                 'antigravity': ('SessionStart', 'SessionEnd')}
+        for harness, (start, end) in flows.items():
+            payload = {'hook_event_name': start, 'session_id': 'one-' + harness, 'event_id': harness + '-start'}
+            if harness != 'antigravity':
+                payload['prompt'] = 'tek istem'
+            hook.enqueue_event(self.vault, self.state, payload, harness)
+            hook.enqueue_event(self.vault, self.state, {'hook_event_name': end, 'session_id': 'one-' + harness,
+                                                        'event_id': harness + '-end'}, harness)
+        queued = [json.loads(path.read_text(encoding='utf-8')) for path in (self.state / 'hook-queue').glob('*.json')]
+        self.assertFalse(any('prompt' in item for item in queued))
+        hook.drain_queue(self.vault, self.state)
+        with SyncEngine(self.vault, self.state).store._connect() as db:
+            cov = receipt_coverage(db, now=time.time())
+        self.assertEqual(cov['total'], 2)
+        self.assertEqual(cov['missing'], 2)
+
+    def test_unreadable_receipt_created_at_is_skipped_not_fatal(self):
+        """A receipt row with a missing, null or malformed created_at never covers a session and never breaks sync or doctor."""
+        engine = SyncEngine(self.vault, self.state)
+        now = time.time()
+        for session in ('sess_ok', 'sess_bad'):
+            self._enqueue('UserPromptSubmit', session, at=now - 60)
+            self._enqueue('Stop', session, at=now - 50)
+        hook.drain_queue(self.vault, self.state)
+        later = datetime.fromtimestamp(now - 10, timezone.utc).isoformat().replace('+00:00', 'Z')
+        rows = {'ok': {'session': 'sess_ok', 'created_at': later},
+                'null': {'session': 'sess_bad', 'created_at': None},
+                'missing': {'session': 'sess_bad'},
+                'malformed': {'session': 'sess_bad', 'created_at': '2026-13-45T00:00:00+00:00'}}
+        with engine.store._connect() as db:
+            for event_id, fields in rows.items():
+                receipt = dict(fields, event_id=event_id, summary='s', refs=['notes/x.md'], harness='claude')
+                db.execute('INSERT INTO receipts VALUES (?,?)', (event_id, json.dumps(receipt)))
+        self.assertNotEqual(engine.sync()['status'], 'conflict')
+        gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))
+        self.assertEqual([item['session'] for item in gaps['checkpoints']], ['sess_bad'])
+        self.assertEqual((gaps['receipt_coverage']['covered'], gaps['receipt_coverage']['total']), (1, 2))
+        cmd = [sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+               '--state', str(self.state), 'doctor']
+        doc = json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(doc['potential_missing_receipts'], 1)
+        self.assertEqual((doc['receipt_coverage']['covered'], doc['receipt_coverage']['missing']), (1, 1))
 
     def test_schema_migration_adds_prompt_at_cleanly(self):
         """Legacy receipt_checkpoints table without prompt_at column is migrated without errors."""

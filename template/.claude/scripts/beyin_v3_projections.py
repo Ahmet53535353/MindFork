@@ -24,7 +24,7 @@ def record_checkpoints(engine, events):
             if not event.get('session') or event.get('no_memory'):
                 continue
             values = (event['harness'], event['session'], event['at'])
-            if event.get('event') == 'UserPromptSubmit':
+            if event.get('event') == 'UserPromptSubmit' or (event.get('event') == 'SessionStart' and event.get('prompted')):
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at,turn_at,prompt_at) VALUES (?,?,0,?,?) ON CONFLICT(harness,session) DO UPDATE SET turn_at=MAX(turn_at,excluded.turn_at), prompt_at=MAX(prompt_at,excluded.prompt_at)',
                            (event['harness'], event['session'], event['at'], event['at']))
             elif event.get('event') == 'SessionStart':
@@ -36,13 +36,27 @@ def record_checkpoints(engine, events):
                            (event['project'], event['project_id'], event['harness'], event['session']))
 
 
+def _latest_receipts(db):
+    """Latest receipt time per (harness, session); a missing or unreadable created_at never covers a checkpoint."""
+    latest = {}
+    for (payload,) in db.execute('SELECT payload FROM receipts'):
+        try:
+            receipt = json.loads(payload)
+            created = datetime.fromisoformat(receipt['created_at']).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        key = (receipt.get('harness'), receipt.get('session'))
+        latest[key] = max(created, latest.get(key, created))
+    return latest
+
+
 def receipt_coverage(db, now=None):
     if now is None:
         now = time.time()
     seven_days = now - 7 * 86400
     thirty_days = now - 30 * 86400
     _checkpoint_schema(db)
-    receipts = [json.loads(row[0]) for row in db.execute('SELECT payload FROM receipts')]
+    latest = _latest_receipts(db)
     windows = {
         'all_time': {'total': 0, 'covered': 0, 'missing': 0},
         'last_7d': {'total': 0, 'covered': 0, 'missing': 0},
@@ -51,13 +65,12 @@ def receipt_coverage(db, now=None):
     for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at FROM receipt_checkpoints'):
         if not row[2] or row[2] < row[3]:
             continue
-        # Only count sessions that saw at least one UserPromptSubmit (Issue #78)
+        # Only count sessions that saw a user prompt: UserPromptSubmit, or a SessionStart carrying the first prompt (#78)
         if not row[6]:
             continue
         chk_at = row[2]
         threshold = row[3] or row[2]
-        matched = any(r.get('harness') == row[0] and r.get('session') == row[1] and
-                      datetime.fromisoformat(r.get('created_at', '1970-01-01T00:00:00+00:00')).timestamp() >= threshold for r in receipts)
+        matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
         for w_name, w_active in (('all_time', True), ('last_30d', chk_at >= thirty_days), ('last_7d', chk_at >= seven_days)):
             if w_active:
                 windows[w_name]['total'] += 1
@@ -89,14 +102,13 @@ def receipt_coverage(db, now=None):
 def refresh_gaps(engine, db):
     atomic = engine.projection_helpers()[1]
     _checkpoint_schema(db)
-    receipts = [json.loads(row[0]) for row in db.execute('SELECT payload FROM receipts')]
+    latest = _latest_receipts(db)
     gaps = []
     for row in db.execute('SELECT harness,session,at,turn_at,project,project_id FROM receipt_checkpoints'):
         if not row[2] or row[2] < row[3]:
             continue
         threshold = row[3] or row[2]
-        matched = any(r.get('harness') == row[0] and r.get('session') == row[1] and
-                      datetime.fromisoformat(r.get('created_at', '1970-01-01T00:00:00+00:00')).timestamp() >= threshold for r in receipts)
+        matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
         if not matched:
             gaps.append({'harness': row[0], 'session': row[1], 'checkpoint_at': row[2], 'turn_at': row[3], 'scope': 'session_only' if row[0] == 'antigravity' else 'turn' if row[3] else 'terminal_only'})
             if row[4] and row[5]:

@@ -54,6 +54,9 @@ def enqueue_event(vault, state, payload, harness):
         metadata.update(project)
     if payload.get('no_memory') is True:
         metadata['no_memory'] = True
+    # Hermes and OpenCode deliver the first user prompt as SessionStart; keep only the fact, never the text.
+    if isinstance(payload.get('prompt'), str) and payload['prompt'].strip():
+        metadata['prompted'] = True
     identity = str(payload.get("event_id") or uuid.uuid4().hex)
     key = hashlib.sha256(identity.encode()).hexdigest()
     path = state / "hook-queue" / (key + ".json")
