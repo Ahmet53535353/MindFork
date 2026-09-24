@@ -1,5 +1,6 @@
 """Opt-in completion contracts use only synthetic vault sources."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -181,6 +182,55 @@ class TaskCompletionTest(unittest.TestCase):
             report = self.engine.completion_health()
         self.assertEqual(report['strict_issue_count'], 1)
         self.assertIn('task source is unavailable', report['strict_issues'][0]['reason'])
+
+    def test_evidence_refs_are_stored_as_canonical_vault_paths(self):
+        self.engine.task_create('tasks/synthetic.md', 'Strict task.', self.metadata)
+        self.engine.note_create('notes/result.md', 'Synthetic result.', {'kind': 'fact'})
+        self.engine.note_create('notes/other.md', 'Synthetic result.', {'kind': 'fact'})
+        # Windows accepts a backslash separator; a POSIX reader of the same vault needs '/'.
+        second = 'notes\\other.md' if os.name == 'nt' else 'notes/other.md/'
+        expected = ['notes/result.md', 'notes/other.md']
+        updated = self.engine.update_task('synthetic-task', 1,
+                                          {'status': 'done', 'evidence_refs': ['notes/./result.md', second]})
+        self.assertEqual(updated['evidence_refs'], expected)
+        metadata, _ = parse((self.vault / 'tasks/synthetic.md').read_text(encoding='utf-8'))
+        self.assertEqual(metadata['evidence_refs'], expected)
+        created = self.engine.task_create('tasks/done.md', 'Done task.', dict(
+            self.metadata, id='done-task', status='done', evidence_refs=['./notes/result.md']))
+        self.assertEqual(created['evidence_refs'], ['notes/result.md'])
+        metadata, _ = parse((self.vault / 'tasks/done.md').read_text(encoding='utf-8'))
+        self.assertEqual(metadata['evidence_refs'], ['notes/result.md'])
+
+    def test_case_variant_refs_are_one_source_on_case_insensitive_volumes(self):
+        self.engine.task_create('tasks/synthetic.md', 'Strict task.', self.metadata)
+        self.engine.note_create('notes/result.md', 'Synthetic result.', {'kind': 'fact'})
+        if not (self.vault / 'NOTES/RESULT.md').exists():
+            self.skipTest('case-sensitive volume')
+        task = self.vault / 'tasks/synthetic.md'
+        before = task.read_bytes()
+        for refs, message in ((['TASKS/synthetic.md'], 'task source itself'),
+                              (['notes/result.md', 'NOTES/Result.md'], 'repeat a source')):
+            with self.subTest(refs=refs), self.assertRaisesRegex(ValueError, message):
+                self.engine.update_task('synthetic-task', 1, {'status': 'done', 'evidence_refs': refs})
+            self.assertEqual(task.read_bytes(), before)
+
+    def test_legacy_task_unrelated_update_ignores_its_own_completion_like_fields(self):
+        (self.vault / 'tasks').mkdir()
+        legacy = {'id': 'legacy-task', 'kind': 'task', 'revision': 1, 'status': 'active',
+                  'owner': 'Synthetic Reviewer', 'evidence_refs': 'see the weekly note'}
+        source = '---\n' + json.dumps(legacy) + '\n---\nLegacy task.\n'
+        (self.vault / 'tasks/legacy.md').write_bytes(source.encode('utf-8'))
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        updated = self.engine.update_task('legacy-task', 1, {'priority': 'high'})
+        self.assertEqual(updated['evidence_refs'], 'see the weekly note')
+        with self.assertRaisesRegex(ValueError, 'list of source paths'):
+            self.engine.update_task('legacy-task', 2, {'evidence_refs': 'still text'})
+
+        self.engine.note_create('notes/result.md', 'Synthetic result.', {'kind': 'fact'})
+        self.engine.update_task('legacy-task', 2, {'evidence_refs': ['notes/result.md']})
+        (self.vault / 'notes/result.md').unlink()
+        self.assertEqual(self.engine.update_task('legacy-task', 3, {'priority': 'low'})['revision'], 4)
+        self.assertEqual(self.engine.completion_health()['strict_issue_count'], 0)
 
 
 if __name__ == '__main__':

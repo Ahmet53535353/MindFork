@@ -175,6 +175,7 @@ def render(metadata, body):
 
 EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md', 'config.md', 'settings.md', 'instructions.md', 'codex.md', 'setup.md', 'install.md'}
 EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
+COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
 
 
 class SyncEngine:
@@ -223,6 +224,23 @@ class SyncEngine:
             raise ValueError('source missing')
         return path
 
+    @staticmethod
+    def _source_identity(path):
+        """One file under another spelling (case-insensitive volume) is one source."""
+        try:
+            stat = path.stat()
+        except (OSError, ValueError):
+            stat = None
+        if stat is not None and stat.st_ino:
+            return stat.st_dev, stat.st_ino
+        return os.path.normcase(str(path))
+
+    def _canonical_refs(self, metadata):
+        """Store validated refs as vault-relative POSIX paths, like receipt refs."""
+        refs = metadata.get('evidence_refs')
+        if isinstance(refs, list):
+            metadata['evidence_refs'] = [self._path(ref).relative_to(self.root).as_posix() for ref in refs]
+
     def _completion_issue(self, metadata, task_source=None):
         """Validate an opt-in task contract without changing its evidence sources."""
         contract = metadata.get('completion_contract')
@@ -238,22 +256,23 @@ class SyncEngine:
             return 'strict task requires completion_criterion'
         if contract == 'strict' and metadata.get('status') == 'done' and not refs:
             return 'strict done task requires evidence_refs'
-        task_path = None
+        task_identity = None
         if task_source is not None and refs:
             try:
-                task_path = self._path(task_source)
+                task_identity = self._source_identity(self._path(task_source))
             except ValueError:
                 return 'task source is unavailable or outside vault'
-        seen_paths = set()
+        seen = set()
         for ref in refs:
             try:
                 path = self._path(ref, existing=metadata.get('status') != 'cancelled')
             except ValueError:
                 return 'evidence ref must be an existing vault source'
-            if path in seen_paths:
+            identity = self._source_identity(path)
+            if identity in seen:
                 return 'evidence_refs must not repeat a source'
-            seen_paths.add(path)
-            if task_path is not None and path == task_path:
+            seen.add(identity)
+            if task_identity is not None and identity == task_identity:
                 return 'evidence ref cannot be the task source itself'
         return None
 
@@ -416,9 +435,12 @@ class SyncEngine:
                 raise RevisionConflict('source revision conflict')
             metadata.update(changes)
             metadata['revision'] = expected_revision + 1
-            issue = self._completion_issue(metadata, record['source'])
-            if issue:
-                raise ValueError(issue)
+            # A task that never opted in keeps unrelated updates, even with a same-named legacy field.
+            if metadata.get('completion_contract') is not None or COMPLETION_FIELDS & set(changes):
+                issue = self._completion_issue(metadata, record['source'])
+                if issue:
+                    raise ValueError(issue)
+                self._canonical_refs(metadata)
             self.store._validate(dict(metadata, source=record['source'], text=body))
             intended = render(metadata, body)
             self._intent(record['source'], record['source_sha256'], intended, 'task')
@@ -523,6 +545,7 @@ class SyncEngine:
         issue = self._completion_issue(metadata, source)
         if issue:
             raise ValueError(issue)
+        self._canonical_refs(metadata)
         path = self._path(source)
         intended = render(metadata, text+'\n')
         with self.store._connect() as db:
