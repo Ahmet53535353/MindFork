@@ -36,7 +36,7 @@ Each database is bound to the canonical vault root. Reusing a runtime for a diff
 
 ## Transactional history
 
-Record ingestion and revision updates append an immutable snapshot event inside the same SQLite transaction as the record projection. `history(record_id)` returns committed `{sequence,event_type,record_id,revision,record}` entries in global monotonic sequence order; event types are `ingest` and `update`. Duplicate ingestion, rejected revisions and validation failures create no events. Returned JSON objects are fresh copies. Receipts retain their separate idempotency table.
+Record ingestion and revision updates append an immutable snapshot event inside the same SQLite transaction as the record projection. `history(record_id, audience="internal")` returns committed `{sequence,event_type,record_id,revision,record}` entries in global monotonic sequence order; event types are `ingest` and `update`, and Markdown synchronization adds `delete` when a source is removed or no longer validates. Duplicate ingestion, rejected revisions and validation failures create no events. History is empty when the current record is outside the audience or untrusted, or its source hash is stale; a deleted record is judged by the snapshot in its final `delete` event. Individual events outside the audience are omitted. The CLI `history` command synchronizes first. Returned JSON objects are fresh copies. Receipts retain their separate idempotency table.
 
 Initialization adds the events table to existing foundation databases. Prior mutations remain explicitly unrecorded prehistory; the module does not invent baseline events for old rows. This is a local audit history, not a distributed log or a complete event-replay migration tool.
 

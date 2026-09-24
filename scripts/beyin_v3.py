@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 
 def default_state(vault: Path) -> Path:
@@ -167,7 +168,7 @@ def main(argv=None):
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
         engine = load_engine() if args.command != "jev" else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory") and not read_only_context else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -220,10 +221,26 @@ def main(argv=None):
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
+            gaps_info = result['receipt-gaps.json']
+            result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts') if gaps_info is not None else None
+            if gaps_info is not None:
+                from beyin_v3_projections import receipt_coverage
+                with store._connect() as db:
+                    result['receipt_coverage'] = receipt_coverage(db, now=time.time())
+            else:
+                result['receipt_coverage'] = None
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result['hook-error.json'] else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            try:
+                result['task_completion'] = load_sync().reader(store).completion_health()
+            except Exception as exc:
+                result['task_completion'] = {
+                    'strict_issue_count': 0, 'strict_issues': [], 'legacy_done_count': 0,
+                    'legacy_done': [], 'truncated': False,
+                    'error': (type(exc).__name__ + ': ' + str(exc))[:240],
+                }
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
@@ -295,7 +312,12 @@ def main(argv=None):
             result = sync.receipt(payload["event_id"], payload["summary"],
                                           payload["refs"], args.harness, session=payload.get('session'))
         elif args.command == "history":
-            result = store.history(args.record_id)
+            # History is source-verified, so refresh first like context: an edit
+            # made just before this command must not hide the audit trail.
+            refreshed = sync.sync()
+            if refreshed.get('status') == 'conflict':
+                raise RuntimeError('History blocked: source sync conflict. Run sync with the same vault/state to inspect and reconcile source issues, then retry history.')
+            result = sync.store.history(args.record_id)
         else:
             payload = read_json(args.file)
             result = sync.update_task(payload["id"], payload["expected_revision"], payload["changes"])
