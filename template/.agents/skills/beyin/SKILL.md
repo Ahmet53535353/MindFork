@@ -93,7 +93,7 @@ Kaynak yazıldıktan sonra `python3 beyin.py sync` çalıştır. Görev değişi
 
 Anlamlı çalışma bittiğinde, kullanıcı hafızaya yazılmamasını istemediyse kısa bir kaynak bağlantılı sonuç kaydı gönder. İşin gerçek sonucunu ve varsa açık kalan adımı yaz; planı tamamlanmış sonuç gibi kaydetme. Yalnız kalıcı öğrenimler varsa bunları kullanıcının knowledge düzeninde kaynak bağlantılı Markdown olarak damıt. Her konuşmadan zorla öğrenim çıkarma; reasoning, ham araç logları veya bütün transkriptleri notlara kopyalama.
 
-`python3 beyin.py receipt --file RECEIPT_JSON --harness codex` komutunu çalıştır; mevcut istemciye göre `claude`, `antigravity`, `hermes` veya `opencode` seç. Şema:
+`python3 beyin.py receipt --file RECEIPT_JSON --harness codex` komutunu çalıştır; mevcut istemciye göre `claude`, `antigravity`, `hermes`, `opencode` veya `omp` seç. Şema:
 
 ```json
 {"event_id":"bu-sonuca-ozel-kararli-id","summary":"Yapılan iş, doğrulama ve açık kalan adım.","refs":["notes/kaynak.md"]}
