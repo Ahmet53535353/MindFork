@@ -103,8 +103,9 @@ options. Command-line `--status` can be repeated. `--limit` defaults to 5 and
 choose its harness using `--harness`. Reuse an event ID only for the same outcome.
 Task patch JSON requires `id`, `expected_revision`, and `changes`. A revision
 conflict requires reading current state and reconciling the intended change.
-`history RECORD_ID` returns ordered revision snapshots, including the original
-source synchronization and subsequent updates, so changes can be reviewed from local state.
+`history RECORD_ID` synchronizes first, like `context`, and returns ordered revision
+snapshots, including the original source synchronization, subsequent updates and a
+final `delete` event for removed sources, so changes can be reviewed from local state.
 
 By default, `context` refreshes the local index before retrieval. `--no-sync`
 instead opens an already initialized SQLite index in read-only mode and does not
@@ -131,7 +132,10 @@ python3 scripts/install_v3.py --vault /absolute/path/to/vault
 
 This copies self-contained Python modules into `.claude/scripts`, enables project
 Codex `[features] hooks = true`, preserves unrelated hook handlers and settings,
-and adds a bounded managed instruction block to AGENTS.md and CLAUDE.md.
+and adds a bounded managed instruction block to AGENTS.md. Claude Code by default
+reads AGENTS.md only when no CLAUDE.md exists, so a missing CLAUDE.md is created as
+a single `@AGENTS.md` import, a CLAUDE.md that already imports AGENTS.md gets no
+second copy, and any other CLAUDE.md receives the same block.
 Recognized legacy adapters are retired to prevent duplicate writes. An exact
 pre-install backup and installed hashes live in the external runtime directory.
 Repeating installation is idempotent; edits to managed files require reconciliation.
@@ -199,6 +203,15 @@ For deterministic offline tests, `BEYIN_V3_NO_SPAWN=1` suppresses background
 workers; use the hook's `--drain-queue` option to drain explicitly. This testing
 mode may return previously indexed context and should not be used for normal
 interactive operation.
+
+Set `BEYIN_V3_SKIP=1` in a delegated or headless agent process to keep the V3
+memory hooks out of that run; the hook and bridge return `{}` without queuing an
+event, injecting context or starting a worker (a non-idle Antigravity `Stop`
+still answers `decision: stop`). Only the exact value `1` skips; any other value,
+including `0`, `false` or an empty value, leaves the hooks on. Child processes
+inherit the variable, so set it on the delegated process only, not in a shell
+profile or shared environment file where it would also silence the main session.
+`BEYIN_V3_INTERNAL` remains available as the internal recursion guard.
 
 Windows command definitions use an encoded PowerShell invocation solely to
 quote the Python executable and arguments safely, including spaces and Unicode.

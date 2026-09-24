@@ -175,6 +175,7 @@ def render(metadata, body):
 
 EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md', 'config.md', 'settings.md', 'instructions.md', 'codex.md', 'setup.md', 'install.md'}
 EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
+COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
 
 
 class SyncEngine:
@@ -283,6 +284,76 @@ class SyncEngine:
         if existing and not path.is_file():
             raise ValueError('source missing')
         return path
+
+    @staticmethod
+    def _source_identity(path):
+        """One file under another spelling (case-insensitive volume) is one source."""
+        try:
+            stat = path.stat()
+        except (OSError, ValueError):
+            stat = None
+        if stat is not None and stat.st_ino:
+            return stat.st_dev, stat.st_ino
+        return os.path.normcase(str(path))
+
+    def _canonical_refs(self, metadata):
+        """Store validated refs as vault-relative POSIX paths, like receipt refs."""
+        refs = metadata.get('evidence_refs')
+        if isinstance(refs, list):
+            metadata['evidence_refs'] = [self._path(ref).relative_to(self.root).as_posix() for ref in refs]
+
+    def _completion_issue(self, metadata, task_source=None):
+        """Validate an opt-in task contract without changing its evidence sources."""
+        contract = metadata.get('completion_contract')
+        if contract is not None and contract != 'strict':
+            return 'completion_contract must be strict when set'
+        criterion = metadata.get('completion_criterion')
+        if criterion is not None and (not isinstance(criterion, str) or not criterion.strip()):
+            return 'completion_criterion must be nonempty text'
+        refs = metadata.get('evidence_refs', [])
+        if not isinstance(refs, list) or not all(isinstance(ref, str) and ref.strip() for ref in refs):
+            return 'evidence_refs must be a list of source paths'
+        if contract == 'strict' and not criterion:
+            return 'strict task requires completion_criterion'
+        if contract == 'strict' and metadata.get('status') == 'done' and not refs:
+            return 'strict done task requires evidence_refs'
+        task_identity = None
+        if task_source is not None and refs:
+            try:
+                task_identity = self._source_identity(self._path(task_source))
+            except ValueError:
+                return 'task source is unavailable or outside vault'
+        seen = set()
+        for ref in refs:
+            try:
+                path = self._path(ref, existing=metadata.get('status') != 'cancelled')
+            except ValueError:
+                return 'evidence ref must be an existing vault source'
+            identity = self._source_identity(path)
+            if identity in seen:
+                return 'evidence_refs must not repeat a source'
+            seen.add(identity)
+            if task_identity is not None and identity == task_identity:
+                return 'evidence ref cannot be the task source itself'
+        return None
+
+    def completion_health(self):
+        """Report legacy done tasks and invalid strict contracts without editing sources."""
+        with self.store._connect() as db:
+            records = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')]
+        legacy_done, strict_issues = [], []
+        for record in records:
+            if record.get('kind') != 'task':
+                continue
+            if record.get('completion_contract') is not None:
+                issue = self._completion_issue(record, record.get('source'))
+                if issue:
+                    strict_issues.append({'id': record.get('id'), 'source': record.get('source'), 'reason': issue})
+            elif record.get('status') == 'done':
+                legacy_done.append({'id': record.get('id'), 'source': record.get('source')})
+        return {'strict_issue_count': len(strict_issues), 'strict_issues': strict_issues[:20],
+                'legacy_done_count': len(legacy_done), 'legacy_done': legacy_done[:20],
+                'truncated': len(strict_issues) > 20 or len(legacy_done) > 20}
 
     def _scan(self):
         records, warnings, conflicts = {}, [], []
@@ -401,7 +472,7 @@ class SyncEngine:
         return entry
 
     def update_task(self, id, expected_revision, changes):
-        allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes'}
+        allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if not isinstance(changes, dict) or set(changes) - allowed:
             raise ValueError('unsupported task metadata changes')
         changes, redacted = self._protect_metadata(changes)
@@ -415,6 +486,8 @@ class SyncEngine:
                 raise ValueError('explicit task source required')
             if type(expected_revision) is not int or record['revision'] != expected_revision:
                 raise RevisionConflict('revision conflict')
+            if record.get('completion_contract') == 'strict' and changes.get('completion_contract', 'strict') != 'strict':
+                raise ValueError('strict completion_contract cannot be removed by task-update')
             path = self._path(record['source'], existing=True)
             raw = path.read_bytes()
             if _hash(raw) != record['source_sha256']:
@@ -424,6 +497,12 @@ class SyncEngine:
                 raise RevisionConflict('source revision conflict')
             metadata.update(changes)
             metadata['revision'] = expected_revision + 1
+            # A task that never opted in keeps unrelated updates, even with a same-named legacy field.
+            if metadata.get('completion_contract') is not None or COMPLETION_FIELDS & set(changes):
+                issue = self._completion_issue(metadata, record['source'])
+                if issue:
+                    raise ValueError(issue)
+                self._canonical_refs(metadata)
             self.store._validate(dict(metadata, source=record['source'], text=body))
             intended = render(metadata, body)
             self._intent(record['source'], record['source_sha256'], intended, 'task')
@@ -507,7 +586,7 @@ class SyncEngine:
             raise ValueError('task body and metadata required')
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
-        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at'}
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
@@ -530,6 +609,10 @@ class SyncEngine:
         metadata, meta_redacted = self._protect_metadata(metadata)
         redacted += meta_redacted
         metadata.update(kind='task', revision=1)
+        issue = self._completion_issue(metadata, source)
+        if issue:
+            raise ValueError(issue)
+        self._canonical_refs(metadata)
         path = self._path(source)
         intended = render(metadata, text+'\n')
         with self.store._connect() as db:

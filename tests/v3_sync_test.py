@@ -75,6 +75,32 @@ class SourceSyncTest(unittest.TestCase):
         self.assertGreaterEqual(deleted['deleted'], 1)
         self.assertEqual(self.records(), [])
 
+    def test_history_keeps_deleted_record_audit_trail_behind_last_snapshot(self):
+        path = self.write()
+        self.engine.sync()
+        self.write(body='Nebula calibration approved by New Reviewer.\n', revision=2)
+        self.engine.sync()
+        path.unlink()
+        self.engine.sync()
+        history = self.engine.store.history('nebula-task')
+        self.assertEqual([e['event_type'] for e in history], ['ingest', 'update', 'delete'])
+        self.assertEqual(history[-1]['record'], history[-2]['record'])
+        self.write()
+        self.engine.sync()
+        self.assertEqual([e['event_type'] for e in self.engine.store.history('nebula-task')],
+                         ['ingest', 'update', 'delete', 'ingest'])
+        private = self.write('notes/private.md', id='hidden', visibility='private', body='SYNTHETIC_PRIVATE_CANARY\n')
+        untrusted = self.write('notes/untrusted.md', id='untrusted', kind='untrusted')
+        self.engine.sync()
+        private.unlink()
+        untrusted.unlink()
+        self.engine.sync()
+        self.assertEqual(self.engine.store.history('hidden'), [])
+        self.assertEqual(self.engine.store.history('hidden', audience='public'), [])
+        self.assertEqual([e['event_type'] for e in self.engine.store.history('hidden', audience='private')],
+                         ['ingest', 'delete'])
+        self.assertEqual(self.engine.store.history('untrusted', audience='private'), [])
+
     def test_duplicate_source_id_quarantined_without_winner(self):
         self.write()
         self.engine.sync()
