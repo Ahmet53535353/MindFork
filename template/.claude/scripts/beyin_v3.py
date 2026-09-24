@@ -112,7 +112,11 @@ def _tokens(text):
 STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel soyle getir bul yok say ignore disregard no")
 
 
+VALID_MEMORY_TYPES = ("episodic", "semantic", "procedural")
+
+
 class MemoryStore:
+    VALID_MEMORY_TYPES = VALID_MEMORY_TYPES
     def __init__(self, state_dir, vault_root, read_only=False):
         self.read_only = bool(read_only)
         self.vault_root = Path(vault_root).expanduser().resolve()
@@ -218,6 +222,9 @@ class MemoryStore:
         for field in ("project", "kind", "status", "updated_at"):
             if field in record and not isinstance(record[field], str):
                 raise ValueError(field + " must be a string")
+        if "type" in record:
+            if not isinstance(record["type"], str) or record["type"] not in VALID_MEMORY_TYPES:
+                raise ValueError("invalid memory type")
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
@@ -303,10 +310,10 @@ class MemoryStore:
             db.execute("INSERT OR IGNORE INTO receipts VALUES (?,?)", (event_id, payload))
         return dict(event, id=event_id, status="succeeded")
 
-    def retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, strict=False):
-        return self._retrieve(query, project, audience, statuses, limit, budget_chars, strict=strict)
+    def retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, strict=False, types=None):
+        return self._retrieve(query, project, audience, statuses, limit, budget_chars, strict=strict, types=types)
 
-    def candidates(self, query, project=None, audience="internal", statuses=None, limit=32, strict=False):
+    def candidates(self, query, project=None, audience="internal", statuses=None, limit=32, strict=False, types=None):
         """Bounded eligible candidates before any final context packing.
 
         Callers must build separately bounded provider cards and pack final output.
@@ -315,12 +322,12 @@ class MemoryStore:
         if type(limit) is not int or not 0 <= limit <= 128:
             raise ValueError("candidate limit must be 0..128")
         return self._retrieve(query, project, audience, statuses, limit, 0,
-                              strict=strict, candidate_only=True)
+                              strict=strict, candidate_only=True, types=types)
 
-    def snapshot_context(self, audience="internal", budget_chars=6000, limit=5):
+    def snapshot_context(self, audience="internal", budget_chars=6000, limit=5, types=None):
         """Explicit bounded current-state snapshot; normal empty queries abstain."""
         return self._retrieve("", audience=audience, statuses=("active", "waiting"),
-                              limit=limit, budget_chars=budget_chars, snapshot=True)
+                              limit=limit, budget_chars=budget_chars, snapshot=True, types=types)
 
     def source_snapshot(self, source_names, audience="internal", budget_chars=3000, source_directory=None, text_transform=None):
         """Return a bounded, source-verified continuity set in requested order."""
@@ -439,11 +446,22 @@ class MemoryStore:
     STRICT_MIN_WEIGHT = 0.30
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
-    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False):
+    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False, types=None):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
             raise ValueError("invalid query or budget")
+        if types is not None:
+            if isinstance(types, str):
+                types = [types]
+            if not isinstance(types, (list, tuple, set)) or not all(isinstance(t, str) for t in types):
+                raise ValueError("invalid memory type")
+            for t in types:
+                if t not in VALID_MEMORY_TYPES:
+                    raise ValueError(f"invalid memory type: {t}")
+            types_set = set(types)
+        else:
+            types_set = None
         if isinstance(statuses, str):
             statuses = [statuses]
         with self._connect() as db:
@@ -455,6 +473,8 @@ class MemoryStore:
             if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted":
                 continue
             if project is not None and record.get("project") != project:
+                continue
+            if types_set is not None and record.get("type") not in types_set:
                 continue
             try:
                 self._source(record["source"])
