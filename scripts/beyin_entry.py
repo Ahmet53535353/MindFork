@@ -35,12 +35,35 @@ def update_lines(result):
 def jev_lines(result):
     """Shared by the jev command and the doctor summary; reads only reported fields."""
     lines = []
+    laya = result.get('provider') == 'laya'
     if result.get('automatic_model_calls'):
         lines.append('Otomatik baglam acik: her turda istemin ve en fazla 8 aday ic/kamu notunun basligi ile'
-                     ' ilk 600 karakteri saglayiciya gider. Ozel notlar gonderilmez.')
-    if result.get('mode', 'off') != 'off' and not result.get('key_present'):
+                     ' ilk 600 karakteri ' + ('yerel Laya sunucusuna' if laya else 'saglayiciya') +
+                     ' gider. Ozel notlar gonderilmez.')
+        if laya and not result.get('auto_context_applied'):
+            lines.append('Laya esikleri henuz olculmedi: otomatik baglam puanlari yalniz kaydedilir, baglami degistirmez.')
+    if laya:
+        if result.get('mode', 'off') != 'off':
+            lines.append('Laya yerel sunucusu: ' + ascii_text(result.get('laya', {}).get('base_url')) +
+                         '; LAYA_HOST=127.0.0.1 ile baslat, once golge modda olc.')
+    elif result.get('mode', 'off') != 'off' and not result.get('key_present'):
         lines.append('TYPESAFE_API_KEY yok: cagrilar yerel sonuca duser.')
+    server = result.get('server')
+    if isinstance(server, dict) and server.get('checked'):
+        if server.get('reachable') and server.get('pinned_model_loaded'):
+            lines.append('Laya sunucusu hazir (' + ascii_text(server.get('device')) + ').')
+        elif server.get('reachable'):
+            lines.append('Laya sunucusu cevap veriyor ama sabitlenen model yuklu degil.')
+        else:
+            lines.append('Laya sunucusuna ulasilamadi: cagrilar yerel sonuca duser.')
+    elif isinstance(server, dict) and server.get('reason') == 'not_applicable':
+        lines.append('--check yalniz laya saglayicisinda sunucuyu yoklar.')
     return lines
+
+
+def ascii_text(value):
+    """Human lines stay ASCII even if a field ever carries something else."""
+    return str(value if value is not None else '?').encode('ascii', 'replace').decode('ascii')
 
 
 def human_result(result, command, installed_version=None):
@@ -53,10 +76,14 @@ def human_result(result, command, installed_version=None):
                  (' (kayitli: ' + JEV_MODES.get(result.get('saved_mode'), 'bilinmiyor') + ')'
                   if result.get('kill_switch') else ''),
                  'Ozellikler: ' + (', '.join(name + ' ' + ('acik' if value else 'kapali')
-                                             for name, value in features.items()) or 'yok'),
-                 'Anahtar: ' + ('var' if result.get('key_present') else 'yok'),
-                 'Acil kapatma: ' + ('acik' if result.get('kill_switch') else 'kapali'),
-                 'Son 24 saat: ' + str(result.get('last_24h', {}).get('calls', 0)) + ' cagri']
+                                             for name, value in features.items()) or 'yok')]
+        if result.get('provider') == 'laya':
+            lines += ['Saglayici: laya (yerel, model ' + ascii_text(result.get('laya', {}).get('model')) + ')',
+                      'Anahtar: gerekmez' + (' (LAYA_API_KEY var)' if result.get('key_present') else '')]
+        else:
+            lines.append('Anahtar: ' + ('var' if result.get('key_present') else 'yok'))
+        lines += ['Acil kapatma: ' + ('acik' if result.get('kill_switch') else 'kapali'),
+                  'Son 24 saat: ' + str(result.get('last_24h', {}).get('calls', 0)) + ' cagri']
         if not result.get('config_valid', True):
             lines.append('Ayar dosyasi bozuk; jev.json elle duzeltilmeli.')
         return '\n'.join(lines + jev_lines(result))
@@ -82,7 +109,8 @@ def human_result(result, command, installed_version=None):
         if jev.get('mode', 'off') == 'off':
             lines.append('Jev: kapali')
         else:
-            lines.append('Jev: ' + JEV_MODES.get(jev['mode'], 'bilinmiyor') + ' (otomatik baglam: ' +
+            lines.append('Jev: ' + JEV_MODES.get(jev['mode'], 'bilinmiyor') + ' (' +
+                         ('saglayici: laya, ' if jev.get('provider') == 'laya' else '') + 'otomatik baglam: ' +
                          ('acik' if jev.get('automatic_model_calls') else 'kapali') + '), son 24 saat ' +
                          str(jev.get('last_24h', {}).get('calls', 0)) + ' cagri')
         if result.get('secrets_redacted'):
