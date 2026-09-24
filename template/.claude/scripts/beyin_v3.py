@@ -500,111 +500,110 @@ class MemoryStore:
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)
 
 
+CONTEXT_MARKER = " [truncated]"
+MIN_CONTEXT_TEXT = 150     # smallest excerpt of a source that is worth a slot
+SHORT_CONTEXT_TEXT = 500   # a short source is reserved whole when it fits, else like a long one
+TOP_CONTEXT_TEXT = 1100    # the best source keeps at least this much: one passage window (#83)
+TOP_CONTEXT_SHARE = 0.4    # ... or this share of the budget, whichever is larger
+
+
+class PackedContext(dict):
+    """Packed context that remembers its unclipped sources in rank order.
+
+    The attribute is never serialized (json sees a plain dict), so render_context can
+    re-pack for the hook envelope from the originals instead of clipping a clip, and a
+    source dropped there returns its share to the better sources.
+    """
+    sources = ()
+
+
+def _clip_to(record, citation, room):
+    """Longest text prefix whose serialized record+citation fits in room, else None."""
+    text, best = record["text"], None
+    low, high = 0, len(text)
+    while low <= high:  # JSON escaping only grows with the prefix, so bisection is exact
+        middle = (low + high) // 2
+        candidate = dict(record, text=text[:middle] + CONTEXT_MARKER, text_truncated=True)
+        if len(_json(candidate)) + len(_json(citation)) <= room:
+            best, low = candidate, middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
+def _clipped_size(record, citation, chars):
+    """Serialized size of record+citation with the first `chars` characters, or whole if shorter."""
+    full = len(_json(record)) + len(_json(citation))
+    if len(record["text"]) <= chars:
+        return full
+    return min(full, len(_json(dict(record, text=record["text"][:chars] + CONTEXT_MARKER, text_truncated=True)))
+               + len(_json(citation)))
+
+
 def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
     """Pack successfully delivered sources, not a prefix of attempted candidates.
 
     An oversized metadata record cannot consume a source slot. Text may be clipped,
     never identity/citation fields. used_chars measures compact record+citation JSON;
     render_context additionally accounts for the complete hook envelope.
+
+    Budget is reserved before it is spent (#79). The best source first keeps the larger
+    of TOP_CONTEXT_TEXT characters and TOP_CONTEXT_SHARE of the budget, so a passage
+    (#83) reaches a small prompt whole and a long note keeps a real excerpt. Every
+    further source in rank order then reserves its floor (its first MIN_CONTEXT_TEXT
+    characters, or all of a short text when that fits); a source whose floor does not
+    fit is skipped without consuming a slot. What is left goes back in rank order.
+    Reservations are exact serialized sizes, JSON escaping included, so an admitted
+    source is never dropped later and one long note can no longer starve the rest.
     """
     if type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
         raise ValueError("invalid budget")
-    if limit == 0 or budget_chars == 0 or not records:
-        return {"records": [], "citations": [], "abstained": True, "truncated": bool(records),
-                "omitted_count": len(records), "used_chars": 0, "budget_chars": budget_chars, "stale_count": stale_count}
-
-    marker = " [truncated]"
-    min_useful_text = 150
-    short_threshold = 500
-    candidates = []
-    citations = []
-    full_sizes = []
-    min_floors = []
-    cum_floor = 0
-
-    for r in records:
-        if len(candidates) >= limit:
+    admitted, reserved, protected = [], 0, 0
+    for record in records:
+        if len(admitted) >= limit:
             break
-        cit = {"id": r["id"], "source": r["source"]}
-        full_sz = len(_json(r)) + len(_json(cit))
-        empty_r = dict(r, text="", text_truncated=True)
-        overhead = len(_json(empty_r)) + len(_json(cit))
-        text_len = len(r.get("text", ""))
-
-        if text_len <= short_threshold:
-            floor = full_sz
-        else:
-            floor = min(full_sz, overhead + len(marker) + min_useful_text)
-
-        if cum_floor + floor > budget_chars:
+        citation = {"id": record["id"], "source": record["source"]}
+        full = len(_json(record)) + len(_json(citation))
+        floor = _clipped_size(record, citation, MIN_CONTEXT_TEXT)
+        claim = full if len(record["text"]) <= SHORT_CONTEXT_TEXT else floor
+        if reserved + claim > budget_chars - protected:
+            claim = floor
+        if reserved + claim > budget_chars - protected:
             continue
-
-        candidates.append(r)
-        citations.append(cit)
-        full_sizes.append(full_sz)
-        min_floors.append(floor)
-        cum_floor += floor
-
-    if not candidates:
-        return {"records": [], "citations": [], "abstained": True, "truncated": bool(records),
-                "omitted_count": len(records), "used_chars": 0, "budget_chars": budget_chars, "stale_count": stale_count}
-
-    active_count = len(candidates)
-    alloc = list(min_floors)
-    remaining = budget_chars - cum_floor
-
-    # Distribute surplus in rank priority order to the top records
-    for i in range(active_count):
-        if remaining <= 0:
-            break
-        needed = full_sizes[i] - alloc[i]
-        if needed > 0:
-            give = min(remaining, needed)
-            alloc[i] += give
-            remaining -= give
-
-    selected, final_citations = [], []
-    used = 0
-    clipped_any = False
-    slack = 0
-
-    for i in range(active_count):
-        record = candidates[i]
-        citation = citations[i]
-        avail = alloc[i] + slack
-
-        if full_sizes[i] <= avail:
-            selected.append(record)
-            final_citations.append(citation)
-            used += full_sizes[i]
-            slack = avail - full_sizes[i]
-            clipped_any = clipped_any or bool(record.get("text_truncated"))
-        else:
-            clipped = dict(record, text="", text_truncated=True)
-            overhead = len(_json(clipped)) + len(_json(citation))
-            max_text_room = avail - overhead - len(marker)
-            if max_text_room < min_useful_text:
-                slack = avail
+        admitted.append([record, citation, full, claim])
+        reserved += claim
+        if len(admitted) == 1:
+            keep = max(_clipped_size(record, citation, TOP_CONTEXT_TEXT), int(budget_chars * TOP_CONTEXT_SHARE))
+            protected = max(0, min(full, keep, budget_chars) - claim)
+    spare = budget_chars - reserved
+    for item in admitted:
+        extra = min(spare, item[2] - item[3])
+        item[3] += extra
+        spare -= extra
+    selected, citations, sources = [], [], []
+    used, carry, clipped_any = 0, 0, False
+    for record, citation, full, allocation in admitted:
+        room = allocation + carry
+        source = record
+        if full > room:
+            record = _clip_to(record, citation, room)
+            if record is None:  # unreachable while room >= floor; never overspend
+                carry = room
                 continue
-            text = record["text"][:max_text_room]
-            clipped["text"] = text + marker
-            while text and len(_json(clipped)) + len(_json(citation)) > avail:
-                text = text[:-1]
-                clipped["text"] = text + marker
-            if len(text) < min_useful_text:
-                slack = avail
-                continue
-            record_size = len(_json(clipped)) + len(_json(citation))
-            selected.append(clipped)
-            final_citations.append(citation)
-            used += record_size
-            slack = avail - record_size
-            clipped_any = True
-
+        size = len(_json(record)) + len(_json(citation))
+        carry = room - size
+        selected.append(record)
+        sources.append(source)
+        citations.append(citation)
+        clipped_any = clipped_any or bool(record.get("text_truncated"))
+        used += size
     omitted = len(records) - len(selected)
-    return {"records": selected, "citations": final_citations, "abstained": not selected,
-            "truncated": bool(omitted) or clipped_any, "omitted_count": omitted,
-            "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count}
+    packed = PackedContext({"records": selected, "citations": citations, "abstained": not selected,
+                            "truncated": bool(omitted) or clipped_any, "omitted_count": omitted,
+                            "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count})
+    packed.sources = tuple(sources)
+    return packed
+
 
 def shared_context(store, harness, query, **kwargs):
     """All supported harnesses call the same source-backed retrieval function."""
@@ -639,6 +638,9 @@ def render_context(context, budget_chars, prefix="", suffix=""):
     if type(budget_chars) is not int or budget_chars < 0:
         raise ValueError("invalid budget")
     records = context.get("records", [])
+    sources = getattr(context, "sources", ())
+    if len(sources) == len(records) and all(s["id"] == r["id"] for s, r in zip(sources, records)):
+        records = list(sources)  # re-clip the envelope from the originals, not from a clip
     extra = {k: v for k, v in context.items() if k not in
              {"records", "citations", "used_chars", "budget_chars", "omitted_count", "truncated", "abstained", "stale_count"}}
     available = max(0, budget_chars - len(prefix))
