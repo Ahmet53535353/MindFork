@@ -120,7 +120,7 @@ class HygieneCliTest(unittest.TestCase):
         self.run_cli('sync')
         self.assertNotIn('Memory hygiene', self.hook())
         # One more entry on a file sitting at the limit is caught at the next session start.
-        path.write_text(body + 'x\n2026-09-25: yeni kayıt\n', encoding='utf-8')
+        path.write_bytes((body + 'x\n2026-09-25: yeni kayıt\n').encode('utf-8'))
         self.assertIn('Memory hygiene: Last-Session.md is 3024 chars (limit 3000).', self.hook())
         self.assertNotIn('Threads.md is', self.hook())
 
@@ -456,7 +456,9 @@ class CompactionRaceTest(unittest.TestCase):
     def test_hygiene_counts_characters_and_names_the_directory(self):
         report = companion_module.hygiene(self.vault, self.state)
         self.assertEqual(report['directory'], COMPANION)
-        self.assertEqual(report['files']['Last-Session.md']['chars'], len(self.live.read_text(encoding='utf-8')))
+        # Characters as stored: on Windows this fixture is written with CRLF, and each CRLF counts
+        # as two, the same measure companion-compact fits the file to.
+        self.assertEqual(report['files']['Last-Session.md']['chars'], len(self.live.read_bytes().decode('utf-8')))
         self.assertEqual(report['over_limit'], ['Last-Session.md'])
         self.assertIn('Memory hygiene: Last-Session.md is', companion_module.hygiene_notice(report))
 

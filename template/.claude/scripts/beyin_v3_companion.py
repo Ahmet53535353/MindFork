@@ -111,8 +111,10 @@ def save_limits(state, changes):
 
 
 def size(path):
-    """Unicode characters as an editor counts them: not bytes and not UTF-16 units, so a
-    Turkish or emoji-rich file is not reported larger than it is. Streams; bounded memory."""
+    """Unicode characters as stored: not bytes and not UTF-16 units, so a Turkish or
+    emoji-rich file is not reported larger than it is. Line endings are not translated
+    (CRLF counts as two), the same measure companion-compact fits a file to. Streams;
+    bounded memory."""
     count = 0
     with Path(path).open(encoding='utf-8', errors='replace', newline='') as source:
         for chunk in iter(lambda: source.read(1 << 16), ''):
