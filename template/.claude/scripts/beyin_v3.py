@@ -183,6 +183,12 @@ class MemoryStore:
         """Connections are scoped to each operation; provided for callers."""
 
     def context_for(self, harness, query, **kwargs):
+        if kwargs.get("strict") is True and self.STRICT_PASSAGES:
+            try:
+                from beyin_v3_passage import context_for as passage_context
+                return passage_context(self, harness, query, **kwargs)
+            except Exception:
+                pass  # a real failure or a still-building index keeps the note-level path
         return shared_context(self, harness, query, **kwargs)
 
     def _source(self, value):
@@ -438,6 +444,10 @@ class MemoryStore:
     STRICT_MIN_SHARED = 2
     STRICT_MIN_WEIGHT = 0.30
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
+
+    # Per-turn strict context ranks Markdown passages instead of whole notes and delivers the
+    # matching block (#83, beyin_v3_passage.py). An empty passage result is an answer.
+    STRICT_PASSAGES = True
 
     def _eligible(self, audience="internal", project=None):
         """Visibility, trust, project and source-freshness gates shared by every retrieval path."""
