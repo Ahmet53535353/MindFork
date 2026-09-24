@@ -91,6 +91,8 @@ Kaynak yazıldıktan sonra `python3 beyin.py sync` çalıştır. Görev değişi
 
 Çakışmada güncel kaydı yeniden oku; revision'ı tahmin ederek tekrar deneme. Başarı için komutun çıkış kodu ve geri okunan kaynak birlikte doğrulanır. Kaydı oluşturma, ödeme/gönderim gibi dış eylemin gerçekleştiği anlamına gelmez.
 
+İşin bitişi önceden tanımlanmalıysa yeni görev metadata'sına `"completion_contract":"strict"` ve gözlenebilir `"completion_criterion":"..."` ekle. Bu görev `done` yapılırken `changes` içinde vault içindeki mevcut kaynak yollarından oluşan `"evidence_refs":["notes/sonuc.md"]` ver; eksik veya olmayan kaynak yazma işlemini durdurur. Görevin kendi dosyası kanıt ref'i olamaz. Kanıt kaynağı kaybolursa görevi `done` dışı bir duruma alırken aynı güncellemede `"evidence_refs":[]` gönder; yeni kaynak eklemeden yeniden `done` yapma. `cancelled` için kanıt zorunlu değildir. Eski görevler opt-in yapmadan çalışır. `doctor` tamamlanmış eski görevleri bilgi olarak, bozuk strict sözleşmeleri dikkat gerektiren bulgu olarak listeler. Kanıt yolu bulunması işin bağımsız doğrulandığı anlamına gelmez.
+
 ## Oturum sonucu ve öğrenimler
 
 Anlamlı çalışma bittiğinde, kullanıcı hafızaya yazılmamasını istemediyse kısa bir kaynak bağlantılı sonuç kaydı gönder. İşin gerçek sonucunu ve varsa açık kalan adımı yaz; planı tamamlanmış sonuç gibi kaydetme. Yalnız kalıcı öğrenimler varsa bunları kullanıcının knowledge düzeninde kaynak bağlantılı Markdown olarak damıt. Her konuşmadan zorla öğrenim çıkarma; reasoning, ham araç logları veya bütün transkriptleri notlara kopyalama.
