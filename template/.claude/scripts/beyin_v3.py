@@ -156,6 +156,14 @@ class MemoryStore:
                     record TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS events_record_sequence ON events(record_id,sequence);
+                CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
+                    id UNINDEXED,
+                    type,
+                    project,
+                    text,
+                    facts,
+                    tokenize='unicode61 remove_diacritics 2'
+                );
             """)
             root = str(self.vault_root)
             binding = db.execute("SELECT value FROM metadata WHERE key='vault_root'").fetchone()
@@ -164,6 +172,14 @@ class MemoryStore:
             if not binding and db.execute("SELECT COUNT(*) FROM records").fetchone()[0]:
                 raise ValueError("unbound existing runtime requires explicit migration")
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('vault_root',?)", (root,))
+            fts_count = db.execute("SELECT COUNT(*) FROM records_fts").fetchone()[0]
+            records_count = db.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+            if fts_count == 0 and records_count > 0:
+                for row in db.execute("SELECT payload FROM records"):
+                    rec = json.loads(row[0])
+                    facts_str = " ".join(f"{k} {v}" for k, v in rec.get("facts", {}).items() if isinstance(v, (str, int, float)))
+                    db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
+                               (rec["id"], rec.get("type", ""), rec.get("project", ""), rec.get("text", ""), facts_str))
         self.database.chmod(0o600)
 
     @contextmanager
@@ -257,6 +273,9 @@ class MemoryStore:
             else:
                 db.execute("INSERT INTO records VALUES (?,?)", (record["id"], payload))
                 db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('ingest',?,?,?)", (record["id"], record["revision"], payload))
+                facts_str = " ".join(f"{k} {v}" for k, v in record.get("facts", {}).items() if isinstance(v, (str, int, float)))
+                db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
+                           (record["id"], record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
         return record
 
     def update_task(self, id, expected_revision, changes):
@@ -276,6 +295,10 @@ class MemoryStore:
             record = self._validate(record)
             db.execute("UPDATE records SET payload=? WHERE id=?", (_json(record), id))
             db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('update',?,?,?)", (id, record["revision"], _json(record)))
+            facts_str = " ".join(f"{k} {v}" for k, v in record.get("facts", {}).items() if isinstance(v, (str, int, float)))
+            db.execute("DELETE FROM records_fts WHERE id=?", (id,))
+            db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
+                       (id, record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
         return record
 
     def history(self, record_id):
@@ -491,6 +514,21 @@ class MemoryStore:
         project_tokens = _tokens(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
+        fts_rank_map = {}
+        if query and query.strip():
+            fts_tokens = re.findall(r'[a-zA-Z0-9_\u00c0-\u017f]+', query)
+            if fts_tokens:
+                fts_query = " OR ".join(f'"{token}"' for token in fts_tokens)
+                try:
+                    with self._connect() as db:
+                        rows = db.execute(
+                            "SELECT id, bm25(records_fts) FROM records_fts WHERE records_fts MATCH ? ORDER BY bm25(records_fts)",
+                            (fts_query,)
+                        ).fetchall()
+                        for rank_idx, (rec_id, _) in enumerate(rows, start=1):
+                            fts_rank_map[rec_id] = rank_idx
+                except sqlite3.Error:
+                    pass
         ranked = []
         vocabularies = {}
         for record in eligible:
@@ -508,13 +546,16 @@ class MemoryStore:
             vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
             vocabularies[record["id"]] = vocabulary
             score = len(terms & vocabulary)
-            if score or scoped_listing or snapshot:
+            fts_hit = record["id"] in fts_rank_map
+            if score or scoped_listing or snapshot or fts_hit:
                 ranked.append((score, record))
         if strict and not snapshot:
             ranked = self._strict_rank(ranked, terms, vocabularies)
         else:
             ranked.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
             ranked.sort(key=lambda item: -item[0])
+            if fts_rank_map:
+                ranked.sort(key=lambda item: fts_rank_map.get(item[1]["id"], 999999))
         if candidate_only:
             return [record for _, record in ranked[:limit]]
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)

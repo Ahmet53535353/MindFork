@@ -157,7 +157,8 @@ class LegacyStateTest(VaultTestCase):
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             payload = db.execute("SELECT payload FROM records WHERE id='taze'").fetchone()[0]
         db.close()
-        self.assertEqual(tables - {'sqlite_sequence'}, {'records', 'receipts', 'metadata', 'events'})
+        base_tables = {t for t in tables if not t.startswith('records_fts')}
+        self.assertEqual(base_tables - {'sqlite_sequence'}, {'records', 'receipts', 'metadata', 'events'})
         self.assertEqual(set(json.loads(payload)) & {'tokens', 'vocabulary', 'terms'}, set())
 
     def test_state_written_before_the_stemmer_answers_inflected_queries(self):
