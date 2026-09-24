@@ -8,6 +8,18 @@ Alanlar: `auto_sync` boolean; `interval_minutes` 0–1440 (0 her olay); `context
 
 Ekonomik profil: auto_sync=true, interval_minutes=15, context_mode=session, context_chars=2000. Manuel: auto_sync=false ve context_mode=off. Mevcut ayarların yalnız bir alanını değiştirmek için örneğin `preferences --interval-minutes 30`; profil seçmek otomatik kontrol ve bağlam alanlarını o profile sıfırlar, bağımsız sır süzgeci tercihini korur. Aralık değiştirmek kapalı kontrolü açmaz.
 
+## Hafıza dosyası sınırları
+
+`Last-Session.md` varsayılan olarak 3.000, `Threads.md` 8.000 karakterle sınırlıdır.
+`python3 beyin.py preferences --last-session-chars 4000 --threads-chars 12000` sınırları
+1.000 ile 200.000 arasında değiştirir, `0` ilgili sınırı kapatır. Bu iki alan vault
+tercih dosyasında değil, runtime klasöründeki `companion-limits.json` dosyasında tutulur:
+eski sürümler bilinmeyen tercih alanını reddettiği için rollback güvenli kalır, ayar ise
+makineye özeldir. Profil değişikliği sınırları sıfırlamaz. Hatalı değer veya bozuk sınır
+dosyası hiçbir ayarı kaydettirmez. Sınır aşılınca oturum başındaki uyarı, `doctor` raporu
+ve kayıpsız `companion-compact` komutu [companion incelemesinde](COMPANION-PARITY.md)
+anlatılır.
+
 ## Opt-in sır süzgeci
 
 `python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create gövdesi ve task-create gövdesinde yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.

@@ -54,6 +54,63 @@ ve dosyayı okumak gerektiğini söyler. Kesme satır sınırındadır, yarım k
 haritası ve ilişkili kaynaklar payını aldıktan sonra artan bütçe kırpılmış companion
 bölümlerine geri verilir; sınır hiçbir durumda aşılmaz.
 
+## Boyut sınırı ve arşivleme (#96)
+
+[Issue #96](https://github.com/avenoxai/avenoxbeyin/issues/96) beş haftalık bir kasada
+`Last-Session.md` dosyasının yaklaşık 94.000, `Threads.md` dosyasının yaklaşık 57.000
+karaktere büyüdüğünü raporladı. Bağlam bütçesi bu dosyaları kırpıyordu, fakat kırpma işareti
+ajanı dosyanın tamamını okumaya yönlendiriyordu ve büyüme hiçbir çıktıda görünmüyordu. Kök
+neden talimattaydı: "güncelle" deniyor, biçim ve sınır verilmiyordu. Her mesajı ayrı görev
+sayan istemcilerde güncelleme her turda yeni tarihli paragraf olarak ekleniyordu.
+
+Düzeltme dört parçadır:
+
+- **Talimat.** `Last-Session.md` üstündeki devir kartı baştan yeniden yazılır, eski kart alta
+  eklenmez. `Threads.md` içinde konu yerinde güncellenir. Süreklilik kontrolü her cevapta
+  değil, anlamlı bir iş parçası bittiğinde yapılır. `## Previous`/`## Önceki` bölümüne ajan
+  dokunmaz; eski metni yalnız aşağıdaki komut taşır.
+- **Ölçülebilir sınır.** Varsayılan sınır `Last-Session.md` için 3.000, `Threads.md` için
+  8.000 karakterdir. Sayım Unicode karakteridir; bayt veya UTF-16 birimi değildir, bu yüzden
+  Türkçe veya emoji yoğun bir dosya olduğundan büyük görünmez. `preferences
+  --last-session-chars N --threads-chars N` sınırı 1.000 ile 200.000 arasında değiştirir,
+  `0` kapatır. Ayar vault içindeki `.beyin-preferences.json` dosyasına değil, runtime
+  klasöründeki `companion-limits.json` dosyasına yazılır. Eski sürümler bilinmeyen tercih
+  alanını reddettiği için bu seçim rollback sonrasında hook'ları bozmaz; karşılığında ayar
+  makineye özeldir. Bozuk bir sınır dosyası sessizce ezilmez, varsayılanlar kullanılır.
+- **Görünürlük.** Sınır aşılırsa companion bağlamının ilk satırı tek bir `Memory hygiene:`
+  uyarısıdır. Uyarı dosya adını, gerçek boyutu ve sınırı yazar, ajana dosyayı baştan sona
+  okumamasını ve `companion-compact` çalıştırmasını söyler. Uyarı bağlam bütçesinin
+  içindedir. `doctor` bütün companion dosyalarının boyutunu `companion_hygiene` altında
+  raporlar; `--human` çıktısında sınırı aşan her dosya için bir satır görünür. Bu bir
+  senkronizasyon arızası değildir, `doctor` durumunu değiştirmez. `Kurallar.md`,
+  `Core.md`/`Soul.md` ve `Journal.md` bilerek birikir; boyutları yalnız bilgi olarak
+  gösterilir, bunlara sınır uygulanmaz. Hook `Kurallar.md` dosyasını doğrudan okur ve
+  sığmadığında başını ve sonunu atlanan karakter sayısıyla birlikte verir (#45).
+- **Kayıpsız arşivleme.** `python3 beyin.py companion-compact` açık bir komuttur; hook,
+  worker veya zamanlayıcı onu kendiliğinden çalıştırmaz. Yalnız sınırı aşan dosyada önce
+  `## Previous`/`## Önceki` (Last-Session) veya `## Closed`/`## Kapanan`/`## Kapalı`
+  (Threads) bölümünün gövdesini, sonra dosya sınıra inene kadar en eski tarihli kayıtları
+  taşır. Tarihli kayıt, ilk karakterlerinde ISO tarih bulunan bir başlık, paragraf veya
+  liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Devir kartının
+  ve her konu başlığının en yeni kaydı yerinde kalır. Threads'te `## Active`/`## Aktif`/`## Açık`
+  bölümünün doğrudan altındaki tarihli satırlar bir konunun kendisi olabileceği için taşınmaz.
+  Taşınan satırlar kelimesi kelimesine ve sırasıyla companion klasöründeki
+  `Arşiv/<Dosya>-YYYY-MM.md` dosyasına eklenir. Arşiv `visibility: private` işaretlidir;
+  otomatik bağlama ve olağan aramaya girmez, gerektiğinde doğrudan açılır. Canlı dosyada
+  arşiv yolunu gösteren tek bir satır kalır. Frontmatter, kod blokları, CRLF satır sonları
+  ve tarihsiz yapı korunur. Taşınacak tarihli kayıt yoksa komut dosyaya dokunmaz ve
+  `needs_rewrite` döner; o durumda ajan dosyayı sınır içinde yeniden yazar. Arşiv
+  yazıldıktan sonra canlı dosya değişmişse arşiv eski baytlarına döner ve `conflict`
+  raporlanır. `--dry-run` hiçbir şey yazmadan planı gösterir. Komut model çağırmaz ve
+  bitince yeni boyutları indekslemek için `sync` çalıştırır.
+
+`tests/v3_companion_hygiene_test.py` sentetik verilerle #96'daki iki biçimi (en üste eklenen
+tarihli paragraflar ve budanmamış `## Previous Sessions`; konu başına onlarca tarihli
+güncelleme ve kapalı bölüm) kurar. Uyarının her bütçede tek satır geldiğini, sınırdaki
+dosyada gelmediğini, tek ek kaydın bir sonraki oturumda yakalandığını, sayımın karakterle
+yapıldığını, `doctor` raporunu, ayarın doğrulanmasını ve arşivlemenin satır satır kayıpsız,
+sıralı, tekrarlanabilir ve eşzamanlı düzenlemeye karşı güvenli olduğunu sınar.
+
 ## Doğrulama
 
 `tests/v3_companion_test.py` sentetik verilerle temiz ZIP kurulumu, üç istemcide aynı

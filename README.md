@@ -96,6 +96,10 @@ Süre dolunca kendi başına çalışan bir zamanlayıcı kurulmaz; bir sonraki 
 
 Tercihler: `python3 beyin.py preferences`. Ekonomik: `preferences --profile economical`. Manuel: `preferences --profile manual`. Aralık: `preferences --interval-minutes 30`. Opt-in sır süzgeci: `preferences --secret-filter on`. Windows'ta `py -3` kullan. [Ayrıntılar](docs/v3/PREFERENCES.md).
 
+## Hafıza dosyalarının boyutu
+
+`Last-Session.md` son oturumun devir kartıdır, `Threads.md` açık konuların güncel durumudur. İkisi de yerinde yeniden yazılır, alta eklenmez. Varsayılan sınır 3.000 ve 8.000 karakterdir. Sınır aşılırsa oturum başı bağlamı tek satırlık `Memory hygiene:` uyarısıyla açılır ve `doctor` aynı bilgiyi gösterir. Ajan o zaman `python3 beyin.py companion-compact` çalıştırır: eski bölümler ve eski tarihli kayıtlar kelimesi kelimesine companion klasöründeki `Arşiv/` altına, özel işaretli aylık bir dosyaya taşınır. Hiçbir metin silinmez veya özetlenmez, model çağrılmaz, zamanlayıcı kurulmaz. Planı önce görmek için `--dry-run`, sınırları değiştirmek için `preferences --last-session-chars 4000 --threads-chars 12000` (`0` kapatır). [Ayrıntılar](docs/v3/COMPANION-PARITY.md).
+
 ## Güncelleme
 
 Ajanına **“beynimi güncelle”** diyebilir veya vault içindeki kısayolu açabilirsin:
