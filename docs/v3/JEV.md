@@ -259,7 +259,7 @@ Bedeli açıkça: her mesajda mesaj metni ve aday notların başlığı ile ilk 
 
 ## Yerel Laya arka ucu (isteğe bağlı)
 
-[Laya](https://github.com/NandhaKishorM/laya), Convai Innovations'ın Apache 2.0 lisanslı, açık ağırlıklı System One karar modelidir. `laya-serve` sunucusu Jev ile aynı `POST /v1/systemone` protokolünü konuşur. Beyin, Laya'yı ayrı kurulan yerel bir sunucu olarak kullanır: Beyin paketine Laya kodu, model ağırlığı veya PyTorch girmez; hook ve CLI `torch` ya da `laya` içe aktarmaz (`tests/v3_stdlib_imports_test.py` bunu denetler). Varsayılan sağlayıcı değişmez; Laya yalnız açıkça seçilince kullanılır.
+[Laya](https://github.com/NandhaKishorM/laya), Convai Innovations'ın Apache 2.0 lisanslı, açık ağırlıklı System One karar modelidir. `laya-serve` sunucusu Jev ile aynı `POST /v1/systemone` protokolünü konuşur. Beyin, Laya'yı ayrı kurulan yerel bir sunucu olarak kullanır: Beyin paketine Laya kodu, model ağırlığı veya PyTorch girmez; hook ve CLI `torch` ya da `laya` içe aktarmaz (`tests/v3_stdlib_imports_test.py` bunu denetler). Varsayılan sağlayıcı değişmez; Laya yalnız açıkça seçilince kullanılır ve yalnız gölge modda çalışır: puanları ölçüm için kaydedilir, kullanıcının gördüğü sonucu değiştirmez ([Yalnız gölge mod](#yalnız-gölge-mod)).
 
 ### Laya'yı Beyin dışında kurma
 
@@ -278,10 +278,10 @@ Windows PowerShell:
 
     python beyin.py jev shadow --provider laya
     python beyin.py jev status --check
-    python beyin.py jev on --provider laya --model multilingual
+    python beyin.py jev shadow --provider laya --model multilingual
     python beyin.py jev on --provider typesafe
 
-Son komut Jev'e döner; Laya ayarları saklanır. `--base-url` ve `--model` yalnız Laya sağlayıcısıyla kabul edilir. `status --check` yalnız yapılandırılmış yerel sunucunun `/health` adresini bir kez okur (1 saniye), not veya anahtar göndermez; TypeSafe'i hiç yoklamaz. `doctor` ağa çıkmaz.
+Son komut Jev'e döner; Laya ayarları saklanır. `jev on --provider laya` kabul edilmez (`laya_shadow_only`); aşağıya bakın. `--base-url` ve `--model` yalnız Laya sağlayıcısıyla kabul edilir. `status --check` yalnız yapılandırılmış yerel sunucunun `/health` adresini bir kez okur (1 saniye), not veya anahtar göndermez; TypeSafe'i hiç yoklamaz. `doctor` ağa çıkmaz.
 
 Ayar `jev.json` içinde ayrı bir `laya` bloğunda durur:
 
@@ -303,13 +303,14 @@ Sınırlar 2026-09-24'te iki modelin kendi tokenizer'ıyla ölçüldü: şablonl
 
 `choice` sorularında güven, Laya'nın entropi tabanlı `confidence` alanından değil en olası seçeneğin olasılığından alınır; Laya'nın kalibre ettiği değer budur. Kayıtta `confidence_provenance.origin` değeri `laya_max_probability` olur.
 
-### Eşikler ölçülene kadar
+### Yalnız gölge mod
 
-Karar eşikleri `beyin_v3_jev_client.THRESHOLDS` tablosunda sağlayıcı ve model çiftine göre durur. Jev satırı canlı ölçümlerden gelir. Laya satırları şimdilik Jev değerlerinin kopyasıdır ve `verified: false` işaretlidir:
+Laya puanları kullanıcının gördüğü hiçbir sonucu değiştirmez. Nedeni aşağıdaki [ölçümdür](#ölçüm): sıfır atışlı (zero-shot) Laya bu karar görevlerinde Jev'den çok daha zayıf çıktı.
 
-- `auto_context` Laya ile `on` modunda bile yalnız puanları kaydeder (`scored_unverified`) ve teslim edilen bağlamı değiştirmez. Ölçüm sonrası tabloda `verified: true` yapılınca eşikler uygulanır.
-- `jev-answer` ve `jev-memory` sonuçları uygulanır ama çıktıda `calibration: "unverified_for_provider"` bulunur; 0,8 güven eşiği Laya için ölçülmedi.
-- `status` bunu `calibration: "jev_thresholds_unverified_for_laya"` ve `auto_context_applied: false` ile gösterir. Önce `shadow` ile birkaç gün sayaçlara bakın.
+- `jev on --provider laya`, Laya ayarlıyken `jev on` ve kayıtlı `on` modundan Laya'ya geçiş `laya_shadow_only` koduyla reddedilir; `jev.json` değişmez. Komut hatası bir sonraki adımı gösteren ASCII Türkçe bir `hint` taşır.
+- `jev.json` elle `"mode":"on"` yapılsa da Laya gölge modda çalışır. `jev status` bunu `mode: "shadow"`, `saved_mode: "on"`, `shadow_only: true` ve `mode_refused: "laya_shadow_only"` ile gösterir; `jev status` ve `doctor` insan çıktısında mod `golge (yalniz)` olarak yazılır.
+- Laya ile `auto_context` ve `context --jev` bağlamın sırasını ve içeriğini değiştirmez; otomatik bağlam kaydı `scored_unverified` olur. `jev-answer` iddiaları `semantic_shadow` ile `uncertain` kalır, `jev-review` sonucu `mode: "shadow"` taşır ve `jev-memory` karar üretmez (`shadow_not_applied`). Puanlar çıktıda ve sayaçlarda ölçüm için görünür.
+- Karar eşikleri `beyin_v3_jev_client.THRESHOLDS` tablosunda sağlayıcı ve model çiftine göre durur. Laya satırları Jev değerlerinin kopyasıdır ve `verified: false` işaretlidir; `status` bunu `calibration: "jev_thresholds_unverified_for_laya"` ve `auto_context_applied: false` ile, çıktılar `calibration: "unverified_for_provider"` ile gösterir. Gölge sınırı bu işaretten bağımsızdır: Laya `client.SHADOW_ONLY` listesinden ayrı bir kararla çıkarılmadıkça bir satırın `verified: true` yapılması hiçbir sonucu değiştirmez.
 
 ### Gizlilik
 
@@ -320,5 +321,22 @@ Laya yerelde çalışsa da gönderim kuralları Jev ile aynıdır: `private` not
 Bu depodaki Laya testleri sahte bir yerel sunucuyla çalışır ve model kalitesi hakkında bilgi vermez. Laya'nın kendi README'sindeki doğruluk sayıları bu depoda doğrulanmadı.
 
 <!-- BENCH -->
-Jev ile Laya karşılaştırmasının ölçülen sonuçları bu bloğa eklenecek. Sonuç gelene kadar Laya eşik satırları `verified: false` kalır.
+**Jev ile Laya karşılaştırması (2026-09-24).** Jev: `jev-1.13.0`, resmi TypeSafe API. [Laya](https://github.com/NandhaKishorM/laya): 0.3.20, Hugging Face `convaiinnovations/laya` revizyonu `55cf4c4e`, `multilingual` ve `english` modelleri, loopback üzerinde `laya-serve`, Apple M5 (24 GB, MPS). Laya sıfır atışlı (zero-shot) kullanıldı, ince ayar yapılmadı. Yalnız sentetik, kurgu veya daha önce yayımlanmış etiketli setler kullanıldı; öğeler ve doğru etiketler ilk model çağrısından önce sha256 ile donduruldu. Laya, Jev'e giden baytların aynısının yanında kendisine daha uygun biçimleri de aldı (istek başına tek öğe, İngilizce ifade biçimi, sabit model); tabloda her satırın en iyi Laya sonucu var. Güven en büyük olasılıktır, köşeli parantezler yüzde 95 aralığıdır.
+
+| Görev | Ölçüt | Jev | En iyi Laya |
+| --- | --- | --- | --- |
+| İddia ve kaynak (190 iddia) | Doğruluk, Beyin `jev-answer` biçimi | 0,930 | 0,579 [0,51; 0,65] |
+| İddia ve kaynak (190 iddia) | Beyin biçiminde güven kapısını geçen yanlış `supports` | 6 | 42 |
+| Hafıza incelemesi (100 ifade, 64'ü temkinli veya olumsuz) | İlişki doğruluğu | 1,000 | 0,450 [0,36; 0,55] |
+| Hafıza incelemesi (100 ifade, 64'ü temkinli veya olumsuz) | Güven kapısını geçen yanlış terfi (64 ifadede) | 0 | 5 (İngilizce ifade biçiminde 11) |
+| Eylem risk kapısı (315 sentetik araç çağrısı) | Yakalama / yanlış uyarı | %97,9 / %3,7 | %54,7 / %21,8 |
+| Konu kapısı (279 kısa Türkçe ve İngilizce mesaj) | Doğruluk, Beyin ifadesi, eşik 0,25 (Jev: 3 koşu ortalaması) | 0,866 | 0,652 [0,59; 0,71] |
+| Küçük değişiklik dayanıklılığı (98 cümle çifti) | İki cümle de doğru tarafta | 0,918 | 0,316 |
+| Mevcut sentetik etiketli setler (1.285 ikili karar) | AUC / ECE | 0,994 / 0,073 | 0,609 / 0,227 |
+
+Eylem kapısında gizlilik süzgeci 5 çağrıyı Jev'e göndermedi; Jev oranları kalan 310 çağrı üzerindendir. İki tarafta da HTTP hatası, zaman aşımı veya geçersiz cevap olmadı; Laya her tekrar kontrolünde bit düzeyinde aynı sonucu verdi.
+
+Sonuç açık: sıfır atışlı Laya bu Türkçe ve İngilizce karar görevlerinde Jev'den çok daha zayıf ve denenen hiçbir biçim farkı kapatmadı. Başlıca nedenler: birden çok notu anahtarla adresleyen durumlarda her öğeye neredeyse aynı puan, çoğu olumsuzluğun kaçırılması, kısa veya Türkçe karakter içermeyen Türkçe metnin otomatik yönlendirmede `english` modeline gitmesi ve satır sınırında hatasız kesme. Bu yüzden Beyin'de sonucu değiştirebilen tek sağlayıcı Jev'dir. Laya isteğe bağlı, yalnız gölge modda çalışan yerel bir seçenek olarak kalır: veri makineden çıkmaz, API maliyeti yoktur ve aynı girdiye hep aynı cevabı verir; bu yüzden ölçüm ve gizlilik denemeleri için tutulur. Sunucu 4,5 ile 5,9 GB bellek tutar, soğuk başlangıcı 11 ile 19 saniye sürer. `THRESHOLDS` içindeki Laya satırları `verified: false` kalır. Denenen yüzeyler içinde Laya'nın tek güçlü sinyali, İngilizce ifade biçiminde iki iddianın aynı şeyi söyleyip söylemediği oldu (AUC 0,915); bu kullanım da kendi eşiği ayrı geliştirme ve test setlerinde ölçülmeden açılmamalı.
+
+Sınırlar: öğelerin çoğu sentetik veya kurgu; bazı setlerde öğeleri ve etiketleri aynı yazar hazırladı ve bazı rubrik ile eşikler daha önce Jev'e göre ayarlandı, bu yüzden bazı setler Jev için örneklem içidir. Sonuçlar `55cf4c4e` revizyonundaki sıfır atışlı Laya içindir; ağırlıklar değişebilir, ince ayar denenmedi. Bu karşılaştırmada gecikme ölçülmedi.
 <!-- /BENCH -->

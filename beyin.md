@@ -213,9 +213,11 @@ uyarir ve cagrilar yerel sonuca duser. Kapatma: `<python> beyin.py jev off`; aci
 Anahtar istemeyen yerel secenek: kullanici acikca isterse ayri kurulmus `laya-serve`
 (`LAYA_HOST=127.0.0.1 LAYA_PORT=8765`) icin `<python> beyin.py jev shadow --provider laya`,
 sonra `jev status --check`. Laya'yi, PyTorch'u veya model agirligini Beyin'in ortamina
-kurma. Laya esikleri henuz olculmedi: `auto_context` Laya ile yalniz puan kaydeder,
-baglami degistirmez. Ayni gonderim kurallari gecerlidir; `private`, `remote_allowed: false`
-ve `sensitivity: sensitive` kayitlar Laya'ya da gitmez. Jev'e donus: `jev on --provider typesafe`.
+kurma. Laya yalniz golge modda calisir: olcumde Jev'den cok daha zayif ciktigi icin
+puanlari yalniz olcum icin kaydedilir, hicbir sonucu degistirmez; `jev on --provider laya`
+`laya_shadow_only` ile reddedilir ve `jev status` modu `golge (yalniz)` gosterir. Ayni gonderim
+kurallari gecerlidir; `private`, `remote_allowed: false` ve `sensitivity: sensitive` kayitlar
+Laya'ya da gitmez. Jev'e donus: `jev on --provider typesafe`.
 
 ## Manuel kacis yolu
 
