@@ -295,6 +295,24 @@ class SecretFilterTest(unittest.TestCase):
                 redact(text, self.state)
                 self.assertLess(time.monotonic() - started, 2.0)
 
+    def test_jev_safe_blocks_secret_on_a_later_line(self):
+        """JSON escapes a newline as \\n, so a key at the start of line 2+ needs the raw-string scan."""
+        from beyin_v3 import MemoryStore
+        from beyin_v3_jev import _safe
+        store = MemoryStore(self.state, self.vault)
+        statements = ['Setup notes\npassword: hunter2hunter2', 'Deploy\ttoken=abcdefghijkl',
+                      'Windows notes\r\nsecret=abcdefghijkl', 'Kurulum\npassword: şifre12345']
+        statements += ['Notes\n' + text for text, _ in QUOTED_REGRESSIONS]
+        for statement in statements:
+            for card in (dict(id='c', title='t', statement=statement, scope='s', domains=['d']),
+                         dict(id='c', title=statement, statement='clean', scope='s', domains=['d'])):
+                with self.subTest(statement=statement, field='title' if card['title'] != 't' else 'statement'):
+                    with self.assertRaises(ValueError) as cm:
+                        _safe(store, ['query', [card]])
+                    self.assertEqual(str(cm.exception), 'advisor_sensitive_input')
+        clean = dict(id='c', title='t', statement='Setup notes\nrotate the password monthly', scope='s', domains=['d'])
+        self.assertIsNone(_safe(store, ['query', [clean]]))
+
 
 # Every quoted-value regression example from the maintainer review of #76:
 # (planted text, secret). _tail() is an escape-free fragment that must not survive JSON frontmatter.

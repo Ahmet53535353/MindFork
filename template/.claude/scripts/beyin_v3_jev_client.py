@@ -196,7 +196,10 @@ def _environment(config):
 
 
 def _endpoint(base):
-    parsed = urllib.parse.urlsplit(base)
+    try:
+        parsed = urllib.parse.urlsplit(base)
+    except ValueError:  # e.g. an unclosed IPv6 bracket
+        raise ValueError('endpoint_invalid') from None
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('endpoint_invalid')
     if not parsed.hostname or not (parsed.scheme=='https' or
@@ -206,7 +209,7 @@ def _endpoint(base):
     try:
         parsed.port
     except ValueError:
-        raise ValueError('endpoint_invalid')
+        raise ValueError('endpoint_invalid') from None
     base=base.rstrip('/')
     return base+'/systemone' if base.endswith('/v1') else base+'/v1/systemone'
 

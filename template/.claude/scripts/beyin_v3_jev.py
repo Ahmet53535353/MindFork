@@ -8,9 +8,23 @@ from beyin_v3_secrets import redact
 from beyin_v3 import pack_context
 
 
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item)
+
+
 def _safe(store, value):
     # Reject instead of silently judging redacted evidence. Never persist matches.
-    _, count = redact(json.dumps(value, ensure_ascii=False), store.state_dir)
+    # Scan raw strings too: JSON escapes a newline as \n, which hides a line-leading key.
+    text = json.dumps(value, ensure_ascii=False) + '\n' + '\n'.join(_strings(value))
+    _, count = redact(text, store.state_dir)
     if count:
         raise ValueError('advisor_sensitive_input')
 

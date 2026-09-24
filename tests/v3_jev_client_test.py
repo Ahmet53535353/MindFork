@@ -254,6 +254,17 @@ class ClientTests(unittest.TestCase):
         self.assertIn('endpoint_invalid', result['diagnostics'])
         self.assertNotIn('request_failed', result['diagnostics'])
 
+    def test_unparseable_endpoint_is_endpoint_invalid_not_request_failed(self):
+        for url in ('https://[::1', 'https://[notip]/v1'):
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError) as cm:
+                    j._endpoint(url)
+                self.assertEqual(str(cm.exception), 'endpoint_invalid')
+        self.config(base_url='https://[::1')
+        result = j.evaluate(self.vault, 'test query', self.cards)
+        self.assertIn('endpoint_invalid', result['diagnostics'])
+        self.assertNotIn('request_failed', result['diagnostics'])
+
     def test_cache_hit_race_configuration_changed_not_swallowed(self):
         self.config()
         transport_calls = []
