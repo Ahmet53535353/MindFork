@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 import functools
 import hashlib
 import json
@@ -233,6 +234,16 @@ class MemoryStore:
             for field in ("rejected_reason", "rejected_at"):
                 if field in record and not isinstance(record[field], str):
                     raise ValueError(field + " must be a string")
+            if record.get("validity") == "rejected":
+                if not isinstance(record.get("rejected_reason"), str) or not record["rejected_reason"].strip():
+                    raise ValueError("rejected_reason required for rejected validity")
+                rejected_at = record.get("rejected_at")
+                if not isinstance(rejected_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rejected_at):
+                    raise ValueError("rejected_at must be an ISO date for rejected validity")
+                try:
+                    date.fromisoformat(rejected_at)
+                except ValueError as exc:
+                    raise ValueError("rejected_at must be an ISO date for rejected validity") from exc
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
@@ -306,11 +317,11 @@ class MemoryStore:
                     current.get("kind") == "untrusted"):
                 return []
             try:
-                self._source(current["source"])
-                actual = hashlib.sha256((self.vault_root / current["source"]).read_bytes()).hexdigest()
+                source = self._source(current.get("source"))
+                actual = hashlib.sha256((self.vault_root / source).read_bytes()).hexdigest()
                 if actual != current.get("source_sha256"):
                     return []
-            except (ValueError, OSError):
+            except (ValueError, OSError, TypeError):
                 return []
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
         return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
