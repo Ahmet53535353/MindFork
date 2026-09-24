@@ -136,6 +136,18 @@ class CompanionTest(unittest.TestCase):
             self.assertNotIn(canary, text)
         self.assertIn('excluded', text)
 
+    def test_rejected_inference_is_excluded_from_companion_and_related_context(self):
+        target = self.seed()
+        (target / 'Core.md').write_text(
+            '---\nkind: inference\nvalidity: rejected\nrejected_at: 2026-09-24\n'
+            'rejected_reason: User corrected the inference.\n---\n'
+            'SYNTHETIC_REJECTED_IDENTITY_CANARY: user prefers amber diagrams.\n',
+            encoding='utf-8')
+        self.sync()
+        for text in (self.hook(), self.hook('UserPromptSubmit', prompt='Beni tanıyor musun? Amber diagrams?')):
+            self.assertNotIn('SYNTHETIC_REJECTED_IDENTITY_CANARY', text)
+            self.assertIn('STYLE_CANARY', text)
+
     def test_ambiguous_identity_is_not_silently_selected(self):
         self.seed()
         other = self.vault / 'Other Companion'; other.mkdir()
