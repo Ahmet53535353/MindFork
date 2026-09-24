@@ -2,6 +2,7 @@
 """Offline lifecycle, queue and installer tests using isolated synthetic homes."""
 import importlib.util
 import base64
+import hashlib
 import re
 import json
 import os
@@ -79,6 +80,12 @@ class HookInstallerTest(unittest.TestCase):
         lines = [line for line in result.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, 'Hook stdout must contain exactly one JSON response')
         return json.loads(lines[0])
+
+    def lifecycle(self, event, session, harness='claude', extra=None, **fields):
+        self.lifecycle_count = getattr(self, 'lifecycle_count', 0) + 1
+        payload = dict({'hook_event_name': event, 'session_id': session,
+                        'event_id': session + '-' + str(self.lifecycle_count)}, **fields)
+        return self.invoke(payload, harness, extra=extra)
 
     def install(self, uninstall=False):
         self.assertTrue(INSTALLER.is_file(), 'Installer not implemented')
@@ -228,6 +235,89 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(drained['processed'], 1)
         self.assertEqual(drained['pending'], 0)
 
+    def test_stop_receipt_reminder_blocks_once_for_claude_and_codex(self):
+        for harness in ('claude', 'codex'):
+            session = 'reminder-' + harness
+            self.assertEqual(self.lifecycle('PostToolUse', session, harness), {})
+            queued = len(list((self.state / 'hook-queue').glob('*.json')))
+            first = self.lifecycle('Stop', session, harness)
+            self.assertEqual(first['decision'], 'block')
+            self.assertIn('python3 beyin.py receipt --file RECEIPT_JSON --harness ' + harness, first['reason'])
+            self.assertIn('Receipt session=' + hashlib.sha256(session.encode()).hexdigest()[:24] + ';', first['reason'])
+            # The Stop checkpoint is queued before any reminder work.
+            self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), queued + 1)
+            self.lifecycle('PostToolUse', session, harness)
+            self.assertEqual(self.lifecycle('Stop', session, harness), {})
+        # Other harnesses have no Stop block contract here.
+        for harness in ('hermes', 'opencode', 'omp'):
+            self.lifecycle('PostToolUse', 'other-' + harness, harness)
+            self.assertEqual(self.lifecycle('Stop', 'other-' + harness, harness), {})
+
+    def test_stop_receipt_reminder_passes_when_receipt_is_present(self):
+        engine = self.seed()
+        def session(name):
+            return hashlib.sha256(name.encode()).hexdigest()[:24]
+        self.lifecycle('PostToolUse', 'receipted', 'claude')
+        engine.receipt('receipted-1', 'Edited the task note.', ['notes/task.md'], 'claude', session=session('receipted'))
+        self.assertEqual(self.lifecycle('Stop', 'receipted', 'claude'), {})
+        # Edits after that receipt open a new window.
+        self.lifecycle('PostToolUse', 'receipted', 'claude')
+        self.assertEqual(self.lifecycle('Stop', 'receipted', 'claude')['decision'], 'block')
+        # Same match as the receipt gap projection: harness and session must both agree.
+        self.lifecycle('PostToolUse', 'other-harness', 'codex')
+        engine.receipt('other-harness-1', 'Edited the task note.', ['notes/task.md'], 'claude', session=session('other-harness'))
+        self.assertEqual(self.lifecycle('Stop', 'other-harness', 'codex')['decision'], 'block')
+        self.lifecycle('PostToolUse', 'no-session', 'claude')
+        engine.receipt('no-session-1', 'Edited the task note.', ['notes/task.md'], 'claude')
+        self.assertEqual(self.lifecycle('Stop', 'no-session', 'claude')['decision'], 'block')
+
+    def test_stop_receipt_reminder_session_closes_the_gap(self):
+        engine = self.seed()
+        self.lifecycle('UserPromptSubmit', 'gap-session', 'claude', prompt='update the calibration note')
+        self.lifecycle('PostToolUse', 'gap-session', 'claude')
+        blocked = self.lifecycle('Stop', 'gap-session', 'claude')
+        session = re.search(r'Receipt session=([0-9a-f]{24});', blocked['reason']).group(1)
+        engine.receipt('gap-receipt', 'Edited the task note.', ['notes/task.md'], 'claude', session=session)
+        self.assertEqual(self.lifecycle('Stop', 'gap-session', 'claude', stop_hook_active=True), {})
+        self.assertEqual(self.hook.drain_queue(self.vault, self.state)['failed'], 0)
+        gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))
+        self.assertEqual(gaps['potential_missing_receipts'], 0)
+
+    def test_stop_receipt_reminder_passes_without_edits(self):
+        self.assertEqual(self.lifecycle('Stop', 'no-edits', 'claude'), {})
+        # The global bridge (--metadata-only) keeps no reminder state.
+        self.lifecycle('PostToolUse', 'bridged', 'claude', extra=['--metadata-only'])
+        self.assertEqual(self.lifecycle('Stop', 'bridged', 'claude'), {})
+        self.assertFalse((self.state / 'receipt-reminders').exists())
+
+    def test_stop_receipt_reminder_fails_open_on_broken_runtime_state(self):
+        self.lifecycle('PostToolUse', 'broken', 'claude')
+        database = self.state / 'memory.sqlite3'
+        database.write_bytes(b'not a sqlite database')
+        self.assertEqual(self.lifecycle('Stop', 'broken', 'claude'), {})
+        database.unlink()
+        self.assertEqual(self.lifecycle('Stop', 'broken', 'claude')['decision'], 'block')
+
+    def test_stop_receipt_reminder_honours_user_opt_out(self):
+        self.lifecycle('UserPromptSubmit', 'opt-out', 'codex', prompt='bunu [kaydetme]')
+        self.lifecycle('PostToolUse', 'opt-out', 'codex')
+        self.assertEqual(self.lifecycle('Stop', 'opt-out', 'codex'), {})
+        self.env['BEYIN_V3_NO_RECEIPT_REMINDER'] = '1'
+        self.lifecycle('PostToolUse', 'env-opt-out', 'claude')
+        self.assertEqual(self.lifecycle('Stop', 'env-opt-out', 'claude'), {})
+        del self.env['BEYIN_V3_NO_RECEIPT_REMINDER']
+        self.assertEqual(self.lifecycle('Stop', 'env-opt-out', 'claude'), {})
+
+    def test_stop_receipt_reminder_quiet_paths_keep_the_one_reminder(self):
+        self.lifecycle('PostToolUse', 'quiet', 'claude')
+        self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude', stop_hook_active=True), {})
+        self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude', extra=['--metadata-only']), {})
+        preferences = self.vault / '.beyin-preferences.json'
+        preferences.write_text(json.dumps({'auto_sync': False}), encoding='utf-8')
+        self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude'), {})
+        preferences.unlink()
+        self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude')['decision'], 'block')
+
     def test_antigravity_start_only_first_invocation_and_final_idle_stop(self):
         self.seed()
         payload = {'hook_event_name': 'PreInvocation', 'conversationId': 'synthetic-agy',
@@ -246,6 +336,19 @@ class HookInstallerTest(unittest.TestCase):
         self.env['BEYIN_V3_INTERNAL'] = '1'
         self.assertEqual(self.invoke(self.payload), {})
         self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
+
+    def test_public_skip_guard_skips_queue(self):
+        self.env['BEYIN_V3_SKIP'] = '1'
+        self.assertEqual(self.invoke(self.payload), {})
+        self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
+
+    def test_public_skip_guard_honours_only_exact_one(self):
+        # Same convention as BEYIN_V3_NO_SPAWN: 0, false or empty must not silently disable memory.
+        for count, value in enumerate(('0', 'false', ''), start=1):
+            with self.subTest(value=value):
+                self.env['BEYIN_V3_SKIP'] = value
+                self.assertEqual(self.invoke(dict(self.payload, event_id='synthetic-skip-%d' % count)), {})
+                self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), count)
 
     def test_install_repeat_preserves_unrelated_configuration_and_trust(self):
         originals = {}

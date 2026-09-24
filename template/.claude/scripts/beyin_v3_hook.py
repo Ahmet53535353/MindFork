@@ -13,6 +13,11 @@ import uuid
 
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
+RECEIPT_REMINDER = (
+    "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
+    "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}. "
+    "Receipt session={session}; put this value in the JSON session field so the receipt closes this checkpoint."
+)
 
 
 def atomic(path, data):
@@ -41,6 +46,73 @@ def receipt_context(vault):
     with path.open(encoding="utf-8") as source:
         content = source.read(1200)
     return "\nLatest receipt (historical agent claim, not independently verified):\n" + content
+
+
+def _has_receipt(database, harness, session, since):
+    """Same (harness, session, created_at) match as beyin_v3_projections.refresh_gaps."""
+    from datetime import datetime
+    import sqlite3
+    if database.is_symlink():
+        raise ValueError("database must not be a symlink")
+    if not database.is_file():
+        return False  # No runtime store yet, so no receipt can have been recorded.
+    db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+    try:
+        rows = db.execute("SELECT payload FROM receipts WHERE instr(payload, ?) > 0", (session,)).fetchall()
+    finally:
+        db.close()
+    for (raw,) in rows:
+        receipt = json.loads(raw)
+        if (receipt.get("harness") == harness and receipt.get("session") == session and
+                datetime.fromisoformat(receipt.get("created_at", "1970-01-01T00:00:00+00:00")).timestamp() >= since):
+            return True
+    return False
+
+
+def receipt_reminder(payload, state, harness, event):
+    """Track edits per session and return a one-time Stop block, or None.
+
+    Installed PostToolUse hooks match only Edit|Write|apply_patch for Claude and
+    Codex, so that event marks the session as edited without reading transcripts.
+    Stop then looks for a receipt of this harness and session in the runtime store.
+    """
+    if harness not in ("claude", "codex") or event not in ("UserPromptSubmit", "PostToolUse", "Stop"):
+        return None
+    if os.environ.get("BEYIN_V3_NO_RECEIPT_REMINDER") == "1":
+        return None
+    try:
+        session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+        folder = Path(state) / "receipt-reminders"
+        done, edited = folder / (digest + ".done"), folder / (digest + ".edited")
+        if done.exists():
+            return None
+        if event == "UserPromptSubmit":
+            prompt = payload.get("prompt")
+            if isinstance(prompt, str) and "[kaydetme]" in prompt:
+                folder.mkdir(parents=True, exist_ok=True)
+                done.touch()
+                edited.unlink(missing_ok=True)
+            return None
+        if event == "PostToolUse":
+            if not edited.exists():
+                atomic(edited, {"at": time.time()})
+            return None
+        if payload.get("stop_hook_active") is True or not edited.exists():
+            return None
+        since = float(json.loads(edited.read_text(encoding="utf-8"))["at"])
+        session = digest[:24]  # the queued checkpoint's session value
+        if _has_receipt(Path(state) / "memory.sqlite3", harness, session, since):
+            edited.unlink(missing_ok=True)  # later edits open a new window
+            return None
+        edited.unlink(missing_ok=True)
+        with done.open("x", encoding="utf-8"):  # FileExistsError if a concurrent Stop reminded first
+            pass
+        return {"decision": "block", "reason": RECEIPT_REMINDER.format(harness=harness, session=session)}
+    except Exception:
+        return None  # fail open: never block Stop on a bookkeeping error
 
 
 def enqueue_event(vault, state, payload, harness):
@@ -158,7 +230,7 @@ def main():
                 return
             payload["session_id"] = payload.get("conversationId", "unknown")
         payload["hook_event_name"] = event
-        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or payload.get('no_memory') is True:
+        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") == "1" or payload.get('no_memory') is True:
             print("{}")
             return
         if event == 'SessionStart' and not args.metadata_only:
@@ -180,9 +252,12 @@ def main():
         disabled = os.environ.get("BEYIN_V3_NO_SPAWN") == "1"
         due = False if disabled else claim_check(state, settings, event)
         process = subprocess.Popen(command, **options) if due else None
+        # After enqueue, so reminder bookkeeping can never cost the queued checkpoint.
+        # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
+        reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event)
         inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
         if not inject or args.metadata_only:
-            print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
+            print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))
             return
         if event in ("SessionStart", "UserPromptSubmit"):
             if not due and not disabled:
@@ -254,7 +329,7 @@ def main():
             output = output_context(args.harness, event, (notice + text)[:settings['context_chars']])
             print(json.dumps(output))
         else:
-            print('{"decision":"stop"}' if args.harness == "antigravity" else "{}")
+            print(json.dumps(reminder) if reminder else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}"))
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if not args.metadata_only and locals().get("event") in ("SessionStart", "UserPromptSubmit"):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 import functools
 import hashlib
 import json
@@ -29,6 +30,15 @@ class ReceiptConflict(ValueError):
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _rejected_inference(record):
+    """A rejected personal inference is history, not current context.
+
+    Old sources may use status=rejected; status is still the task lifecycle field.
+    """
+    return (record.get("kind") in ("inference", "preference") and
+            (record.get("validity") == "rejected" or record.get("status") == "rejected"))
 
 
 # Turkish is agglutinative, so exact token intersection loses "fark" against "farki" and
@@ -218,6 +228,22 @@ class MemoryStore:
         for field in ("project", "kind", "status", "updated_at"):
             if field in record and not isinstance(record[field], str):
                 raise ValueError(field + " must be a string")
+        if record.get("kind") in ("inference", "preference"):
+            if record.get("validity", "current") not in ("current", "rejected"):
+                raise ValueError("inference validity must be current or rejected")
+            for field in ("rejected_reason", "rejected_at"):
+                if field in record and not isinstance(record[field], str):
+                    raise ValueError(field + " must be a string")
+            if record.get("validity") == "rejected":
+                if not isinstance(record.get("rejected_reason"), str) or not record["rejected_reason"].strip():
+                    raise ValueError("rejected_reason required for rejected validity")
+                rejected_at = record.get("rejected_at")
+                if not isinstance(rejected_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rejected_at):
+                    raise ValueError("rejected_at must be an ISO date for rejected validity")
+                try:
+                    date.fromisoformat(rejected_at)
+                except ValueError as exc:
+                    raise ValueError("rejected_at must be an ISO date for rejected validity") from exc
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
@@ -271,14 +297,41 @@ class MemoryStore:
             db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('update',?,?,?)", (id, record["revision"], _json(record)))
         return record
 
-    def history(self, record_id):
-        """Committed immutable snapshots, ordered by global event sequence.
+    def history(self, record_id, audience="internal"):
+        """Source-verified immutable snapshots, ordered by global event sequence.
 
         Databases created before events were added have no invented prehistory.
+        A verified current source authorizes historical revisions of that record;
+        each event still has to pass the requested visibility boundary. A record
+        that synchronization deleted (source removed or no longer valid) keeps its
+        audit trail: the snapshot stored in its final delete event sets the
+        boundary instead, because there is no current source left to verify.
         """
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
         with self._connect() as db:
+            current = db.execute("SELECT payload FROM records WHERE id=?", (record_id,)).fetchone()
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
-        return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": json.loads(row[4])} for row in rows]
+        if not rows or (not current and rows[-1][1] != "delete"):
+            return []
+        boundary = json.loads(current[0] if current else rows[-1][4])
+        if (boundary.get("visibility") not in allowed or boundary.get("trust") == "untrusted" or
+                boundary.get("trusted") is False or boundary.get("status") == "untrusted" or
+                boundary.get("kind") == "untrusted"):
+            return []
+        if current:
+            try:
+                source = self._source(boundary.get("source"))
+                actual = hashlib.sha256((self.vault_root / source).read_bytes()).hexdigest()
+                if actual != boundary.get("source_sha256"):
+                    return []
+            except (ValueError, OSError, TypeError):
+                return []
+        return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
+                for row in rows if (record := json.loads(row[4])).get("visibility") in allowed and
+                record.get("trust") != "untrusted" and record.get("trusted") is not False and
+                record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 
     def submit_receipt(self, event_id, summary, refs, harness):
         self._require_writable()
@@ -339,7 +392,7 @@ class MemoryStore:
         for record in records:
             if (record.get("visibility") not in allowed or record.get("trust") == "untrusted" or
                     record.get("trusted") is False or record.get("status") == "untrusted" or
-                    record.get("kind") == "untrusted"):
+                    record.get("kind") == "untrusted" or _rejected_inference(record)):
                 continue
             source = record.get("source", "")
             if source_directory is not None and Path(source).parent.as_posix() != source_directory:
@@ -452,7 +505,7 @@ class MemoryStore:
         eligible = []
         stale_count = 0
         for record in records:
-            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted":
+            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record):
                 continue
             if project is not None and record.get("project") != project:
                 continue

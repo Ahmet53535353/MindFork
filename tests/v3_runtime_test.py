@@ -203,6 +203,75 @@ class RuntimeContractTest(unittest.TestCase):
         self.assertIn('new', ids)
         self.assertNotIn('old', ids)
 
+    def test_rejected_inferences_are_history_only_across_context_paths(self):
+        rejected = self.record('rejected', kind='inference', validity='rejected',
+                               rejected_reason='User corrected this inference.',
+                               rejected_at='2026-09-24', text='Synthetic user prefers amber diagrams.')
+        legacy = self.record('legacy', kind='preference', status='rejected',
+                             text='Synthetic user prefers amber diagrams.')
+        current = self.record('current', kind='preference', validity='current',
+                              text='Synthetic user prefers amber diagrams.')
+        for record in (rejected, legacy, current):
+            self.store.ingest(record)
+        query = 'prefers amber diagrams'
+        for result in (self.store.retrieve(query), self.store.retrieve(query, strict=True),
+                        self.store.retrieve(query, statuses=['rejected'])):
+            self.assertNotIn('rejected', [row['id'] for row in result['records']])
+            self.assertNotIn('legacy', [row['id'] for row in result['records']])
+        for result in (self.store.retrieve(query), self.store.retrieve(query, strict=True)):
+            self.assertIn('current', [row['id'] for row in result['records']])
+        self.assertEqual([row['id'] for row in self.store.candidates(query)], ['current'])
+        self.assertNotIn('rejected', [row['id'] for row in self.store.snapshot_context()['records']])
+        self.assertNotIn('legacy', [row['id'] for row in self.store.snapshot_context()['records']])
+        self.assertIn('current', [row['id'] for row in self.store.snapshot_context()['records']])
+        history = self.store.history('rejected')
+        self.assertEqual(history[-1]['record']['rejected_reason'], 'User corrected this inference.')
+        self.assertEqual(history[-1]['record']['rejected_at'], '2026-09-24')
+        self.assertEqual(history[-1]['record']['validity'], 'rejected')
+
+    def test_rejection_does_not_change_task_lifecycle_or_invalid_metadata(self):
+        self.store.ingest(self.record('cancelled', status='cancelled'))
+        self.assertEqual([row['id'] for row in self.retrieve()['records']], ['cancelled'])
+        with self.assertRaisesRegex(ValueError, 'inference validity'):
+            self.store.ingest(self.record('typo', kind='inference', validity='rejecetd'))
+        with self.assertRaisesRegex(ValueError, 'rejected_reason'):
+            self.store.ingest(self.record('missing-reason', kind='inference', validity='rejected',
+                                          rejected_at='2026-09-24'))
+        with self.assertRaisesRegex(ValueError, 'rejected_at'):
+            self.store.ingest(self.record('invalid-date', kind='inference', validity='rejected',
+                                          rejected_reason='User corrected it.', rejected_at='2026-02-30'))
+
+    def test_history_keeps_visibility_and_current_source_hash_boundary(self):
+        self.store.ingest(self.record('private', kind='inference', validity='rejected',
+                                      rejected_reason='User corrected it.', rejected_at='2026-09-24',
+                                      visibility='private', text='Synthetic private preference canary.'))
+        self.assertEqual(self.store.history('private'), [])
+        self.assertEqual(len(self.store.history('private', audience='private')), 1)
+        self.store.update_task('private', 1, {'visibility': 'internal'})
+        self.assertEqual([event['revision'] for event in self.store.history('private')], [2])
+        self.store.ingest(self.record('stale', kind='inference', validity='rejected',
+                                      rejected_reason='User corrected it.', rejected_at='2026-09-24',
+                                      text='Synthetic stale preference canary.'))
+        self.assertEqual(len(self.store.history('stale')), 1)
+        (self.vault / 'notes/stale.md').write_text('Source changed after indexing.', encoding='utf-8')
+        self.assertEqual(self.store.history('stale'), [])
+
+    def test_history_with_missing_current_source_fails_closed(self):
+        self.store.ingest(self.record('missing-source', kind='inference', validity='rejected',
+                                      rejected_reason='User corrected it.', rejected_at='2026-09-24'))
+        with self.store._connect() as db:
+            row = db.execute('SELECT payload FROM records WHERE id=?', ('missing-source',)).fetchone()
+            record = json.loads(row[0])
+            record.pop('source')
+            db.execute('UPDATE records SET payload=? WHERE id=?', (json.dumps(record), 'missing-source'))
+        self.assertEqual(self.store.history('missing-source'), [])
+
+    def test_history_without_current_row_or_delete_event_fails_closed(self):
+        self.store.ingest(self.record('orphan'))
+        with self.store._connect() as db:
+            db.execute('DELETE FROM records WHERE id=?', ('orphan',))
+        self.assertEqual(self.store.history('orphan'), [])
+
     def test_deleted_source_not_retrieved_as_verified_fact(self):
         self.store.ingest(self.record())
         (self.vault / 'notes/record.md').unlink()

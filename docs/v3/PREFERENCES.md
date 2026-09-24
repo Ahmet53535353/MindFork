@@ -10,7 +10,7 @@ Ekonomik profil: auto_sync=true, interval_minutes=15, context_mode=session, cont
 
 ## Opt-in sır süzgeci
 
-`python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create gövdesi ve task-create gövdesinde yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.
+`python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create ve task-create gövdesi, bu komutların ve task-update değişikliklerinin `title`, `next_action`, `completion_criterion` ve `facts` alanlarında yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.
 
 Ek sabit sır değerleri vault dışındaki runtime klasöründe `secret-patterns.txt` dosyasına, satır başına bir değer olarak yazılabilir. Dosya regex çalıştırmaz; yorum satırları `#` ile başlar. Eşleşen metinler veya değerler sağlık kaydına yazılmaz, yalnız toplam eşleşme sayısı `doctor` sonucunda gösterilir. Bu önlem kazara kalıcı yazımı azaltır; tam bir DLP veya önceden yazılmış notları temizleme aracı değildir.
 
@@ -21,3 +21,9 @@ Aralığa takılmış bir kontrolde turn bağlamı istenirse eski kayıtları g�
 Özel V2 cron/LaunchAgent/Task Scheduler işleri veya kullanıcının ayrı kurduğu 15 dakikalık ücretli ajan otomasyonları bu tercihlerle kapatılmaz. Önce ilgili işi tespit edip ayrı yönetmek gerekir. V3 kendiliğinden Luna/Sonnet çalıştırmaz.
 
 Bu değişiklik yerel adaydır; yayımlanmış v3.0.0 paketine otomatik olarak eklenmez. Yeni paket yayımlanmadan kullanıcılara mevcut sürüm özelliği diye duyurulmamalıdır.
+
+## Stop'ta receipt hatırlatması
+
+Kurulum, Claude ve Codex için PostToolUse hook'unu yalnız dosya düzenleyen araçlara bağlar (`Edit|Write|apply_patch`). Bu olay geldiğinde hook, vault dışındaki runtime klasörüne oturum kimliğinin hash'iyle adlandırılmış küçük bir düzenleme işareti yazar; transcript okunmaz. Kabuk komutuyla yapılan düzenlemeler bu olayı tetiklemez. Stop'ta runtime kaydında aynı istemci ve aynı `session` değeriyle, düzenlemelerden sonra yazılmış bir receipt yoksa hook oturum başına bir kez Stop'u engeller ve `python3 beyin.py receipt --file RECEIPT_JSON --harness claude` komutunu (Codex için `--harness codex`, Windows'ta `py -3`) `Receipt session=<değer>` bilgisiyle birlikte hatırlatır. Bu değer receipt JSON'undaki `session` alanına yazılmazsa receipt bu checkpoint'i kapatmaz. Receipt'ten sonra yapılan yeni düzenlemeler yeni bir pencere açar.
+
+Stop olayı hatırlatmadan önce kuyruğa alınır. Runtime kaydı okunamazsa akış durdurulmaz. `stop_hook_active` taşıyan ikinci Stop, manuel profil (`auto_sync: false`) ve global köprü hatırlatma yapmaz; tek seferlik hakkı da harcamaz. Kullanıcı mesajında `[kaydetme]` yazarak bu oturumdaki hatırlatmayı kapatabilir; `BEYIN_V3_NO_RECEIPT_REMINDER=1` özelliği tamamen kapatır.
