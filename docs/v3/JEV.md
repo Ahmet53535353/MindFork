@@ -41,7 +41,7 @@ Kapalı bir özelliğin amacı çağrılırsa istemci anahtar okumadan ve ağa �
 
 ### Çağrı kaydı
 
-Her çağrı state dizinindeki `jev-calls.jsonl` dosyasına tek satırlık sayaç yazar: amaç, mod, önbellek isabeti, `degraded`, hata kodu, gecikme, giriş token sayısı ve zaman. Sorgu metni, aday metni, yanıt içeriği ve anahtar yazılmaz. Dosya sınırı aşarsa eski yarısı atılır. `jev status` ve `doctor` son 24 saati buradan özetler.
+Her çağrı state dizinindeki `jev-calls.jsonl` dosyasına tek satırlık sayaç yazar: amaç, mod, sağlayıcı (`provider`), önbellek isabeti, `degraded`, hata kodu, gecikme, giriş token sayısı, HTTP istek sayısı (`http_requests`) ve zaman. Sorgu metni, aday metni, yanıt içeriği ve anahtar yazılmaz. Dosya sınırı aşarsa eski yarısı atılır. `jev status` ve `doctor` son 24 saati buradan özetler.
 
 ### Elle düzenleme
 
@@ -51,7 +51,7 @@ Her çağrı state dizinindeki `jev-calls.jsonl` dosyasına tek satırlık saya�
 {"mode":"shadow","model":"jev-1.13.0","provider":"typesafe","timeout":3,"max_candidates":32,"max_questions":96,"max_input_chars":24000,"cache_ttl":3600}
 ```
 
-`TYPESAFE_API_KEY` ortam değişkeninde olmalıdır. Anahtarı Markdown'a, sürüm kontrolüne veya komut argümanına yazmayın. `env_file` kullanılırsa mutlak yol gerekir. Sağlayıcı URL'si `base_url` veya `TYPESAFE_BASE_URL` ile seçilir; HTTPS ve yerel HTTP desteklenir. Vercel uyumlu bir köprü kullanılıyorsa `provider: "vercel"` seçilebilir; bu bir Vercel hesap/anahtar kurucusu değildir.
+`TYPESAFE_API_KEY` ortam değişkeninde olmalıdır. Anahtarı Markdown'a, sürüm kontrolüne veya komut argümanına yazmayın. `env_file` kullanılırsa mutlak yol gerekir. Sağlayıcı URL'si `base_url` veya `TYPESAFE_BASE_URL` ile seçilir; HTTPS ve yerel HTTP desteklenir. Yerel adreslere (`localhost`, `127.0.0.1`, `::1`) giden çağrılar `HTTP_PROXY`, `ALL_PROXY` veya sistem proxy ayarlarını kullanmaz; uzak HTTPS adresleri tanımlı proxy üzerinden gitmeye devam eder. Vercel uyumlu bir köprü kullanılıyorsa `provider: "vercel"` seçilebilir; bu bir Vercel hesap/anahtar kurucusu değildir.
 
 ```sh
 python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state context "kısa notlar" --project demo --jev
