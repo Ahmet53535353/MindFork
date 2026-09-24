@@ -193,6 +193,12 @@ class MemoryStore:
         """Connections are scoped to each operation; provided for callers."""
 
     def context_for(self, harness, query, **kwargs):
+        if kwargs.get("strict") is True and self.STRICT_PASSAGES:
+            try:
+                from beyin_v3_passage import context_for as passage_context
+                return passage_context(self, harness, query, **kwargs)
+            except Exception:
+                pass  # a real failure or a still-building index keeps the note-level path
         return shared_context(self, harness, query, **kwargs)
 
     def _source(self, value):
@@ -492,13 +498,14 @@ class MemoryStore:
     STRICT_MIN_WEIGHT = 0.30
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
-    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False):
+    # Per-turn strict context ranks Markdown passages instead of whole notes and delivers the
+    # matching block (#83, beyin_v3_passage.py). An empty passage result is an answer.
+    STRICT_PASSAGES = True
+
+    def _eligible(self, audience="internal", project=None):
+        """Visibility, trust, project and source-freshness gates shared by every retrieval path."""
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
-        if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
-            raise ValueError("invalid query or budget")
-        if isinstance(statuses, str):
-            statuses = [statuses]
         with self._connect() as db:
             records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
         allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
@@ -519,6 +526,16 @@ class MemoryStore:
                 stale_count += 1
                 continue
             eligible.append(record)
+        return eligible, stale_count
+
+    def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False):
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
+            raise ValueError("invalid query or budget")
+        if isinstance(statuses, str):
+            statuses = [statuses]
+        eligible, stale_count = self._eligible(audience, project)
         superseded = {rid for record in eligible for rid in record["supersedes"]}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
