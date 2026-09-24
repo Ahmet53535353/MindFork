@@ -195,6 +195,9 @@ def _environment(config):
     return values
 
 
+LOOPBACK_HOSTS = ('localhost', '127.0.0.1', '::1')
+
+
 def _endpoint(base):
     try:
         parsed = urllib.parse.urlsplit(base)
@@ -203,7 +206,7 @@ def _endpoint(base):
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('endpoint_invalid')
     if not parsed.hostname or not (parsed.scheme=='https' or
-            parsed.scheme=='http' and parsed.hostname in ('localhost','127.0.0.1','::1')):
+            parsed.scheme=='http' and parsed.hostname in LOOPBACK_HOSTS):
         raise ValueError('endpoint_invalid')
     # Validate malformed ports as well.
     try:
@@ -219,10 +222,22 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise ValueError('redirect_rejected')
 
 
+def _opener(endpoint):
+    """Redirects are refused. A loopback endpoint also ignores HTTP_PROXY, ALL_PROXY and system proxies.
+
+    urllib does not bypass 127.0.0.1 by default, so a local bridge call would otherwise carry
+    note excerpts to the proxy host. Remote HTTPS endpoints keep the configured proxy.
+    """
+    handlers = [_NoRedirect()]
+    if urllib.parse.urlsplit(endpoint).hostname in LOOPBACK_HOSTS:
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers)
+
+
 def _transport(endpoint, body, key, timeout):
     request=urllib.request.Request(endpoint,data=json.dumps(body).encode(),
         headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},method='POST')
-    with urllib.request.build_opener(_NoRedirect()).open(request,timeout=timeout) as response:
+    with _opener(endpoint).open(request,timeout=timeout) as response:
         raw=response.read(1000001)
         if len(raw)>1000000: raise ValueError('response_too_large')
         return json.loads(raw)
@@ -341,10 +356,11 @@ def _cache_path(vault, digest):
 def evaluate(vault, query, candidates, *, source_versions=None, scope='user', facets=None, transport=None, purpose='retrieval', timeout_cap=None):
     started=time.monotonic()
     result=dict(mode='off',scores={},facet_scores={},relations={},diagnostics=[],degraded=False,cache_hit=False,
-                usage={},latency_ms=0,request_hash=None,reported_model=None,network_requests=0,
+                usage={},latency_ms=0,request_hash=None,reported_model=None,network_requests=0,http_requests=0,
                 confidence_provenance={'present':0,'missing':0,'used_for_selection':False})
+    provider=None
     try:
-        config=load_config(vault); result['mode']=config['mode']
+        config=load_config(vault); result['mode']=config['mode']; provider=config['provider']
         policy = inspect_config(vault)
         if not isinstance(purpose,str) or purpose not in PURPOSES: raise ValueError('purpose_invalid')
         result['purpose']=purpose
@@ -442,7 +458,9 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
         remaining=config['timeout']-(time.monotonic()-started)
         if remaining<=0: raise ValueError('deadline_exceeded')
         if inspect_config(vault) != policy: raise ValueError('configuration_changed')
+        # One logical call; http_requests counts wire requests separately.
         result['network_requests'] = 1
+        result['http_requests'] = 1
         raw=_bounded_transport(transport or _transport,endpoint,body,key,remaining)
         if inspect_config(vault) != policy: raise ValueError('configuration_changed')
         if time.monotonic()-started>config['timeout']: raise ValueError('deadline_exceeded')
@@ -490,8 +508,9 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
     finally:
         result['latency_ms']=round((time.monotonic()-started)*1000,3)
         if result['mode']!='off' and (result['request_hash'] or result['degraded']):
-            log_event(vault,dict(purpose=result.get('purpose'),mode=result['mode'],cache_hit=result['cache_hit'],
-                degraded=result['degraded'],network_requests=result['network_requests'],code=(result['diagnostics'] or [None])[-1] if result['degraded'] else None,
+            log_event(vault,dict(purpose=result.get('purpose'),mode=result['mode'],provider=provider,cache_hit=result['cache_hit'],
+                degraded=result['degraded'],network_requests=result['network_requests'],http_requests=result['http_requests'],
+                code=(result['diagnostics'] or [None])[-1] if result['degraded'] else None,
                 latency_ms=result['latency_ms'],input_tokens=result['usage'].get('input_tokens')))
     return result
 
@@ -501,8 +520,8 @@ LOG_LIMIT = 512000
 
 def log_event(vault, row):
     """Counters for doctor and calibration. Never request text, answers or credentials."""
-    allowed = {'purpose', 'mode', 'cache_hit', 'degraded', 'code', 'latency_ms', 'input_tokens',
-               'network_requests', 'event', 'strict', 'loose', 'dropped', 'rescued', 'gate_passed', 'outcome'}
+    allowed = {'purpose', 'mode', 'provider', 'cache_hit', 'degraded', 'code', 'latency_ms', 'input_tokens',
+               'network_requests', 'http_requests', 'event', 'strict', 'loose', 'dropped', 'rescued', 'gate_passed', 'outcome'}
     row = {k: v for k, v in row.items() if k in allowed and (
         v is None or type(v) is bool or (type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 1e12) or
         (isinstance(v, str) and re.fullmatch(r'[a-z_]{1,64}', v)))}
