@@ -514,6 +514,8 @@ def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
                 "omitted_count": len(records), "used_chars": 0, "budget_chars": budget_chars, "stale_count": stale_count}
 
     marker = " [truncated]"
+    min_useful_text = 150
+    short_threshold = 500
     candidates = []
     citations = []
     full_sizes = []
@@ -527,7 +529,12 @@ def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
         full_sz = len(_json(r)) + len(_json(cit))
         empty_r = dict(r, text="", text_truncated=True)
         overhead = len(_json(empty_r)) + len(_json(cit))
-        floor = min(full_sz, overhead + len(marker) + 1)
+        text_len = len(r.get("text", ""))
+
+        if text_len <= short_threshold:
+            floor = full_sz
+        else:
+            floor = min(full_sz, overhead + len(marker) + min_useful_text)
 
         if cum_floor + floor > budget_chars:
             continue
@@ -546,32 +553,15 @@ def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
     alloc = list(min_floors)
     remaining = budget_chars - cum_floor
 
-    # Multi-pass fair share distribution of remaining surplus
-    while remaining > 0:
-        needy = [i for i in range(active_count) if alloc[i] < full_sizes[i]]
-        if not needy:
+    # Distribute surplus in rank priority order to the top records
+    for i in range(active_count):
+        if remaining <= 0:
             break
-        share = max(1, remaining // len(needy))
-        progress = False
-        for i in needy:
-            give = min(share, full_sizes[i] - alloc[i], remaining)
-            if give > 0:
-                alloc[i] += give
-                remaining -= give
-                progress = True
-            if remaining == 0:
-                break
-        if not progress:
-            break
-
-    if remaining > 0:
-        for i in range(active_count):
-            if alloc[i] < full_sizes[i]:
-                give = min(remaining, full_sizes[i] - alloc[i])
-                alloc[i] += give
-                remaining -= give
-                if remaining == 0:
-                    break
+        needed = full_sizes[i] - alloc[i]
+        if needed > 0:
+            give = min(remaining, needed)
+            alloc[i] += give
+            remaining -= give
 
     selected, final_citations = [], []
     used = 0
@@ -581,33 +571,35 @@ def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
     for i in range(active_count):
         record = candidates[i]
         citation = citations[i]
-        target_budget = min(full_sizes[i], alloc[i] + slack)
+        avail = alloc[i] + slack
 
-        if full_sizes[i] <= target_budget:
+        if full_sizes[i] <= avail:
             selected.append(record)
             final_citations.append(citation)
             used += full_sizes[i]
-            slack = target_budget - full_sizes[i]
+            slack = avail - full_sizes[i]
+            clipped_any = clipped_any or bool(record.get("text_truncated"))
         else:
             clipped = dict(record, text="", text_truncated=True)
-            avail = target_budget - len(_json(clipped)) - len(_json(citation))
-            if avail <= len(marker):
-                slack += target_budget
+            overhead = len(_json(clipped)) + len(_json(citation))
+            max_text_room = avail - overhead - len(marker)
+            if max_text_room < min_useful_text:
+                slack = avail
                 continue
-            text = record["text"][:avail - len(marker)]
+            text = record["text"][:max_text_room]
             clipped["text"] = text + marker
-            while text and len(_json(clipped)) + len(_json(citation)) > target_budget:
+            while text and len(_json(clipped)) + len(_json(citation)) > avail:
                 text = text[:-1]
                 clipped["text"] = text + marker
-            if not text:
-                slack += target_budget
+            if len(text) < min_useful_text:
+                slack = avail
                 continue
             record_size = len(_json(clipped)) + len(_json(citation))
             selected.append(clipped)
             final_citations.append(citation)
             used += record_size
+            slack = avail - record_size
             clipped_any = True
-            slack = target_budget - record_size
 
     omitted = len(records) - len(selected)
     return {"records": selected, "citations": final_citations, "abstained": not selected,
