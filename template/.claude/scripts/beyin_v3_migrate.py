@@ -97,16 +97,25 @@ def migration_guard(vault_root, state_dir):
                 'historical_receipts': sorted(p.relative_to(vault).as_posix() for p in (vault/'receipts').glob('*.md'))}
         if prior.exists():
             plan['previous'] = json.loads(prior.read_text(encoding='utf-8'))
+        # Runners the user kept at install time stay theirs on every later update.
+        manifest = state/'v3-install.json'
+        if manifest.exists():
+            kept = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', [])
+            if kept:
+                plan['kept_legacy'] = sorted(kept)
         yield plan
 
 
 def finalize_migration(vault_root, state_dir, plan):
     from beyin_v3_sync import atomic
     vault, state = Path(vault_root).resolve(), Path(state_dir).resolve()
+    kept = set(plan.get('kept_legacy', []))
     for name in LEGACY_RUNNERS:
         path = vault/name
         if path.is_symlink():
             raise RuntimeError('legacy runner symlink requires explicit reconciliation')
+        if name in kept:
+            continue
         if path.exists() and ('BEYIN_V3_LEGACY_RETIRED' not in path.read_text(encoding='utf-8')):
             raise RuntimeError('legacy runner not retired; use supported installer cutover')
     sources, states = _inventory(vault)

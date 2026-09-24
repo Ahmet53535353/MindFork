@@ -115,7 +115,7 @@ def parser():
     context = sub.add_parser("context", help="Retrieve source-backed shared context")
     context.add_argument("query", nargs="?", help="Query; alternatively use --file")
     context.add_argument("--file", help="JSON retrieval arguments, or - for stdin")
-    context.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode"), default="codex")
+    context.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
     context.add_argument("--project")
     context.add_argument("--audience", choices=("internal", "public"), default="internal")
     context.add_argument("--status", action="append", dest="statuses")
@@ -138,7 +138,7 @@ def parser():
     answer.add_argument("--project", required=True)
     receipt = sub.add_parser("receipt", help="Submit an idempotent source-linked receipt")
     receipt.add_argument("--file", default="-", help="JSON input path, or - for stdin")
-    receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode"), default="codex")
+    receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
     update = sub.add_parser("task-update", help="Update task with expected revision")
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
@@ -200,13 +200,15 @@ def main(argv=None):
             for filename in ("hook-health.json", "hook-error.json", "receipt-gaps.json"):
                 path = state / filename
                 result[filename] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-            seen = {name: set() for name in ('codex', 'claude', 'antigravity', 'hermes', 'opencode')}
+            seen = {name: set() for name in ('codex', 'claude', 'antigravity', 'hermes', 'opencode', 'omp')}
             for path in (state/'hook-done').glob('*.json'):
                 event = json.loads(path.read_text(encoding='utf-8'))
                 if event.get('harness') in seen:
                     seen[event['harness']].add(event.get('event', 'unknown'))
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
+            manifest = state / 'v3-install.json'
+            result['kept_legacy_runners'] = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', []) if manifest.exists() else []
             load_sync()
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)

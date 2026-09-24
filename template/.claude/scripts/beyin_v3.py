@@ -13,7 +13,7 @@ import unicodedata
 
 
 # Every supported client. "manual" is accepted for receipts only.
-HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode")
+HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode", "omp")
 
 # Frontmatter keys other tools write instead of updated_at, in precedence order.
 RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")

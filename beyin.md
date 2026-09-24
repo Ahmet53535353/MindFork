@@ -139,9 +139,11 @@ Vault kokunde su kontrolleri yap:
 Ek olarak `.beyin-version`, `.agents/skills/beyin/SKILL.md`,
 `.agents/skills/beyin-doktor/SKILL.md` ve `.agents/skills/beyin-guncelle/SKILL.md`
 dosyalarinin varligini kontrol et. Kurulumdan sonra gecici ZIP ve acma klasorunu sil;
-kullanici notlarina dokunma. Kurulum vault kokundeki `AGENTS.md` ve `CLAUDE.md`
-dosyalarina `<!-- beyin-v3:start -->` isaretli yonetilen bir bolum ekler; mevcut icerik
-korunur. Kullaniciya verdigin ozette neyin eklendigini yaz.
+kullanici notlarina dokunma. Kurulum vault kokundeki `AGENTS.md` dosyasina
+`<!-- beyin-v3:start -->` isaretli yonetilen bir bolum ekler; mevcut icerik korunur.
+`CLAUDE.md` yoksa yalniz `@AGENTS.md` import satiriyla olusturulur. `AGENTS.md`'yi zaten
+import eden `CLAUDE.md`'ye bolum ikinci kez eklenmez; import etmeyen `CLAUDE.md`'ye ayni
+bolum eklenir. Kullaniciya verdigin ozette neyin eklendigini yaz.
 
 Kurulum vault kokune yalniz ilgili platformun guncelleme kisayolunu birakir: macOS'ta
 `Beyni Güncelle.command`, Windows'ta `Beyni Guncelle.cmd`, Linux'ta `Beyni Güncelle.sh`
@@ -151,9 +153,11 @@ diyerek ya da bu kisayolla guncelleyebilir.
 
 Codex'te `/hooks` incelemesini, Claude Code ve Antigravity'de normal workspace/klasor
 guvenini kullaniciya goster. Guven hash'i uydurma veya onayi atlatma. OpenCode icin ek
-guven adimi yoktur; vault klasorunde OpenCode acilinca eklenti yuklenir. Hermes Agent
-kullaniliyorsa installer eklenti dosyalarini vault icine yazar, ancak baglanti icin
-`hermes plugins enable beyin-v3` ve yeniden baslatma adimlari kullaniciya aittir; adimlar
+guven adimi yoktur; vault klasorunde OpenCode acilinca eklenti yuklenir. OMP icin de ek
+guven adimi yoktur; vault klasorunde OMP acilinca `.omp/hooks/pre/beyin-v3.ts` hook'u
+yuklenir. Hermes Agent kullaniliyorsa installer eklenti dosyalarini vault icine yazar,
+ancak baglanti icin `hermes plugins enable beyin-v3` ve yeniden baslatma adimlari
+kullaniciya aittir; adimlar
 `https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/HERMES.md` icindedir.
 Ardindan yeni bir istemci oturumu acilmasini iste. Codex Desktop otomatik hook baglami
 gorunmezse bu bir kurulum basarisi iddiasi degildir; kurulu `beyin.py context` ve `sync`

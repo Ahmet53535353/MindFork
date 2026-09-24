@@ -131,7 +131,10 @@ python3 scripts/install_v3.py --vault /absolute/path/to/vault
 
 This copies self-contained Python modules into `.claude/scripts`, enables project
 Codex `[features] hooks = true`, preserves unrelated hook handlers and settings,
-and adds a bounded managed instruction block to AGENTS.md and CLAUDE.md.
+and adds a bounded managed instruction block to AGENTS.md. Claude Code by default
+reads AGENTS.md only when no CLAUDE.md exists, so a missing CLAUDE.md is created as
+a single `@AGENTS.md` import, a CLAUDE.md that already imports AGENTS.md gets no
+second copy, and any other CLAUDE.md receives the same block.
 Recognized legacy adapters are retired to prevent duplicate writes. An exact
 pre-install backup and installed hashes live in the external runtime directory.
 Repeating installation is idempotent; edits to managed files require reconciliation.
