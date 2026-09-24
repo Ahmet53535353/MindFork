@@ -70,6 +70,42 @@ def check(candidate, baseline):
             checks.append(dict(initial_mode=saved, mode_after_upgrade=saved, mode_after_disable_rollback_update='off',
                                advanced_config_preserved=True, installed_memory_command=True,
                                markdown_alias_policy_roundtrip=True, provider_cache_created=False))
+        # The optional local Laya provider lives in a nested `laya` block. A released client
+        # that predates it rejects the unknown key, so after a rollback the advisor is off
+        # (config_invalid) instead of treating the file as TypeSafe and sending the key to a
+        # local port. Nothing listens on the Laya port here and no provider call is made.
+        vault = root / 'Installed laya'; vault.mkdir(); state = root / 'state-laya'
+        laya_env = dict(env, TYPESAFE_API_KEY='MARKER-NOT-A-REAL-KEY')
+        installed = run_python(root / 'old/scripts/install_v3.py', ['--vault', vault, '--state', state], root, laya_env)
+        assert installed.returncode == 0, installed.stderr
+        def cli(*args, payload=None):
+            response = run_python(vault / 'beyin.py', args, root, laya_env, payload)
+            assert response.returncode == 0, response.stderr
+            return json.loads(response.stdout)
+        assert cli('update', '--package', candidate)['status'] == 'updated'
+        chosen = cli('jev', 'shadow', '--provider', 'laya', '--disable', 'auto_context')
+        assert chosen['provider'] == 'laya' and chosen['config_valid'] and 'warning' not in chosen
+        assert chosen['laya']['base_url'].startswith('http://127.0.0.1:') and chosen['laya']['model'] == 'multilingual'
+        configured = (state / 'jev.json').read_bytes()
+        assert set(json.loads(configured)['laya']) == {'base_url', 'model'}
+        cli('note-create', '--file', '-', payload=dict(source='notes/laya-proof.md', text='Laya geri alma kaniti.',
+            metadata=dict(id='laya-proof', kind='fact', project='demo', aliases=['laya-proof-alias'])))
+        assert cli('rollback')['status'] == 'rolled_back'
+        assert (state / 'jev.json').read_bytes() == configured
+        old_status = cli('jev', 'status')
+        assert old_status['config_valid'] is False and old_status['mode'] == 'off' and not old_status['automatic_model_calls']
+        found = cli('context', 'laya-proof-alias', '--project', 'demo', '--jev')
+        assert found['jev']['mode'] == 'off' and found['jev']['diagnostics'] == ['config_invalid']
+        assert [r['id'] for r in found['records']] == ['laya-proof']
+        assert not (state / '.cache/jev').exists() and not (state / 'jev-calls.jsonl').exists()
+        assert cli('update', '--package', candidate)['status'] == 'updated'
+        restored = cli('jev', 'status')
+        assert restored['config_valid'] and restored['provider'] == 'laya' and restored['mode'] == 'shadow'
+        back = cli('jev', 'off', '--provider', 'typesafe')
+        assert back['provider'] == 'typesafe' and 'laya' in json.loads((state / 'jev.json').read_text(encoding='utf-8'))
+        checks.append(dict(initial_mode='shadow', provider='laya', mode_after_rollback='off',
+                           config_valid_after_rollback=False, provider_cache_created=False,
+                           restored_after_update=True))
         clean = root / 'Clean'; clean.mkdir(); state = root / 'clean-state'
         installed = run_python(root / 'new/scripts/install_v3.py', ['--vault', clean, '--state', state], root, env)
         assert installed.returncode == 0, installed.stderr
