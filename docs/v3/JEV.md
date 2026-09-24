@@ -51,7 +51,7 @@ Her çağrı state dizinindeki `jev-calls.jsonl` dosyasına tek satırlık saya�
 {"mode":"shadow","model":"jev-1.13.0","provider":"typesafe","timeout":3,"max_candidates":32,"max_questions":96,"max_input_chars":24000,"cache_ttl":3600}
 ```
 
-`TYPESAFE_API_KEY` ortam değişkeninde olmalıdır. Anahtarı Markdown'a, sürüm kontrolüne veya komut argümanına yazmayın. `env_file` kullanılırsa mutlak yol gerekir. Sağlayıcı URL'si `base_url` veya `TYPESAFE_BASE_URL` ile seçilir; HTTPS ve yerel HTTP desteklenir. Yerel adreslere (`localhost`, `127.0.0.1`, `::1`) giden çağrılar `HTTP_PROXY`, `ALL_PROXY` veya sistem proxy ayarlarını kullanmaz; uzak HTTPS adresleri tanımlı proxy üzerinden gitmeye devam eder. Vercel uyumlu bir köprü kullanılıyorsa `provider: "vercel"` seçilebilir; bu bir Vercel hesap/anahtar kurucusu değildir.
+`TYPESAFE_API_KEY` ortam değişkeninde olmalıdır. Anahtarı Markdown'a, sürüm kontrolüne veya komut argümanına yazmayın. `env_file` kullanılırsa mutlak yol gerekir. Sağlayıcı URL'si `base_url` veya `TYPESAFE_BASE_URL` ile seçilir; HTTPS ve yerel HTTP desteklenir. Yerel adreslere (`localhost`, `127.0.0.1`, `::1`) giden çağrılar `HTTP_PROXY`, `ALL_PROXY` veya sistem proxy ayarlarını kullanmaz; uzak HTTPS adresleri tanımlı proxy üzerinden gitmeye devam eder. Vercel uyumlu bir köprü kullanılıyorsa `provider: "vercel"` seçilebilir; bu bir Vercel hesap/anahtar kurucusu değildir. Anahtarsız, yerelde çalışan açık ağırlıklı model için [Laya bölümüne](#yerel-laya-arka-ucu-isteğe-bağlı) bakın.
 
 ```sh
 python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state context "kısa notlar" --project demo --jev
@@ -256,3 +256,69 @@ Yerel sonuca geri dönülen durumlar: 12 karakterden kısa mesaj, yerel sır ör
 Bedeli açıkça: her mesajda mesaj metni ve aday notların başlığı ile ilk 600 karakteri sağlayıcıya gider. İstanbul'dan tek atımlık çağrı ortanca 1,3 saniye, yüzde onu 2 saniyenin üstünde sürdü (sunucu ABD batı kıyısında); bu gecikme her eşleşen mesaja eklenir. İstek başına yaklaşık 600-1.500 girdi token'ı harcanır.
 
 Ölçüm (2026-09-20, canlı Jev, 12 sentetik Türkçe/İngilizce not, 26 mesaj, tek koşu): ilgili notu bulma 13/17'den 15/17'ye çıktı, alakasız not enjeksiyonu 2'den 1'e indi, strict'in bulduğu hiçbir ilgili not kaybedilmedi, bir çağrı zaman aşımına uğrayıp yerel sonuca döndü. Bir yanlış ekleme oldu ("bu fonksiyonu test için refactor et" mesajına test stratejisi notu). Bu sentetik bir ölçümdür ve Jev aynı isteğe her seferinde biraz farklı puan verir; gerçek kasada isabet daha düşük çıkabilir. Kendi notlarınızda önce `shadow` ile birkaç gün sayaçlara bakın, sonra `on` yapın.
+
+## Yerel Laya arka ucu (isteğe bağlı)
+
+[Laya](https://github.com/NandhaKishorM/laya), Convai Innovations'ın Apache 2.0 lisanslı, açık ağırlıklı System One karar modelidir. `laya-serve` sunucusu Jev ile aynı `POST /v1/systemone` protokolünü konuşur. Beyin, Laya'yı ayrı kurulan yerel bir sunucu olarak kullanır: Beyin paketine Laya kodu, model ağırlığı veya PyTorch girmez; hook ve CLI `torch` ya da `laya` içe aktarmaz (`tests/v3_stdlib_imports_test.py` bunu denetler). Varsayılan sağlayıcı değişmez; Laya yalnız açıkça seçilince kullanılır.
+
+### Laya'yı Beyin dışında kurma
+
+Laya Python 3.10+ ve PyTorch ister. Beyin'in ortamına değil, ayrı bir araç ortamına kurun:
+
+    pipx install "laya[serve]"
+    LAYA_HOST=127.0.0.1 LAYA_PORT=8765 LAYA_MODELS=multilingual laya-serve
+
+Windows PowerShell:
+
+    $env:LAYA_HOST = "127.0.0.1"; $env:LAYA_PORT = "8765"; $env:LAYA_MODELS = "multilingual"; laya-serve
+
+`LAYA_HOST=127.0.0.1` şarttır: `laya-serve` varsayılan olarak `0.0.0.0` adresini dinler ve aynı ağdaki cihazlara açılır. Beyin'in varsayılan adresi `http://127.0.0.1:8765` olduğu için `LAYA_PORT=8765` verin. `laya-serve`'in kendi varsayılanı olan 8000 sık kullanılan bir geliştirme portudur; Laya kapalıyken orada çalışan başka bir uygulama not metnini almasın diye Beyin 8000'i varsaymaz. İlk çalıştırma modeli Hugging Face'ten indirir (multilingual yaklaşık 650 MB). İndirmeden sonra `HF_HUB_OFFLINE=1` ile başlatmak sunucunun ağa çıkmasını ve istek üzerine yeni model indirmesini önler. Apple Silicon'da `LAYA_DEVICE=mps` kullanılabilir; yalnız CPU varsa `LAYA_THREADS` fiziksel çekirdek sayısını geçmemelidir. Sunucu yüklü modellerle birlikte birkaç GB bellek tutar.
+
+### Açma ve kapatma
+
+    python beyin.py jev shadow --provider laya
+    python beyin.py jev status --check
+    python beyin.py jev on --provider laya --model multilingual
+    python beyin.py jev on --provider typesafe
+
+Son komut Jev'e döner; Laya ayarları saklanır. `--base-url` ve `--model` yalnız Laya sağlayıcısıyla kabul edilir. `status --check` yalnız yapılandırılmış yerel sunucunun `/health` adresini bir kez okur (1 saniye), not veya anahtar göndermez; TypeSafe'i hiç yoklamaz. `doctor` ağa çıkmaz.
+
+Ayar `jev.json` içinde ayrı bir `laya` bloğunda durur:
+
+    {"mode":"shadow","provider":"laya","laya":{"base_url":"http://127.0.0.1:8765","model":"multilingual"}}
+
+- `base_url` yalnız `127.0.0.1` veya `::1` olabilir; `localhost` bile kabul edilmez, çünkü hosts dosyası onu başka bir adrese yönlendirebilir. `TYPESAFE_BASE_URL` Laya çağrılarını yönlendirmez; ortamdaki HTTP proxy ayarları bu çağrılarda kullanılmaz.
+- Anahtar gerekmez. `laya-serve` `LAYA_API_KEY` ile çalışıyorsa aynı değer Beyin'in ortamında (veya `env_file` içinde) `LAYA_API_KEY` olarak bulunmalıdır. `TYPESAFE_API_KEY` Laya'ya hiçbir zaman gönderilmez.
+- `model`: `multilingual` (varsayılan; Türkçe ve İngilizce, satır başına 1024 token) veya `english` (yalnız İngilizce, 512 token). Tek model sabitlenir; aynı sorudaki adaylar farklı modellerle puanlanmaz. Sunucu başka bir modelle cevap verirse sonuç atılır (`laya_checkpoint_mismatch`). `typed-decisions` desteklenmez: başka iş akışlarına göre eğitilmiştir ve yüklü olmayan bir sunucuda ilk istekte 843 MB indirme başlatır.
+- `timeout` en fazla 10 saniyedir, varsayılan 8. Hook yolu yine en fazla 2 saniye bekler; yetişmezse yerel sonuç kullanılır.
+- Laya desteğinden önceki bir sürüme `rollback` yapılırsa eski sürüm `laya` bloğunu tanımaz, ayarı geçersiz sayar ve danışmanı kapatır; TypeSafe anahtarını yerel porta göndermez. Eski sürümde Jev'e dönmek için bloğu `jev.json`'dan silin. Bu davranış `scripts/verify_v3_jev_package.py` içinde yayımlanmış 3.1.0 ile doğrulanır.
+
+### Jev'den farkları
+
+Laya her soruyu ayrı bir satırda değerlendirir ve satırın ilk 512 veya 1024 token'ından fazlasını hata vermeden keser. Jev için tek istekte birden çok notu anahtarla adresleyen biçim Laya'da sonraki notları görünmez yapardı. Bu yüzden Laya arka ucu her isteğe tek aday ve tek soru koyar: `auto_context` için bir konu isteği ve not başına bir istek, `context --jev` için aday ve alt istek başına bir istek, `jev-answer` için iddia başına bir istek, `jev-memory` için üç boyut ve eski kayıt başına birer istek. Sorular kısa, soru önde ve İngilizcedir; seçenek metinleri Jev ile aynıdır. En fazla 48 istek yapılır; istekler tek sırayla gider, çünkü `laya-serve` aynı anda tek çıkarım yapar. `jev-answer` da Laya ile paketleri paralel değil sırayla gönderir.
+
+Metin sığdırılmak için kesilmez. Her istek gönderilmeden önce ölçülmüş bir boyut sınırıyla karşılaştırılır; biri aşarsa hiçbir istek yapılmaz ve sonuç `laya_state_too_large` ile yerel sonuca döner. Tek bilinçli kısaltma `auto_context` isteminin payıdır: konu isteği ve her not isteği, notu kesmeden sınıra sığan kadar istem taşır. Sınırı yine de dolduran bir satır cevaptan sonra yakalanır: satır token sınırına ulaştıysa sonuç atılır (`laya_state_truncated`). Laya'da iddia başına kaynak bağlamı 4.000 yerine 1.200 karakterle (`english` için 400) sınırlıdır; aşan iddia yalnız kendisi için `source_context_incomplete` ile yerel incelemeye döner.
+
+Sınırlar 2026-09-24'te iki modelin kendi tokenizer'ıyla ölçüldü: şablonlar soru ve seçenekler için 39 ile 102 token arası yer tutar, duruma en az 918 (multilingual) veya 403 (english) token kalır. Boyut birimi karakter sayısıdır; rakamlar ve U+024F üstündeki karakterler (CJK, emoji) daha ağır sayılır, Türkçe harfler tek birimdir. Türkçe belgeler, ASCII Türkçe, İngilizce metin, 493 gerçek Markdown not ve Python kodu üzerinde birim başına token en fazla 0,52 (multilingual) ve 0,50 (english) çıktı. Gerçek notlardan kurulan 1.080 `auto_context`, 960 `context --jev` ve bağlam sınırını geçen 909 `jev-answer` isteğinin hiçbiri multilingual sınırını aşmadı; en fazla alanın yüzde 57'sini kullandı. `english` modelinde aynı not isteklerinin hiçbiri sığmadı; bu model yalnız kısa İngilizce içerik içindir ve not boyutlu isteklerde yerel sonuca döner.
+
+`choice` sorularında güven, Laya'nın entropi tabanlı `confidence` alanından değil en olası seçeneğin olasılığından alınır; Laya'nın kalibre ettiği değer budur. Kayıtta `confidence_provenance.origin` değeri `laya_max_probability` olur.
+
+### Eşikler ölçülene kadar
+
+Karar eşikleri `beyin_v3_jev_client.THRESHOLDS` tablosunda sağlayıcı ve model çiftine göre durur. Jev satırı canlı ölçümlerden gelir. Laya satırları şimdilik Jev değerlerinin kopyasıdır ve `verified: false` işaretlidir:
+
+- `auto_context` Laya ile `on` modunda bile yalnız puanları kaydeder (`scored_unverified`) ve teslim edilen bağlamı değiştirmez. Ölçüm sonrası tabloda `verified: true` yapılınca eşikler uygulanır.
+- `jev-answer` ve `jev-memory` sonuçları uygulanır ama çıktıda `calibration: "unverified_for_provider"` bulunur; 0,8 güven eşiği Laya için ölçülmedi.
+- `status` bunu `calibration: "jev_thresholds_unverified_for_laya"` ve `auto_context_applied: false` ile gösterir. Önce `shadow` ile birkaç gün sayaçlara bakın.
+
+### Gizlilik
+
+Laya yerelde çalışsa da gönderim kuralları Jev ile aynıdır: `private` notlar, `remote_allowed: false` ve `sensitivity: sensitive` kayıtlar, `daily/` oturum notları ve sır örüntüsüyle eşleşen metinler gönderilmez. Bir loopback portunu yalnız `laya-serve` değil herhangi bir yerel süreç dinleyebilir. Yerel-only notları yalnız yerel Laya'ya açan bir seçenek (`local_only_notes`) ileride ayrıca değerlendirilecek; bugün `laya` bloğunda bu anahtar geçersizdir. Acil kapatma (`BEYIN_JEV_DISABLE=1`, `jev.disabled`), özellik anahtarları, çağrı kaydı ve önbellek aynı şekilde çalışır; kayıtta `provider` alanı `laya`, `http_requests` gerçek istek sayısı olur. Jev ve Laya önbellekleri birbirine karışmaz.
+
+### Ölçüm
+
+Bu depodaki Laya testleri sahte bir yerel sunucuyla çalışır ve model kalitesi hakkında bilgi vermez. Laya'nın kendi README'sindeki doğruluk sayıları bu depoda doğrulanmadı.
+
+<!-- BENCH -->
+Jev ile Laya karşılaştırmasının ölçülen sonuçları bu bloğa eklenecek. Sonuç gelene kadar Laya eşik satırları `verified: false` kalır.
+<!-- /BENCH -->
