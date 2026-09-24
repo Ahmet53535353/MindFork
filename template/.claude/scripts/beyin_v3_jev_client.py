@@ -196,14 +196,20 @@ def _environment(config):
 
 
 def _endpoint(base):
-    parsed = urllib.parse.urlsplit(base)
+    try:
+        parsed = urllib.parse.urlsplit(base)
+    except ValueError:  # e.g. an unclosed IPv6 bracket
+        raise ValueError('endpoint_invalid') from None
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError('endpoint_invalid')
     if not parsed.hostname or not (parsed.scheme=='https' or
             parsed.scheme=='http' and parsed.hostname in ('localhost','127.0.0.1','::1')):
         raise ValueError('endpoint_invalid')
     # Validate malformed ports as well.
-    parsed.port
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError('endpoint_invalid') from None
     base=base.rstrip('/')
     return base+'/systemone' if base.endswith('/v1') else base+'/v1/systemone'
 
@@ -427,7 +433,9 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                     if inspect_config(vault) != policy: raise ValueError('configuration_changed')
                     result['cache_hit']=True
                     return result
-        except (OSError,ValueError,KeyError,TypeError):
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            if isinstance(exc, ValueError) and str(exc) == 'configuration_changed':
+                raise
             result['diagnostics'].append('cache_unavailable')
         key=env.get('TYPESAFE_API_KEY')
         if not key: raise ValueError('credentials_missing')
