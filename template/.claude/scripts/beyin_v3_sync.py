@@ -221,7 +221,7 @@ class SyncEngine:
                             result[k] = v_redacted
                             total_redacted += count
                         else:
-                            cand_redacted, c2 = redact_secrets(f'{k}: {json.dumps(v)}', self.state)
+                            cand_redacted, c2 = redact_secrets(f'{k}: {json.dumps(v, ensure_ascii=False)}', self.state)
                             if c2 > 0:
                                 result[k] = '[REDACTED]'
                                 total_redacted += c2
@@ -238,7 +238,7 @@ class SyncEngine:
                                     new_list.append(item_redacted)
                                     total_redacted += count
                                 else:
-                                    cand_redacted, c2 = redact_secrets(f'{k}: {json.dumps(item)}', self.state)
+                                    cand_redacted, c2 = redact_secrets(f'{k}: {json.dumps(item, ensure_ascii=False)}', self.state)
                                     if c2 > 0:
                                         new_list.append('[REDACTED]')
                                         total_redacted += c2
@@ -246,6 +246,8 @@ class SyncEngine:
                                         new_list.append(item)
                             elif isinstance(item, dict):
                                 new_list.append(_walk_facts(item))
+                            elif isinstance(item, list):
+                                new_list.append(_walk_facts({k: item})[k])
                             else:
                                 new_list.append(item)
                         result[k] = new_list

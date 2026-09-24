@@ -10,7 +10,7 @@ Ekonomik profil: auto_sync=true, interval_minutes=15, context_mode=session, cont
 
 ## Opt-in sır süzgeci
 
-`python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create gövdesi ve task-create gövdesinde yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.
+`python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create ve task-create gövdesi, bu komutların ve task-update değişikliklerinin `title`, `next_action` ve `facts` alanlarında yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.
 
 Ek sabit sır değerleri vault dışındaki runtime klasöründe `secret-patterns.txt` dosyasına, satır başına bir değer olarak yazılabilir. Dosya regex çalıştırmaz; yorum satırları `#` ile başlar. Eşleşen metinler veya değerler sağlık kaydına yazılmaz, yalnız toplam eşleşme sayısı `doctor` sonucunda gösterilir. Bu önlem kazara kalıcı yazımı azaltır; tam bir DLP veya önceden yazılmış notları temizleme aracı değildir.
 

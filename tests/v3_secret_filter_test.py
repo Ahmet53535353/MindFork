@@ -1,9 +1,11 @@
 """Opt-in write-path secret filtering; all fixtures are synthetic."""
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -238,6 +240,77 @@ class SecretFilterTest(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             _safe(store, card_with_secret)
         self.assertEqual(str(cm.exception), 'advisor_sensitive_input')
+
+    def test_quoted_values_with_quotes_or_backslashes_stay_redacted(self):
+        """Main redacted these through the generic value run; keep parity for quoted values."""
+        for text, secret in QUOTED_REGRESSIONS:
+            with self.subTest(text=text):
+                filtered, count = redact(text, self.state)
+                self.assertGreaterEqual(count, 1)
+                self.assertNotIn(secret, filtered)
+                self.assertNotIn(_tail(secret), filtered)
+
+    def test_planted_quoted_secrets_never_reach_note_or_task_files(self):
+        save(self.vault, {'secret_filter': True})
+        for number, (text, secret) in enumerate(QUOTED_REGRESSIONS):
+            with self.subTest(text=text):
+                note = self.engine.note_create(f'notes/planted-{number}.md', 'Body ' + text,
+                                               {'title': 'Note ' + text})
+                task = self.engine.task_create(f'tasks/planted-{number}.md', 'Body.', {
+                    'id': f'planted-{number}', 'title': 'Task', 'status': 'active',
+                    'owner': 'me', 'next_action': text})
+                self.assertGreaterEqual(note['secrets_redacted'], 2)
+                self.assertGreaterEqual(task['secrets_redacted'], 1)
+                for result in (note, task):
+                    content = (self.vault/result['source']).read_text(encoding='utf-8')
+                    self.assertNotIn(_tail(secret), content)
+
+    def test_key_aware_facts_cover_non_ascii_and_escaped_values(self):
+        save(self.vault, {'secret_filter': True})
+        facts = {'password': 'şifre12345', 'token': "Xk9'mQ2!vL", 'secret': 'abc\\defghij',
+                 'passwd': 'hunter2hunter2', 'api_key': [['güvenlik2026']], 'environment': 'production'}
+        result = self.engine.task_create('tasks/tr.md', 'Body.', {
+            'id': 'tr-task', 'title': 'TR', 'status': 'active', 'owner': 'me', 'facts': facts})
+        self.assertEqual(result['facts'], dict({key: '[REDACTED]' for key in facts},
+                                               api_key=[['[REDACTED]']], environment='production'))
+        self.assertGreaterEqual(result['secrets_redacted'], 5)
+        content = (self.vault/'tasks/tr.md').read_text(encoding='utf-8')
+        for fragment in ('ifre12345', 'mQ2!vL', 'defghij', 'hunter2hunter2', 'venlik2026'):
+            self.assertNotIn(fragment, content)
+        self.assertIn('production', content)
+        updated = self.engine.update_task('tr-task', 1, {
+            'facts': {'password': 'güçlüParola99', 'token': "it'sasecret1"},
+            'next_action': 'password: "Pa\\"ssword123"'})
+        self.assertEqual(updated['facts'], {'password': '[REDACTED]', 'token': '[REDACTED]'})
+        self.assertGreaterEqual(updated['secrets_redacted'], 3)
+        content = (self.vault/'tasks/tr.md').read_text(encoding='utf-8')
+        for fragment in ('Parola99', 'sasecret1', 'ssword123'):
+            self.assertNotIn(fragment, content)
+
+    def test_pathological_runs_stay_linear(self):
+        for text in ('\\' * 20000 + 'password', 'x://' + ':' * 20000, 'x://' + 'a:' * 10000,
+                     'password: "' + 'a' * 20000, 'password: "a' * 2000):
+            with self.subTest(text=text[:12], length=len(text)):
+                started = time.monotonic()
+                redact(text, self.state)
+                self.assertLess(time.monotonic() - started, 2.0)
+
+
+# Every quoted-value regression example from the maintainer review of #76:
+# (planted text, secret). _tail() is an escape-free fragment that must not survive JSON frontmatter.
+QUOTED_REGRESSIONS = [
+    ('password: "Xk9\'mQ2!vL"', "Xk9'mQ2!vL"),
+    ("password: 'Pa\"ssword123'", 'Pa"ssword123'),
+    ('password: "abc\\\\defghij"', 'abc\\\\defghij'),
+    ('password: "it\'sasecret1"', "it'sasecret1"),
+    ('{"password": "Xk9\'mQ2!vLzz"}', "Xk9'mQ2!vLzz"),
+    ('{"password": "abc\\"defghij"}', 'abc\\"defghij'),
+    ('Set password: "hunter2hunter2".', 'hunter2hunter2'),
+]
+
+
+def _tail(secret):
+    return re.split(r'[\'"\\]', secret)[-1]
 
 
 if __name__ == '__main__': unittest.main()
