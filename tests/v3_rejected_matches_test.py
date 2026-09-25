@@ -72,6 +72,18 @@ class RejectedMatchesTest(unittest.TestCase):
         self.assertEqual(self.ids('Hakan görünür olmak istemiyor mu?'), ['titled'])
         self.assertEqual(self.ids('Hakan görünürlükten kaçınıyor'), [])    # lexical only: paraphrase is out of scope
 
+    def test_short_title_is_a_topic_not_a_claim(self):
+        self.rejected('coffee', 'Taha espresso sever ve sabahları iki shot içer.', kind='preference',
+                      title='Kahve tercihi')
+        self.assertEqual(self.ids("Taha'nın kahve tercihi filtre kahve."), [])
+        self.assertEqual(self.ids('Taha espresso sever, sabahları iki shot içer.'), ['coffee'])
+
+    def test_negation_is_out_of_scope(self):
+        # Lexical matching cannot see negation: a correction of the rejected claim still matches.
+        # The route only becomes inspect_sources, so the agent reads the source before deciding.
+        self.rejected('lang', 'Taha Python dilini tercih ediyor.')
+        self.assertEqual(self.ids('Taha Python dilini tercih etmiyor, Go dilini tercih ediyor.'), ['lang'])
+
     def test_only_rejected_inferences_and_preferences_in_scope(self):
         self.rejected('pref', kind='preference')
         self.note('legacy', REJECTED, kind='inference', status='rejected')

@@ -579,6 +579,9 @@ class MemoryStore:
 # old claim in extra context is still caught. Both constants are pinned by tests.
 REJECTED_MIN_SHARED = 2
 REJECTED_MIN_COVERAGE = 0.6
+# A title is a topic label more often than a claim: "Kahve tercihi" would otherwise match
+# any new claim that names the same topic, including the user's own correction.
+REJECTED_MIN_TITLE_TERMS = 3
 
 
 def rejected_matches(store, text, project, audience="internal", limit=4):
@@ -601,8 +604,10 @@ def rejected_matches(store, text, project, audience="internal", limit=4):
     matches = []
     for record in records:
         coverage = 0.0
-        for statement in (str(record.get("title", "")), record["text"]):
+        for statement, minimum in ((str(record.get("title", "")), REJECTED_MIN_TITLE_TERMS), (record["text"], 0)):
             terms = _tokens(statement) - ignored
+            if len(terms) < minimum:
+                continue
             shared = len(claim & terms)
             if shared >= REJECTED_MIN_SHARED:
                 coverage = max(coverage, shared / len(terms))
