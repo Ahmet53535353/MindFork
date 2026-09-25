@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date
 import functools
 import hashlib
 import json
@@ -29,6 +30,15 @@ class ReceiptConflict(ValueError):
 
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _rejected_inference(record):
+    """A rejected personal inference is history, not current context.
+
+    Old sources may use status=rejected; status is still the task lifecycle field.
+    """
+    return (record.get("kind") in ("inference", "preference") and
+            (record.get("validity") == "rejected" or record.get("status") == "rejected"))
 
 
 # Turkish is agglutinative, so exact token intersection loses "fark" against "farki" and
@@ -212,10 +222,17 @@ class MemoryStore:
             records_count = db.execute("SELECT COUNT(*) FROM records").fetchone()[0]
             if fts_count == 0 and records_count > 0:
                 for row in db.execute("SELECT payload FROM records"):
-                    rec = json.loads(row[0])
+                    # The lexical index is derived data: one malformed payload must
+                    # never break opening the store. That row stays unindexed, and the
+                    # retrieval and doctor paths report it exactly as before this index.
+                    try:
+                        rec = json.loads(row[0])
+                        rec_id = rec["id"]
+                    except (ValueError, KeyError, TypeError):
+                        continue
                     facts_str = " ".join(f"{k} {v}" for k, v in rec.get("facts", {}).items() if isinstance(v, (str, int, float)))
                     db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
-                               (rec["id"], rec.get("type", ""), rec.get("project", ""), rec.get("text", ""), facts_str))
+                               (rec_id, rec.get("type", ""), rec.get("project", ""), rec.get("text", ""), facts_str))
         self.database.chmod(0o600)
 
     @contextmanager
@@ -239,6 +256,12 @@ class MemoryStore:
         """Connections are scoped to each operation; provided for callers."""
 
     def context_for(self, harness, query, **kwargs):
+        if kwargs.get("strict") is True and self.STRICT_PASSAGES:
+            try:
+                from beyin_v3_passage import context_for as passage_context
+                return passage_context(self, harness, query, **kwargs)
+            except Exception:
+                pass  # a real failure or a still-building index keeps the note-level path
         return shared_context(self, harness, query, **kwargs)
 
     def _source(self, value):
@@ -277,6 +300,22 @@ class MemoryStore:
         if "type" in record:
             if not isinstance(record["type"], str) or record["type"] not in VALID_MEMORY_TYPES:
                 raise ValueError("invalid memory type")
+        if record.get("kind") in ("inference", "preference"):
+            if record.get("validity", "current") not in ("current", "rejected"):
+                raise ValueError("inference validity must be current or rejected")
+            for field in ("rejected_reason", "rejected_at"):
+                if field in record and not isinstance(record[field], str):
+                    raise ValueError(field + " must be a string")
+            if record.get("validity") == "rejected":
+                if not isinstance(record.get("rejected_reason"), str) or not record["rejected_reason"].strip():
+                    raise ValueError("rejected_reason required for rejected validity")
+                rejected_at = record.get("rejected_at")
+                if not isinstance(rejected_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rejected_at):
+                    raise ValueError("rejected_at must be an ISO date for rejected validity")
+                try:
+                    date.fromisoformat(rejected_at)
+                except ValueError as exc:
+                    raise ValueError("rejected_at must be an ISO date for rejected validity") from exc
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
@@ -337,14 +376,41 @@ class MemoryStore:
                        (id, record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
         return record
 
-    def history(self, record_id):
-        """Committed immutable snapshots, ordered by global event sequence.
+    def history(self, record_id, audience="internal"):
+        """Source-verified immutable snapshots, ordered by global event sequence.
 
         Databases created before events were added have no invented prehistory.
+        A verified current source authorizes historical revisions of that record;
+        each event still has to pass the requested visibility boundary. A record
+        that synchronization deleted (source removed or no longer valid) keeps its
+        audit trail: the snapshot stored in its final delete event sets the
+        boundary instead, because there is no current source left to verify.
         """
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
         with self._connect() as db:
+            current = db.execute("SELECT payload FROM records WHERE id=?", (record_id,)).fetchone()
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
-        return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": json.loads(row[4])} for row in rows]
+        if not rows or (not current and rows[-1][1] != "delete"):
+            return []
+        boundary = json.loads(current[0] if current else rows[-1][4])
+        if (boundary.get("visibility") not in allowed or boundary.get("trust") == "untrusted" or
+                boundary.get("trusted") is False or boundary.get("status") == "untrusted" or
+                boundary.get("kind") == "untrusted"):
+            return []
+        if current:
+            try:
+                source = self._source(boundary.get("source"))
+                actual = hashlib.sha256((self.vault_root / source).read_bytes()).hexdigest()
+                if actual != boundary.get("source_sha256"):
+                    return []
+            except (ValueError, OSError, TypeError):
+                return []
+        return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
+                for row in rows if (record := json.loads(row[4])).get("visibility") in allowed and
+                record.get("trust") != "untrusted" and record.get("trusted") is not False and
+                record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 
     def submit_receipt(self, event_id, summary, refs, harness):
         self._require_writable()
@@ -405,7 +471,7 @@ class MemoryStore:
         for record in records:
             if (record.get("visibility") not in allowed or record.get("trust") == "untrusted" or
                     record.get("trusted") is False or record.get("status") == "untrusted" or
-                    record.get("kind") == "untrusted"):
+                    record.get("kind") == "untrusted" or _rejected_inference(record)):
                 continue
             source = record.get("source", "")
             if source_directory is not None and Path(source).parent.as_posix() != source_directory:
@@ -505,6 +571,36 @@ class MemoryStore:
     STRICT_MIN_WEIGHT = 0.30
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
+    # Per-turn strict context ranks Markdown passages instead of whole notes and delivers the
+    # matching block (#83, beyin_v3_passage.py). An empty passage result is an answer.
+    STRICT_PASSAGES = True
+
+    def _eligible(self, audience="internal", project=None):
+        """Visibility, trust, project and source-freshness gates shared by every retrieval path."""
+        if audience not in ("public", "internal", "private"):
+            raise ValueError("invalid audience")
+        with self._connect() as db:
+            records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
+        allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
+        eligible = []
+        stale_count = 0
+        for record in records:
+            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record):
+                continue
+            if project is not None and record.get("project") != project:
+                continue
+            try:
+                self._source(record["source"])
+                actual = hashlib.sha256((self.vault_root / record["source"]).read_bytes()).hexdigest()
+                if actual != record.get("source_sha256"):
+                    stale_count += 1
+                    continue
+            except (ValueError, OSError):
+                stale_count += 1
+                continue
+            eligible.append(record)
+        return eligible, stale_count
+
     def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False, types=None):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
@@ -529,30 +625,12 @@ class MemoryStore:
             type_gate = set(inferred) if inferred else None
         if isinstance(statuses, str):
             statuses = [statuses]
-        with self._connect() as db:
-            records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
-        allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
-        eligible = []
-        stale_count = 0
-        for record in records:
-            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted":
-                continue
-            if project is not None and record.get("project") != project:
-                continue
-            if types_set is not None and record.get("type") not in types_set:
-                continue
-            if type_gate is not None and record.get("type") is not None and record["type"] not in type_gate:
-                continue
-            try:
-                self._source(record["source"])
-                actual = hashlib.sha256((self.vault_root / record["source"]).read_bytes()).hexdigest()
-                if actual != record.get("source_sha256"):
-                    stale_count += 1
-                    continue
-            except (ValueError, OSError):
-                stale_count += 1
-                continue
-            eligible.append(record)
+        eligible, stale_count = self._eligible(audience, project)
+        if types_set is not None:
+            eligible = [record for record in eligible if record.get("type") in types_set]
+        elif type_gate is not None:
+            eligible = [record for record in eligible
+                        if record.get("type") is None or record["type"] in type_gate]
         superseded = {rid for record in eligible for rid in record["supersedes"]}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
@@ -632,46 +710,110 @@ class MemoryStore:
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)
 
 
+CONTEXT_MARKER = " [truncated]"
+MIN_CONTEXT_TEXT = 150     # smallest excerpt of a source that is worth a slot
+SHORT_CONTEXT_TEXT = 500   # a short source is reserved whole when it fits, else like a long one
+TOP_CONTEXT_TEXT = 1100    # the best source keeps at least this much: one passage window (#83)
+TOP_CONTEXT_SHARE = 0.4    # ... or this share of the budget, whichever is larger
+
+
+class PackedContext(dict):
+    """Packed context that remembers its unclipped sources in rank order.
+
+    The attribute is never serialized (json sees a plain dict), so render_context can
+    re-pack for the hook envelope from the originals instead of clipping a clip, and a
+    source dropped there returns its share to the better sources.
+    """
+    sources = ()
+
+
+def _clip_to(record, citation, room):
+    """Longest text prefix whose serialized record+citation fits in room, else None."""
+    text, best = record["text"], None
+    low, high = 0, len(text)
+    while low <= high:  # JSON escaping only grows with the prefix, so bisection is exact
+        middle = (low + high) // 2
+        candidate = dict(record, text=text[:middle] + CONTEXT_MARKER, text_truncated=True)
+        if len(_json(candidate)) + len(_json(citation)) <= room:
+            best, low = candidate, middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
+def _clipped_size(record, citation, chars):
+    """Serialized size of record+citation with the first `chars` characters, or whole if shorter."""
+    full = len(_json(record)) + len(_json(citation))
+    if len(record["text"]) <= chars:
+        return full
+    return min(full, len(_json(dict(record, text=record["text"][:chars] + CONTEXT_MARKER, text_truncated=True)))
+               + len(_json(citation)))
+
+
 def pack_context(records, limit=5, budget_chars=8000, stale_count=0):
     """Pack successfully delivered sources, not a prefix of attempted candidates.
 
     An oversized metadata record cannot consume a source slot. Text may be clipped,
     never identity/citation fields. used_chars measures compact record+citation JSON;
     render_context additionally accounts for the complete hook envelope.
+
+    Budget is reserved before it is spent (#79). The best source first keeps the larger
+    of TOP_CONTEXT_TEXT characters and TOP_CONTEXT_SHARE of the budget, so a passage
+    (#83) reaches a small prompt whole and a long note keeps a real excerpt. Every
+    further source in rank order then reserves its floor (its first MIN_CONTEXT_TEXT
+    characters, or all of a short text when that fits); a source whose floor does not
+    fit is skipped without consuming a slot. What is left goes back in rank order.
+    Reservations are exact serialized sizes, JSON escaping included, so an admitted
+    source is never dropped later and one long note can no longer starve the rest.
     """
     if type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
         raise ValueError("invalid budget")
-    selected, citations = [], []
-    used = 0
-    clipped_any = False
+    admitted, reserved, protected = [], 0, 0
     for record in records:
-        if len(selected) >= limit:
+        if len(admitted) >= limit:
             break
         citation = {"id": record["id"], "source": record["source"]}
+        full = len(_json(record)) + len(_json(citation))
+        floor = _clipped_size(record, citation, MIN_CONTEXT_TEXT)
+        claim = full if len(record["text"]) <= SHORT_CONTEXT_TEXT else floor
+        if reserved + claim > budget_chars - protected:
+            claim = floor
+        if reserved + claim > budget_chars - protected:
+            continue
+        admitted.append([record, citation, full, claim])
+        reserved += claim
+        if len(admitted) == 1:
+            keep = max(_clipped_size(record, citation, TOP_CONTEXT_TEXT), int(budget_chars * TOP_CONTEXT_SHARE))
+            protected = max(0, min(full, keep, budget_chars) - claim)
+    spare = budget_chars - reserved
+    for item in admitted:
+        extra = min(spare, item[2] - item[3])
+        item[3] += extra
+        spare -= extra
+    selected, citations, sources = [], [], []
+    used, carry, clipped_any = 0, 0, False
+    for record, citation, full, allocation in admitted:
+        room = allocation + carry
+        source = record
+        if full > room:
+            record = _clip_to(record, citation, room)
+            if record is None:  # unreachable while room >= floor; never overspend
+                carry = room
+                continue
         size = len(_json(record)) + len(_json(citation))
-        if used + size > budget_chars:
-            clipped = dict(record, text="", text_truncated=True)
-            available = budget_chars - used - len(_json(clipped)) - len(_json(citation))
-            marker = " [truncated]"
-            if available <= len(marker):
-                continue
-            # JSON escaping can cost more than one character per input char.
-            text = record["text"][:available - len(marker)]
-            clipped["text"] = text + marker
-            while text and len(_json(clipped)) + len(_json(citation)) > budget_chars - used:
-                text = text[:-1]
-                clipped["text"] = text + marker
-            if not text:
-                continue
-            record = clipped
-            size = len(_json(record)) + len(_json(citation))
-            clipped_any = True
+        carry = room - size
         selected.append(record)
-        clipped_any = clipped_any or bool(record.get("text_truncated"))
+        sources.append(source)
         citations.append(citation)
+        clipped_any = clipped_any or bool(record.get("text_truncated"))
         used += size
     omitted = len(records) - len(selected)
-    return {"records": selected, "citations": citations, "abstained": not selected, "truncated": bool(omitted) or clipped_any, "omitted_count": omitted, "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count}
+    packed = PackedContext({"records": selected, "citations": citations, "abstained": not selected,
+                            "truncated": bool(omitted) or clipped_any, "omitted_count": omitted,
+                            "used_chars": used, "budget_chars": budget_chars, "stale_count": stale_count})
+    packed.sources = tuple(sources)
+    return packed
+
 
 def shared_context(store, harness, query, **kwargs):
     """All supported harnesses call the same source-backed retrieval function."""
@@ -706,6 +848,9 @@ def render_context(context, budget_chars, prefix="", suffix=""):
     if type(budget_chars) is not int or budget_chars < 0:
         raise ValueError("invalid budget")
     records = context.get("records", [])
+    sources = getattr(context, "sources", ())
+    if len(sources) == len(records) and all(s["id"] == r["id"] for s, r in zip(sources, records)):
+        records = list(sources)  # re-clip the envelope from the originals, not from a clip
     extra = {k: v for k, v in context.items() if k not in
              {"records", "citations", "used_chars", "budget_chars", "omitted_count", "truncated", "abstained", "stale_count"}}
     available = max(0, budget_chars - len(prefix))

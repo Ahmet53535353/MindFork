@@ -53,12 +53,15 @@ Bu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type'ını ta
 ```python
 # beyin_v3_sync.py içinde
 valid_types = ('episodic', 'semantic', 'procedural')
-if 'type' not in metadata or metadata['type'] not in valid_types:
-    raise ValueError('metadata.type required: episodic|semantic|procedural')
+if 'type' in metadata and metadata['type'] not in valid_types:
+    raise ValueError('metadata.type must be episodic|semantic|procedural')
 ```
+
+`type` vermek zorunlu değildir; yazılmayan kayıtlar tiplendirilmemiş sayılır ve
+sezgisel filtreleme bunları asla elmez. Verildiğinde ise geçerli bir tip olmalıdır.
 
 ## İlgili Kaynaklar
 
 - `beyin_v3_sync.py` — note_create/task_create validation
-- `.agents/skills/beyin/SKILL.md` — type zorunluluk kuralı
+- `.agents/skills/beyin/SKILL.md` — type kullanımı
 - `Core.md` (type: semantic), `Kurallar.md` (type: procedural), `Journal.md/Threads.md/Last-Session.md` (type: episodic)

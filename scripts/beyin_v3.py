@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 
 def default_state(vault: Path) -> Path:
@@ -43,12 +44,24 @@ def load_sync():
     return SyncEngine
 
 
-# Mirrors beyin_v3_jev_client.FEATURES; duplicated so argument parsing never imports
-# the optional client. tests/v3_jev_toggle_test.py pins the two lists together.
+# Mirror beyin_v3_jev_client.FEATURES and PROVIDERS and beyin_v3_laya.CHECKPOINTS; duplicated
+# so argument parsing never imports the optional client. tests/v3_jev_toggle_test.py pins them.
 JEV_FEATURES = ("context", "review", "answer", "auto_context")
+JEV_PROVIDERS = ("typesafe", "vercel", "laya")
+LAYA_MODELS = ("multilingual", "english")
 JEV_NOTICE = ("auto_context is on: every turn sends the prompt plus the title and first 600 characters of up to 8 "
               "candidate internal/public notes to the provider. Private notes are never sent.")
+JEV_NOTICE_LAYA = ("auto_context is on: every turn sends the prompt plus the title and first 600 characters of up to 8 "
+                   "candidate internal/public notes to the local Laya server, one request per note. Private notes are never sent. "
+                   "Laya is shadow-only: its scores are only logged and never change the context.")
 JEV_WARNING = "TYPESAFE_API_KEY is not set; calls degrade to local results."
+LAYA_NOTICE = ("provider laya: calls go only to the local laya-serve at {base_url}; start it with LAYA_HOST=127.0.0.1. "
+               "Laya is shadow-only: scores are logged for measurement and never change results.")
+# Coded refusals that deserve a next step. ASCII Turkish, like the other human lines.
+ERROR_HINTS = {
+    "laya_shadow_only": ("Laya yalniz golge modda calisir: puanlari olcum icin kaydedilir, gordugun sonucu degistirmez. "
+                         "Laya icin: jev shadow --provider laya. Acik mod icin: jev on --provider typesafe."),
+}
 
 
 def jev_client():
@@ -66,9 +79,12 @@ def jev_status(state: Path):
 
 
 def jev_advice(result):
+    laya = result.get("provider") == "laya"
     if result.get("automatic_model_calls"):
-        result["notice"] = JEV_NOTICE
-    if result.get("mode") != "off" and not result.get("key_present"):
+        result["notice"] = JEV_NOTICE_LAYA if laya else JEV_NOTICE
+    if laya:
+        result["provider_notice"] = LAYA_NOTICE.format(base_url=result.get("laya", {}).get("base_url", "?"))
+    elif result.get("mode") != "off" and not result.get("key_present"):
         result["warning"] = JEV_WARNING
     return result
 
@@ -103,6 +119,10 @@ def parser():
     settings.add_argument("--context-chars", type=int)
     settings.add_argument("--secret-filter", choices=("on", "off"))
     settings.add_argument("--update-notifications", choices=("on", "off"))
+    settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
+    settings.add_argument("--threads-chars", type=int, help="Hygiene limit for Threads.md; 0 turns it off")
+    compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
+    compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
     skill.add_argument("--source", type=Path, required=True)
     skill.add_argument("--name")
@@ -133,6 +153,10 @@ def parser():
     jev.add_argument("mode", choices=("status", "off", "shadow", "on"))
     jev.add_argument("--enable", action="append", choices=JEV_FEATURES, default=[])
     jev.add_argument("--disable", action="append", choices=JEV_FEATURES, default=[])
+    jev.add_argument("--provider", choices=JEV_PROVIDERS, help="typesafe (default) or laya, a local laya-serve (shadow only)")
+    jev.add_argument("--base-url", dest="base_url", help="laya only: loopback URL, default http://127.0.0.1:8765")
+    jev.add_argument("--model", choices=LAYA_MODELS, help="laya only: pinned checkpoint, default multilingual")
+    jev.add_argument("--check", action="store_true", help="with status: one GET /health to the local Laya server")
     answer = sub.add_parser("jev-answer", help="Advisory answer claim verification against exact source quotes")
     answer.add_argument("--file", required=True, help="JSON list of claims (maximum 32,000 characters)")
     answer.add_argument("--project", required=True)
@@ -167,13 +191,21 @@ def main(argv=None):
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
         engine = load_engine() if args.command != "jev" else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory") and not read_only_context else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
         elif args.command == "preferences":
             load_sync()
             import beyin_v3_preferences as preferences
+            import beyin_v3_companion as companion
+            limits = {name: value for name, value in (('Last-Session.md', args.last_session_chars),
+                                                      ('Threads.md', args.threads_chars)) if value is not None}
+            if limits:  # validate before anything is saved, so a bad value changes nothing
+                current_limits, limits_valid = companion.read_limits(state)
+                if not limits_valid:
+                    raise ValueError('companion-limits.json in the runtime state is invalid; fix or remove it first')
+                companion.check_limits(dict(current_limits, **limits))
             changes = {key: getattr(args, key) for key in ('interval_minutes', 'context_mode', 'context_chars') if getattr(args, key) is not None}
             if args.auto_sync is not None:
                 changes['auto_sync'] = args.auto_sync == 'on'
@@ -182,17 +214,28 @@ def main(argv=None):
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
                       'model_calls': False, 'timer_installed': False}
+            # Machine-local like update notifications: rollback-safe, outside the vault schema.
+            result['companion_limits'] = companion.save_limits(state, limits) if limits else companion.read_limits(state)[0]
+            if limits:
+                result['status'] = 'saved'
             import beyin_v3_releases as releases
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:
                 result['status'] = 'saved'
         elif args.command == "jev":
+            laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
-                if args.enable or args.disable:
-                    raise ValueError("jev status reads only; use jev off/shadow/on with --enable/--disable")
-                result = jev_advice(jev_client().status(state))
+                if args.enable or args.disable or args.provider or laya:
+                    raise ValueError("jev status reads only; use jev off/shadow/on with --enable/--disable/--provider")
+                result = jev_client().status(state)
+                if args.check:
+                    result["server"] = jev_client().probe(state)
+                result = jev_advice(result)
             else:
-                result = jev_advice(jev_client().set_mode(state, args.mode, enable=args.enable, disable=args.disable))
+                if args.check:
+                    raise ValueError("--check works only with jev status")
+                result = jev_advice(jev_client().set_mode(state, args.mode, enable=args.enable, disable=args.disable,
+                                                          provider=args.provider, laya=laya or None))
                 result["changed"] = True
         elif args.command == "doctor":
             result = {"pending_events": len(list((state / "hook-queue").glob("*.json"))),
@@ -217,17 +260,45 @@ def main(argv=None):
             from beyin_v3_secrets import health as secret_filter_health
             result['secret_filter'] = secret_filter_health(state)
             result['secrets_redacted'] = result['secret_filter']['total']
+            try:
+                import beyin_v3_companion as companion
+                result['companion_hygiene'] = companion.hygiene(vault, state)
+            except Exception as exc:  # a size report must never hide the rest of doctor
+                result['companion_hygiene'] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
+            gaps_info = result['receipt-gaps.json']
+            result['potential_missing_receipts'] = gaps_info.get('potential_missing_receipts') if gaps_info is not None else None
+            if gaps_info is not None:
+                from beyin_v3_projections import receipt_coverage
+                with store._connect() as db:
+                    result['receipt_coverage'] = receipt_coverage(db, now=time.time())
+            else:
+                result['receipt_coverage'] = None
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result['hook-error.json'] else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            try:
+                result['task_completion'] = load_sync().reader(store).completion_health()
+            except Exception as exc:
+                result['task_completion'] = {
+                    'strict_issue_count': 0, 'strict_issues': [], 'legacy_done_count': 0,
+                    'legacy_done': [], 'truncated': False,
+                    'error': (type(exc).__name__ + ': ' + str(exc))[:240],
+                }
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
+        elif args.command == "companion-compact":
+            load_sync()
+            import beyin_v3_compact
+            result = beyin_v3_compact.compact(vault, state, dry_run=args.dry_run)
+            if any(entry['status'] == 'compacted' for entry in result['files'].values()):
+                # Index the shorter sources and the private archive before anyone reads them.
+                result['sync'] = {'status': load_sync()(vault, state).sync().get('status')}
         elif args.command == "sync":
             result = sync.sync()
         elif args.command == "ingest":
@@ -295,7 +366,12 @@ def main(argv=None):
             result = sync.receipt(payload["event_id"], payload["summary"],
                                           payload["refs"], args.harness, session=payload.get('session'))
         elif args.command == "history":
-            result = store.history(args.record_id)
+            # History is source-verified, so refresh first like context: an edit
+            # made just before this command must not hide the audit trail.
+            refreshed = sync.sync()
+            if refreshed.get('status') == 'conflict':
+                raise RuntimeError('History blocked: source sync conflict. Run sync with the same vault/state to inspect and reconcile source issues, then retry history.')
+            result = sync.store.history(args.record_id)
         else:
             payload = read_json(args.file)
             result = sync.update_task(payload["id"], payload["expected_revision"], payload["changes"])
@@ -303,7 +379,10 @@ def main(argv=None):
         return 0
     except Exception as exc:
         # No traceback or raw input dump: callers retain their local source files.
-        print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=True), file=sys.stderr)
+        error = {"error": type(exc).__name__, "message": str(exc)}
+        if isinstance(exc, ValueError) and str(exc) in ERROR_HINTS:
+            error["hint"] = ERROR_HINTS[str(exc)]
+        print(json.dumps(error, ensure_ascii=True), file=sys.stderr)
         return 1
 
 

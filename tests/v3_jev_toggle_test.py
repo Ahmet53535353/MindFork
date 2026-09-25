@@ -18,6 +18,7 @@ SCRIPTS = ROOT / 'template/.claude/scripts'
 HOOK = SCRIPTS / 'beyin_v3_hook.py'
 sys.path.insert(0, str(SCRIPTS))
 import beyin_v3_jev_client as client
+import beyin_v3_laya as laya
 
 # Distinctive markers: a leak into a file or a status payload is unmistakable.
 KEY = 'MARKERFAKEKEYNEVERREAL'
@@ -43,7 +44,7 @@ urllib.request.OpenerDirector.open = refuse
 
 
 def report(payload):
-    payload['modules'] = sorted(name for name in sys.modules if 'jev' in name)
+    payload['modules'] = sorted(name for name in sys.modules if 'jev' in name or 'laya' in name)
     sys.stdout.write('REPORT:' + json.dumps(payload))
 '''
 
@@ -197,7 +198,81 @@ class ModeCommandTest(JevToggleTestCase):
         self.assertIn('status', json.loads(result.stderr)['message'])
 
     def test_cli_feature_choices_mirror_the_client(self):
-        self.assertEqual(load_module('v3_jev_toggle_cli', CLI).JEV_FEATURES, client.FEATURES)
+        cli = load_module('v3_jev_toggle_cli', CLI)
+        self.assertEqual(cli.JEV_FEATURES, client.FEATURES)
+        self.assertEqual(cli.JEV_PROVIDERS, client.PROVIDERS)
+        self.assertEqual(cli.LAYA_MODELS, laya.CHECKPOINTS)
+
+
+class LayaCommandTest(JevToggleTestCase):
+    def closed(self):
+        import socket
+        probe = socket.socket()
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        return 'http://127.0.0.1:%d' % port
+
+    def test_laya_needs_no_typesafe_key_and_names_the_local_server(self):
+        result = self.jev('shadow', '--provider', 'laya')
+        self.assertEqual((result['provider'], result['mode'], result['shadow_only']), ('laya', 'shadow', True))
+        self.assertNotIn('warning', result)
+        self.assertIn('http://127.0.0.1:8765', result['provider_notice'])
+        self.assertIn('LAYA_HOST=127.0.0.1', result['provider_notice'])
+        self.assertIn('shadow-only', result['provider_notice'])
+        enabled = self.jev('shadow', '--enable', 'auto_context')
+        self.assertIn('local Laya server', enabled['notice'])
+        self.assertIn('Private notes are never sent', enabled['notice'])
+        self.assertIn('never change the context', enabled['notice'])
+        back = self.jev('on', '--provider', 'typesafe')
+        self.assertIn('TYPESAFE_API_KEY', back['warning'])
+        self.assertIn('laya', json.loads((self.state / 'jev.json').read_text(encoding='utf-8')))
+
+    def test_option_errors_exit_one_without_writing(self):
+        for arguments, message in ((('status', '--provider', 'laya'), 'status'), (('status', '--model', 'english'), 'status'),
+                                   (('shadow', '--model', 'english'), 'laya_option_requires_laya_provider'),
+                                   (('on', '--check'), '--check'),
+                                   (('shadow', '--provider', 'laya', '--base-url', 'http://localhost:8765'), 'laya_option_invalid'),
+                                   (('on', '--provider', 'laya'), 'laya_shadow_only')):
+            with self.subTest(arguments=arguments):
+                result = self.cli('jev', *arguments)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, json.loads(result.stderr)['message'])
+                self.assertFalse((self.state / 'jev.json').exists())
+
+    def test_on_with_laya_is_refused_with_a_code_and_an_ascii_turkish_hint(self):
+        entry = load_module('v3_jev_toggle_entry_refusal', ENTRY)
+        for arguments in (('on', '--provider', 'laya'), ('on', '--provider', 'laya', '--model', 'english', '--enable', 'auto_context')):
+            with self.subTest(arguments=arguments):
+                result = self.cli('jev', *arguments)
+                self.assertEqual(result.returncode, 1)
+                error = json.loads(result.stderr)
+                self.assertEqual(error['message'], 'laya_shadow_only')
+                self.assertIn('jev shadow --provider laya', error['hint'])
+                self.assertIn('jev on --provider typesafe', error['hint'])
+                self.assertEqual(error['hint'], error['hint'].encode('ascii', 'replace').decode('ascii'))
+                self.assertFalse((self.state / 'jev.json').exists())
+                human = entry.human_result(error, 'jev')
+                self.assertTrue(human.startswith('Islem tamamlanamadi: laya_shadow_only\nLaya yalniz golge modda calisir'), human)
+        self.jev('shadow', '--provider', 'laya')
+        before = (self.state / 'jev.json').read_bytes()
+        result = self.cli('jev', 'on')
+        self.assertEqual((result.returncode, json.loads(result.stderr)['message']), (1, 'laya_shadow_only'))
+        self.assertEqual((self.state / 'jev.json').read_bytes(), before)
+        self.assertEqual(self.jev('on', '--provider', 'typesafe')['mode'], 'on')
+        # Other errors carry no hint.
+        self.assertNotIn('hint', json.loads(self.cli('jev', 'status', '--provider', 'laya').stderr))
+
+    def test_check_probes_only_a_configured_laya(self):
+        self.jev('shadow')
+        self.assertEqual(self.jev('status', '--check')['server'], dict(checked=False, reason='not_applicable'))
+        self.jev('shadow', '--provider', 'laya', '--base-url', self.closed(), '--model', 'english')
+        status = self.jev('status', '--check')
+        self.assertEqual(status['laya']['model'], 'english')
+        self.assertIs(status['server']['checked'], True)
+        self.assertIs(status['server']['reachable'], False)
+        self.assertIs(status['server']['pinned_model_loaded'], False)
+        self.assertNotIn('server', self.jev('status'))
 
 
 class ConfigFileTest(JevToggleTestCase):
@@ -299,11 +374,33 @@ class StatusReportTest(JevToggleTestCase):
         rendered = [entry.human_result(current, 'jev'),
                     entry.human_result({'status': 'never_seen', 'jev': current}, 'doctor'),
                     entry.human_result({'status': 'never_seen', 'jev': {'mode': 'off', 'configured': False}}, 'doctor')]
+        client.set_mode(self.state, 'shadow', provider='laya')
+        with patch.dict(os.environ, {}, clear=True):
+            local = dict(client.status(self.state), server=dict(checked=True, reachable=False))
+        rendered += [entry.human_result(local, 'jev'), entry.human_result({'status': 'never_seen', 'jev': local}, 'doctor')]
+        path = self.state / 'jev.json'
+        path.write_text(json.dumps(dict(json.loads(path.read_text(encoding='utf-8')), mode='on')), encoding='utf-8')
+        with patch.dict(os.environ, {}, clear=True):
+            edited = client.status(self.state)
+        rendered += [entry.human_result(edited, 'jev'), entry.human_result({'status': 'never_seen', 'jev': edited}, 'doctor')]
         for text in rendered:
             self.assertEqual(text, text.encode('ascii', 'replace').decode('ascii'))
         self.assertIn('Jev: acik', rendered[0])
         self.assertIn('otomatik baglam: acik', rendered[1])
         self.assertIn('Jev: kapali', rendered[2])
+        self.assertIn('Jev: golge (yalniz)', rendered[3])
+        self.assertIn('Saglayici: laya (yerel, model multilingual)', rendered[3])
+        self.assertIn('Anahtar: gerekmez', rendered[3])
+        self.assertIn('Laya yalniz golge modda calisir', rendered[3])
+        self.assertIn('Laya sunucusuna ulasilamadi', rendered[3])
+        self.assertNotIn('TYPESAFE_API_KEY', rendered[3])
+        self.assertNotIn('jev.json acik mod istiyor', rendered[3])
+        self.assertIn('Jev: golge (yalniz), saglayici: laya', rendered[4])
+        # A hand-edited `on` is shown as shadow-only, with the reason, never as acik.
+        self.assertIn('Jev: golge (yalniz)', rendered[5])
+        self.assertIn('jev.json acik mod istiyor ama Laya yalniz golge modda calisir', rendered[5])
+        self.assertNotIn('Jev: acik', rendered[5])
+        self.assertIn('Jev: golge (yalniz), saglayici: laya', rendered[6])
 
 
 if __name__ == '__main__':

@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import json
 
 import beyin_v3_jev_client as client
-from beyin_v3_jev import (_eligible, _verified_evidence, _safe, _signature,
-                          remote_allowed, source_context, CONFIDENCE_GATE, CONTEXT_LIMIT)
+from beyin_v3_jev import (_eligible, _verified_evidence, _safe, _signature, _calibration,
+                          context_limit, limits, remote_allowed, source_context)
 
 
 def _time(value):
@@ -59,7 +59,7 @@ def assess_memory(store, proposal, *, project, transport=None):
         result['diagnostics'] = ['source_local_only']
         return result
     # A long source is NOT silently summarized/truncated into seemingly complete evidence.
-    if any(len(source_context(r)) > CONTEXT_LIMIT for r in all_records):
+    if any(len(source_context(r)) > context_limit(mode) for r in all_records):
         result['diagnostics'] = ['source_context_incomplete']
         return result
     item = dict(claim=proposal['claim'], project=project, evidence=[
@@ -87,12 +87,13 @@ def assess_memory(store, proposal, *, project, transport=None):
         return result
     if advice['mode'] != 'on':
         result['diagnostics'] = ['shadow_not_applied']
-        return result
+        return _calibration(result, mode)
     choices = advice['relations']
     result['dimensions'] = {name: choices[name] for name in ('support', 'commitment', 'kind')}
     result['prior_relations'] = [dict(record_id=record['id'], **choices['relation_p' + str(i)])
                                  for i, record in enumerate(priors)]
-    uncertain = any(item['confidence'] < CONFIDENCE_GATE for item in choices.values())
+    _calibration(result, mode)
+    uncertain = any(item['confidence'] < limits(mode)['confidence'] for item in choices.values())
     conflict = any(relation['choice'] == 'contradiction' for relation in result['prior_relations'])
     if conflict:
         result['diagnostics'].append('prior_conflict')

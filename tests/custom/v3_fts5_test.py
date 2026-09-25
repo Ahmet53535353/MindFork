@@ -100,5 +100,25 @@ class Fts5IndexingTest(unittest.TestCase):
         self.assertEqual(res['records'][0]['id'], 'code-sym')
 
 
+    def test_fts5_rebuild_survives_malformed_payload(self):
+        # The lexical index is derived data: a corrupt payload must never break
+        # opening the store, and it must not block indexing of healthy records.
+        self.store.ingest(self.make_record('ok-1', 'Healthy indexable record'))
+        self.store.ingest(self.make_record('bad-1', 'Payload will be corrupted'))
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("UPDATE records SET payload='{broken' WHERE id='bad-1'")
+            db.execute("DELETE FROM records_fts")
+        evaluator.close_store(self.store)
+
+        reopened = self.module.MemoryStore(self.state, self.vault)
+        self.addCleanup(lambda: evaluator.close_store(reopened))
+        with sqlite3.connect(reopened.database) as db:
+            found = db.execute("SELECT id FROM records_fts WHERE records_fts MATCH 'Healthy'").fetchall()
+        self.assertEqual(found, [('ok-1',)])
+        with sqlite3.connect(reopened.database) as db:
+            indexed = [row[0] for row in db.execute("SELECT id FROM records_fts")]
+        self.assertNotIn('bad-1', indexed)
+
+
 if __name__ == '__main__':
     unittest.main()

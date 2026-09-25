@@ -357,13 +357,17 @@ yalnız onaylama. Bilmediğin kullanıcı geçmişini veya yaşamadığın anıl
 Her yeni oturumda mevcut companion klasöründeki Core.md (varsa Soul.md), Kurallar.md,
 Last-Session.md, aktif Threads.md gövdeleri ve son Journal.md girişini yükle. Hook bunları
 sınırlı bütçeyle önceliklendirir. Eksik/kırpılmışsa ilgili dosyayı oku; hook çalışmıyorsa
-da aynı yükleme sırasını izle. Mevcut kişiselleştirilmiş klasörü kullan; ikinci kimlik açma.
+da aynı yükleme sırasını izle. Bağlamda `Memory hygiene:` satırı varsa büyük dosyayı
+okumadan önce `beyin.py companion-compact` çalıştır; eski kayıtlar silinmeden arşive
+taşınır. Mevcut kişiselleştirilmiş klasörü kullan; ikinci kimlik açma.
 İlk kurulumda kimlik boşsa kısa bir konuşmayla hitap, çalışma alanı ve beklentileri öğren;
 cevapları Core.md'ye kaydet. Mevcut kimliği tekrar sorgulama veya şablonla değiştirme.
 
-Anlamlı çalışma sonunda beyin skill'indeki ilişki ve öğrenme protokolünü uygula:
-sonuç ve gerekçeyi Last-Session'a, açık konuyu Threads'e, açık kullanıcı düzeltmesini
-kapsamıyla Kurallar'a, kalıcı öğrenimi kaynak bağlantılı knowledge notuna kaydet.
+Anlamlı bir iş parçası bittiğinde (her cevapta değil) beyin skill'indeki ilişki ve öğrenme
+protokolünü uygula: Last-Session'daki devir kartını sonuç ve gerekçeyle baştan yeniden yaz
+(eski kartı alta ekleme, önceki oturumlar bölümüne dokunma), açık konuyu Threads'te yerinde
+güncelle, açık kullanıcı düzeltmesini kapsamıyla Kurallar'a, kalıcı öğrenimi kaynak bağlantılı
+knowledge notuna kaydet.
 Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; istenmesini
 beklemeden kaydedilir. Core ve Journal'ı yalnız yeni ve dayanaklı bir şey olduğunda
 güncelle. Bunlar kullanıcı notlarıdır; güncellemelerde korunur. Ardından kaynak
