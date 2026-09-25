@@ -299,6 +299,10 @@ def main(argv=None):
                     'legacy_done': [], 'truncated': False,
                     'error': (type(exc).__name__ + ': ' + str(exc))[:240],
                 }
+            # Informational only: malformed rows the lexical index rebuild skipped.
+            with store._connect() as db:
+                fts_row = db.execute("SELECT value FROM metadata WHERE key='fts_malformed_skipped'").fetchone()
+            result['fts_malformed_skipped'] = int(fts_row[0]) if fts_row else 0
             # A rejection on a plain note leaves the claim in current context; sync stays healthy.
             try:
                 result['validity'] = load_sync().reader(store).validity_health()

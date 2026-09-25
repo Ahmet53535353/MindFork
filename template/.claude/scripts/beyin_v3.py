@@ -250,6 +250,7 @@ class MemoryStore:
             fts_count = db.execute("SELECT COUNT(*) FROM records_fts").fetchone()[0]
             records_count = db.execute("SELECT COUNT(*) FROM records").fetchone()[0]
             if fts_count == 0 and records_count > 0:
+                skipped = 0
                 for row in db.execute("SELECT payload FROM records"):
                     # The lexical index is derived data: one malformed payload must
                     # never break opening the store. That row stays unindexed, and the
@@ -258,10 +259,13 @@ class MemoryStore:
                         rec = json.loads(row[0])
                         rec_id = rec["id"]
                     except (ValueError, KeyError, TypeError):
+                        skipped += 1
                         continue
                     facts_str = " ".join(f"{k} {v}" for k, v in rec.get("facts", {}).items() if isinstance(v, (str, int, float)))
                     db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
                                (rec_id, rec.get("type", ""), rec.get("project", ""), rec.get("text", ""), facts_str))
+                if skipped:
+                    db.execute("INSERT OR REPLACE INTO metadata VALUES ('fts_malformed_skipped',?)", (str(skipped),))
         self.database.chmod(0o600)
 
     @contextmanager

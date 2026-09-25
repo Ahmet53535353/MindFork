@@ -30,15 +30,20 @@
 - Merge çözümleri: `_validate` birleşimi (type + inference validity); `_eligible` refactorü kazanır, tip kapıları yeni `_retrieve`'a port edildi; sync `allowed` kümesi birleşimi.
 - Type zorunluluğu gevşetildi: note_create/task_create'ta `type` artık **varsa geçerli olmalı** (upstream'in tipsiz not/task akışlarıyla uyum; memory-types.md güncellendi).
 - FTS rebuild toleransı: türetilmiş veri asıl veriyi açılmaktan alıkoyamaz — kurucudaki rebuild döngüsü bozuk payload'ı atlar, doktorun bozuk-indeks sözleşmesi korunur (testle kilitli).
+- FTS bozuk-satır sayacı: rebuild `metadata('fts_malformed_skipped')` yazıyor (yalnız >0), kök CLI doctor `fts_malformed_skipped` alanında bilgi olarak gösteriyor; status sözleşmesi değişmedi.
+- **Karar — hibrit sınır:** hibrit yığın (BM25 + RRF + semantik kanca) yalnız not yolunda; passage yolu bilinçli hafif sözel blok yolu, Faz-5 ertelendi. Gerekçe: tur-başı 1 sn kurulum bütçesi + tek-havuz df/FLOOR kalibrasyonu. Ayrıntı: `docs/specs/2026-09-25-hybrid-boundary-and-fts-counter-design.md`.
+- **Düzeltme (blame envanteri):** kök CLI'deki `task_completion` try/except sarmalayıcısı bizim M1 bantımız değil, upstream'in kendi düzeltmesi (1c0fd54e + d324722 `reader()`); M1 merge'ünde upstream sürümü kazanmış. Silinecek bir borç yok.
 
 ## Test durumu
 
 - Aşama sonu kilometre taşları: 466/466 → tip sezgisi + discovery düzeltmesiyle 493/493.
-- **Upstream merge sonrası: 673/673 yeşil** (`python3 -m unittest discover tests -p "*test.py"`; upstream'in ~200 yeni testi dahil, skipped=1 platform testi).
+- **Upstream merge sonrası: 673/673 yeşil** (`python3 -m unittest discover tests -p "*test.py"`; upstream'in ~200 yeni testi dahil). skipped=1 platform-bağımlılığı DEĞİL, upstream'in kendi koşullu testi: `v3_task_completion_test` kanıt-refs varyant testi yalnız case-insensitive hacimlerde koşar, Linux'ta kendisini atlar.
 - **Passage tip kapısı sonrası: 681/681 yeşil** (+7: `v3_passage_types_test`).
 - **İkinci upstream merge (M2, `a136a2a`, upstream `f9a8b5f`): 725/725 yeşil** — reddedilen
   çıkarım olgunlaştırma, görev sözleşmesi sertleştirme, bilgi tazeliği #109; plan + sonuç
   `docs/specs/2026-09-25-upstream-merge-2-plan.md`.
+- **Mimari temizlik seti (hibrit sınır kararı + FTS sayacı): 727/727 yeşil** (+2 sayaç testi);
+  `docs/specs/2026-09-25-hybrid-boundary-and-fts-counter-design.md`.
 - Custom testler `tests/custom/` içinde (`__init__.py` sayesinde kök discover artık dahil ediyor):
   - `v3_memory_types_test.py` — tip doğrulama ve filtreleme
   - `v3_fts5_test.py` — FTS5 şema, senkron, rebuild, tam sembol araması, bozuk payload toleransı
