@@ -30,7 +30,8 @@ import tempfile
 import time
 import unicodedata
 
-from beyin_v3 import HARNESSES, STOPWORDS, _json, _tokens, pack_context
+from beyin_v3 import (HARNESSES, STOPWORDS, _json, _tokens, pack_context,
+                      record_matches_types, resolve_type_filter)
 
 # #83 chose 0.15 on one 263-note Turkish vault without a coverage cap. With the cap, on a
 # second 1,285-note vault 0.20 is the lowest floor that keeps everyday and agent-command
@@ -321,8 +322,12 @@ def _weight(shared, frequency, total, size):
     return weight / idf_max / math.log(10 + size)
 
 
-def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED):
-    """Best admitted passage per source, ranked. Returns [(rank weight, passage), ...]."""
+def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED, allowed=None):
+    """Best admitted passage per source, ranked. Returns [(rank weight, passage), ...].
+
+    `allowed` is an optional set of record ids: the type gates filter at search time
+    only, so the index, its df statistics and the floor calibration never change.
+    """
     if not terms:
         return []
     passages_total = max(1, len(index.passages))
@@ -331,6 +336,8 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED):
     probes = [(term, " " + term + " ") for term in sorted(terms)]
     best = {}
     for passage in index.passages:
+        if allowed is not None and passage[0]["id"] not in allowed:
+            continue
         tokens = passage[4]
         shared = [term for term, probe in probes if probe in tokens]
         if len(shared) < min_shared:
@@ -365,7 +372,7 @@ def pool(store, eligible, statuses=None, exclude=DEFAULT_EXCLUDE):
 
 
 def context_for(store, harness, query, project=None, audience="internal", statuses=None, limit=5,
-                budget_chars=8000, strict=True):
+                budget_chars=8000, strict=True, types=None):
     """Strict per-turn context from passages. Same result shape as MemoryStore.retrieve."""
     if harness not in HARNESSES:
         raise ValueError("unsupported harness")
@@ -375,18 +382,23 @@ def context_for(store, harness, query, project=None, audience="internal", status
         raise ValueError("invalid audience")
     if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
         raise ValueError("invalid query or budget")
+    types_set, type_gate = resolve_type_filter(query, types)  # raises before any index work
     if isinstance(statuses, str):
         statuses = [statuses]
     config = settings(store.state_dir)
     eligible, stale_count = store._eligible(audience, project)
     candidates = pool(store, eligible, statuses, config["exclude"])
+    allowed = None
+    if types_set is not None or type_gate is not None:
+        allowed = {record["id"] for record in candidates
+                   if record_matches_types(record, types_set, type_gate)}
     index = build(store.state_dir, candidates, write=not store.read_only,
                   deadline=time.monotonic() + BUILD_SECONDS)
     if candidates and not index.passages:
         raise RuntimeError("passage index is empty")  # a failure, not an answer: caller falls back
     terms = _tokens(query) - STOPWORDS - _tokens(project or "")
     records = []
-    for _rank, (record, head, start, end, _tokens_) in search(index, terms, limit, config["floor"]):
+    for _rank, (record, head, start, end, _tokens_) in search(index, terms, limit, config["floor"], allowed=allowed):
         body = record["text"][start:end]
         excerpt = head + "\n\n" + body if head else body
         # Only text and text_truncated change, so advisor signatures still match the index.
