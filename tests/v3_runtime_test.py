@@ -237,7 +237,8 @@ class RuntimeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'rejected_reason'):
             self.store.ingest(self.record('missing-reason', kind='inference', validity='rejected',
                                           rejected_at='2026-09-24'))
-        for invalid in ('2026-02-30', '2026-09-24T25:00:00Z', '2026-W39-4', '20260924', 'yesterday'):
+        for invalid in ('2026-02-30', '2026-09-24T25:00:00Z', '2026-09-24T24:00:00', '2026-09-24T10',
+                        '2026-09-24T10:00:00UTC', '2026-W39-4', '20260924', 'yesterday'):
             with self.assertRaisesRegex(ValueError, 'rejected_at'):
                 self.store.ingest(self.record('invalid-date', kind='inference', validity='rejected',
                                               rejected_reason='User corrected it.', rejected_at=invalid))
