@@ -114,6 +114,32 @@ STOPWORDS = _tokens("the a an is are was were what which who when where how why 
 
 VALID_MEMORY_TYPES = ("episodic", "semantic", "procedural")
 
+# Conservative cue vocabulary (user decision): only unmistakable phrasing triggers a
+# type filter. Surface variants cover stem allomorphs the stemmer cannot bridge
+# (kaldik/kalmistik, konusm/konusmustuk); _tokens folds both sides into stems.
+EPISODIC_CLUES = _tokens("dün oturum sefer görüşme görüşmüş konuştuk konuşmuştuk konuşma kaldık kalmıştık kalmış önceki geçen günlük hatırla hatırlıyorum")
+PROCEDURAL_CLUES = _tokens("nasıl adım kural akış işlem prosedür kontrol listesi kurulum yayına")
+SEMANTIC_CLUES = _tokens("karar mimari tanım kavram anlam neden fark belge")
+
+
+def infer_types(query):
+    """Guess the memory type a query asks for; None means doubt, which means no filter.
+
+    Doubt is any zero-match or multi-match: two cues disagreeing is likelier a mixed
+    question than a narrow one, and a wrong filter hides the right note. An explicitly
+    passed types argument always wins before this function is consulted.
+    """
+    if not query or not query.strip():
+        return None
+    tokens = _tokens(query)
+    if not tokens:
+        return None
+    matched = [name for name, clues in (("episodic", EPISODIC_CLUES),
+                                        ("procedural", PROCEDURAL_CLUES),
+                                        ("semantic", SEMANTIC_CLUES))
+               if tokens & clues]
+    return matched if len(matched) == 1 else None
+
 
 def _rrf_fuse(lexical_ids, semantic_ids, k=60):
     scores = {}
@@ -493,8 +519,14 @@ class MemoryStore:
                 if t not in VALID_MEMORY_TYPES:
                     raise ValueError(f"invalid memory type: {t}")
             types_set = set(types)
+            type_gate = None
         else:
+            # Inferred types gate softly: a guess may exclude records explicitly typed
+            # otherwise, but never notes written before typing existed (or deliberately
+            # untyped). Explicit filters stay strict above.
+            inferred = infer_types(query)
             types_set = None
+            type_gate = set(inferred) if inferred else None
         if isinstance(statuses, str):
             statuses = [statuses]
         with self._connect() as db:
@@ -508,6 +540,8 @@ class MemoryStore:
             if project is not None and record.get("project") != project:
                 continue
             if types_set is not None and record.get("type") not in types_set:
+                continue
+            if type_gate is not None and record.get("type") is not None and record["type"] not in type_gate:
                 continue
             try:
                 self._source(record["source"])

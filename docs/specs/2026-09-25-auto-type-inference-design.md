@@ -1,6 +1,6 @@
 # Otomatik Tip Sezgisi (Auto Type Inference) — Tasarım ve Uygulama Planı
 
-Tarih: 2026-09-25 · Dal: feat/explicit-memory-typing · Durum: ONAYLANDI
+Tarih: 2026-09-25 · Dal: feat/explicit-memory-typing · Durum: UYGULANDI
 
 ## Amaç
 
@@ -26,6 +26,11 @@ karar sanılması) önlenmesi.
    katlama/kök sorunu yaşamaz. Türkçedeki kök allomorf boşlukları
    (kaldık/kalmıştık, konuşma/konuşmuştuk) ipucu dizisine yüzey varyantları
    eklenerek kapatılır; `_tokens` bunları kök kümesine çevirir.
+6. **Yumuşak kapı (uygulamada eklendi, tam regresyonla doğrulandı):** sezgisel
+   filtre yalnızca *açıkça başka tipte* kayıtları eler; tip alanı hiç olmayan
+   (typing öncesi veya kasten tiplendirilmemiş) kayıtlar korunur. Açık
+   `types=` filtresi katı davranışını aynen sürdürür. Gerekçe: ~20 eski test
+   tiplendirilmemiş kayıtla çalışıyor; sezgi, geriye dönük uyumluluğu bozamaz.
 
 ## API (beyin_v3.py)
 
