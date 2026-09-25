@@ -31,6 +31,10 @@ Flat scalar YAML fields are also accepted, including Unicode property names, quo
 
 The scanner skips hidden directories/files, node_modules, symlinks, known instruction/configuration Markdown names, receipt output directories and files explicitly marked as generated or `kind: receipt`. It does not assume that all ordinary prose is instruction-safe; untrusted content should be explicitly marked `kind: untrusted`. Visibility must be public, internal or private. Privacy-filtered context does not include private notes by default.
 
+### Optional memory type
+
+Any source may carry an optional frontmatter `type` of `episodic`, `semantic` or `procedural`; an unknown value fails validation and the source is excluded with a warning. The field is deliberately optional: records written without one (including every pre-typing vault) stay fully retrievable, and callers may filter context by type — an explicit type filter excludes untyped records, while the soft gate inferred from the query wording only excludes records typed contradictingly. `🔮 850-Companion/memory-types.md` defines the three types and when to use each.
+
 ### Inference and preference validity
 
 For `kind: inference` or `kind: preference`, optional `validity` is `current` (the default for existing sources) or `rejected`. When a user rejects an inference, keep its source and set `validity: rejected`; `rejected_reason` (non-empty) and `rejected_at` (ISO date or timestamp, such as `2026-09-24` or `2026-09-24T10:00:00Z`) are required in the frontmatter. A rejected inference is excluded from ordinary context, strict and candidate retrieval, current snapshots, and companion source snapshots even if it is an exact query match or a caller requests `--status rejected`. Legacy inference/preference notes with `status: rejected` receive the same exclusion without requiring new metadata. `validity` has no effect on other kinds, including a note without `kind`; `doctor` lists such records under `validity.ignored_rejections` and reports `needs_attention`, because their text is still current context. Task statuses retain their task meaning; `status: cancelled` is unaffected.
