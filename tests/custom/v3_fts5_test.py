@@ -119,6 +119,39 @@ class Fts5IndexingTest(unittest.TestCase):
             indexed = [row[0] for row in db.execute("SELECT id FROM records_fts")]
         self.assertNotIn('bad-1', indexed)
 
+    def metadata_value(self, store, key):
+        with sqlite3.connect(store.database) as db:
+            row = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def test_rebuild_counts_malformed_rows_in_metadata(self):
+        self.store.ingest(self.make_record('ok-1', 'Healthy indexable record'))
+        self.store.ingest(self.make_record('ok-2', 'Another healthy record'))
+        self.store.ingest(self.make_record('bad-1', 'Payload will be corrupted'))
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("UPDATE records SET payload='{broken' WHERE id='bad-1'")
+            db.execute("DELETE FROM records_fts")
+        evaluator.close_store(self.store)
+
+        reopened = self.module.MemoryStore(self.state, self.vault)
+        self.addCleanup(lambda: evaluator.close_store(reopened))
+        self.assertEqual(self.metadata_value(reopened, 'fts_malformed_skipped'), '1')
+        with sqlite3.connect(reopened.database) as db:
+            indexed = sorted(row[0] for row in db.execute("SELECT id FROM records_fts"))
+        self.assertEqual(indexed, ['ok-1', 'ok-2'])
+
+    def test_clean_rebuild_writes_no_counter(self):
+        self.store.ingest(self.make_record('ok-1', 'Healthy indexable record'))
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("DELETE FROM records_fts")
+        evaluator.close_store(self.store)
+
+        reopened = self.module.MemoryStore(self.state, self.vault)
+        self.addCleanup(lambda: evaluator.close_store(reopened))
+        self.assertIsNone(self.metadata_value(reopened, 'fts_malformed_skipped'))
+        with sqlite3.connect(reopened.database) as db:
+            self.assertEqual(db.execute("SELECT id FROM records_fts").fetchall(), [('ok-1',)])
+
 
 if __name__ == '__main__':
     unittest.main()
