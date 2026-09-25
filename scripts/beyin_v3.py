@@ -294,7 +294,13 @@ def main(argv=None):
                     'legacy_done': [], 'truncated': False,
                     'error': (type(exc).__name__ + ': ' + str(exc))[:240],
                 }
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            # A rejection on a plain note leaves the claim in current context; sync stays healthy.
+            try:
+                result['validity'] = load_sync().reader(store).validity_health()
+            except Exception as exc:
+                result['validity'] = {'ignored_rejection_count': 0, 'ignored_rejections': [], 'truncated': False,
+                                      'error': (type(exc).__name__ + ': ' + str(exc))[:240]}
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
