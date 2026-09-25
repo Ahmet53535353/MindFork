@@ -119,6 +119,10 @@ def parser():
     settings.add_argument("--context-chars", type=int)
     settings.add_argument("--secret-filter", choices=("on", "off"))
     settings.add_argument("--update-notifications", choices=("on", "off"))
+    settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
+    settings.add_argument("--threads-chars", type=int, help="Hygiene limit for Threads.md; 0 turns it off")
+    compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
+    compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
     skill.add_argument("--source", type=Path, required=True)
     skill.add_argument("--name")
@@ -194,6 +198,14 @@ def main(argv=None):
         elif args.command == "preferences":
             load_sync()
             import beyin_v3_preferences as preferences
+            import beyin_v3_companion as companion
+            limits = {name: value for name, value in (('Last-Session.md', args.last_session_chars),
+                                                      ('Threads.md', args.threads_chars)) if value is not None}
+            if limits:  # validate before anything is saved, so a bad value changes nothing
+                current_limits, limits_valid = companion.read_limits(state)
+                if not limits_valid:
+                    raise ValueError('companion-limits.json in the runtime state is invalid; fix or remove it first')
+                companion.check_limits(dict(current_limits, **limits))
             changes = {key: getattr(args, key) for key in ('interval_minutes', 'context_mode', 'context_chars') if getattr(args, key) is not None}
             if args.auto_sync is not None:
                 changes['auto_sync'] = args.auto_sync == 'on'
@@ -202,6 +214,10 @@ def main(argv=None):
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
                       'model_calls': False, 'timer_installed': False}
+            # Machine-local like update notifications: rollback-safe, outside the vault schema.
+            result['companion_limits'] = companion.save_limits(state, limits) if limits else companion.read_limits(state)[0]
+            if limits:
+                result['status'] = 'saved'
             import beyin_v3_releases as releases
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:
@@ -244,6 +260,11 @@ def main(argv=None):
             from beyin_v3_secrets import health as secret_filter_health
             result['secret_filter'] = secret_filter_health(state)
             result['secrets_redacted'] = result['secret_filter']['total']
+            try:
+                import beyin_v3_companion as companion
+                result['companion_hygiene'] = companion.hygiene(vault, state)
+            except Exception as exc:  # a size report must never hide the rest of doctor
+                result['companion_hygiene'] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}
@@ -271,6 +292,13 @@ def main(argv=None):
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
+        elif args.command == "companion-compact":
+            load_sync()
+            import beyin_v3_compact
+            result = beyin_v3_compact.compact(vault, state, dry_run=args.dry_run)
+            if any(entry['status'] == 'compacted' for entry in result['files'].values()):
+                # Index the shorter sources and the private archive before anyone reads them.
+                result['sync'] = {'status': load_sync()(vault, state).sync().get('status')}
         elif args.command == "sync":
             result = sync.sync()
         elif args.command == "ingest":

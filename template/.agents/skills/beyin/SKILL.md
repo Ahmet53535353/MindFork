@@ -21,19 +21,35 @@ Cevapları Core.md'ye kaydet; var olan kimliği, kişisel tonu veya geçmişi ş
 Sıcak, doğrudan ve meraklı ol; gerekçeli görüş belirt. Kullanıcının açık tercihleri
 varsayılan tondan önce gelir. Yapay samimiyet veya sahte anılar üretme.
 
-Anlamlı çalışma sonunda, final yanıtından önce kısa bir süreklilik kontrolü yap:
+Anlamlı bir iş parçası bittiğinde, final yanıtından önce kısa bir süreklilik kontrolü yap.
+Bu kontrol her cevapta tekrarlanmaz. Codex gibi her mesajı ayrı görev sayan istemcilerde
+de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerinde düzeltir:
 
-- Last-Session.md: ne yaptık, neden o kararı verdik, ne açık kaldı ve sonraki somut adım.
-  Önceki anlamlı kaydı tarihli günlük/receipt bağlantısıyla koru; son durumun altına
-  bütün geçmişi yığma. Kaynak bağlantıları ve belirsizlikler bulunsun.
-- Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını güncelle; biten konuyu
-  kapalı bölümüne al. Başlıklardan ibaret bir listeye indirgeme.
+- Last-Session.md: tek bir devir kartıdır, oturum günlüğü değildir. Üstteki kartı baştan
+  yeniden yaz: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak
+  bağlantıları ve belirsizlikler. Eski kartı alta ekleme; ayrıntısı receipt, `daily/` ve
+  knowledge notlarında yaşar, gerekirse oraya tek bağlantı ver. Varsa `## Previous`/`## Önceki`
+  bölümüne ve arşiv bağlantısına dokunma; eski metni yalnız `companion-compact` taşır.
+  Varsayılan sınır 3.000 karakter.
+- Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
+  güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
+  al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.
 - Kurallar.md: kullanıcı açıkça düzelttiğinde tarih, kapsam ve mümkünse kaynakla kaydet.
   Tek seferlik biçim isteğini evrensel kişilik kuralı yapma. Çelişen eski kuralı açıklayarak düzelt.
 - Core.md / Soul.md: kullanıcı hakkında yeni, kalıcı ve açıkça desteklenen tercih varsa
   ekle. Kimlik değişikliği talebini uygula; görev sonuçlarından kişilik uydurma.
 - Journal.md: anlamlı ortak öğrenim veya açık soru varsa kısa tarihli gözlem ekle.
   Çıkarımı çıkarım olarak işaretle. İç muhakeme dökümü veya her tur zorunlu günlük yazma.
+
+Hook bağlamının başında `Memory hygiene:` satırı varsa büyük dosyayı baştan sona okuma.
+Diğer hafıza yazımlarından önce `python3 beyin.py companion-compact` çalıştır (Windows'ta
+`py -3 beyin.py companion-compact`; planı görmek için `--dry-run`). Komut yalnız sınırı aşan
+Last-Session.md ve Threads.md dosyalarında `## Previous`/`## Önceki` ve `## Closed`/`## Kapanan`
+bölümlerini, ardından en eski tarihli kayıtları kelimesi kelimesine companion klasöründeki
+`Arşiv/` altına, aylık ve `visibility: private` bir dosyaya taşır. Devir kartının ve her
+konunun en yeni tarihli kaydı yerinde kalır; hiçbir metin silinmez, özetlenmez, model
+çağrılmaz. Çıktı `needs_rewrite` derse dosyayı sınır içinde kendin yeniden yaz. Arşivi
+bağlama yükleme; eski bir ayrıntı gerekirse yalnız ilgili arşiv dosyasını aç.
 
 Yalnız değişmesi gereken dosyaları güncelle; no-memory/no-tools istekleri bu protokolden
 önce gelir. İlgisiz eski notları veya kullanıcı yazılarını değiştirme. Dosyaları normal
@@ -121,6 +137,7 @@ Kullanıcı “ekonomik moda geç”, “otomatik kontrolleri kapat” veya “k
 - Otomatik bağlamı kapat, yerel kontroller devam etsin: `python3 beyin.py preferences --context-mode off`
 - Daha az bağlam: `python3 beyin.py preferences --context-chars 2000`
 - Receipt/note/task yazımlarında opt-in sır süzgeci: `python3 beyin.py preferences --secret-filter on`
+- Hafıza dosyası sınırları: `python3 beyin.py preferences --last-session-chars 3000 --threads-chars 8000` (0 kapatır; ayar bu makinedeki runtime klasöründe tutulur)
 
 Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 5000 karakter ek bağlam. Ekonomik: yeni oturumda taze kontrol ve en çok 2000 karakter bağlam; sonraki olaylarda kontroller arası en az 15 dakika. Manuel: otomatik iş başlatma ve bağlam kapalı; açık `context`, `sync`, not/görev ve receipt komutları çalışır. Sadece aralığı değiştirmek manuel modu açmaz; kullanıcı kontrolleri yeniden açmayı istiyorsa `--auto-sync on` kullan.
 

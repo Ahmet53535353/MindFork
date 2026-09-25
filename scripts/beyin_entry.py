@@ -107,8 +107,31 @@ def human_result(result, command, installed_version=None):
                 '\nBaglam ust siniri: ' + str(prefs['context_chars']) + ' karakter' +
                 '\nSir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali') +
                 '\nSurum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali') +
+                ''.join('\nHafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali')
+                        for name, value in (result.get('companion_limits') or {}).items()) +
                 '\nAcikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.' +
                 '\nYerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
+    if command == 'companion-compact':
+        lines = []
+        for name, entry in result.get('files', {}).items():
+            if entry.get('status') in ('compacted', 'planned'):
+                lines.append(name + ': ' + str(entry.get('chars')) + ' -> ' + str(entry.get('chars_after')) + ' karakter' +
+                             (' olacak' if entry['status'] == 'planned' else '') + ', ' + str(entry.get('moved_chars')) +
+                             ' karakter arsive ' + ('tasinacak' if entry['status'] == 'planned' else 'tasindi') + '.')
+                if not entry.get('within_limit_after'):
+                    lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde; dosyayi sinir icinde yeniden yaz.')
+            elif entry.get('status') == 'needs_rewrite':
+                lines.append(name + ': tasinacak tarihli eski kayit yok; dosyayi sinir icinde yeniden yaz.')
+            elif entry.get('status') == 'conflict':
+                lines.append(name + ': islem sirasinda dosya degisti; hicbir sey tasinmadi, tekrar dene.')
+            elif entry.get('status') == 'needs_attention':
+                lines.append(name + ': ' + str(entry.get('reason', 'kontrol gerekiyor')) + '.')
+            elif entry.get('status') in ('within_limit', 'limit_off'):
+                lines.append(name + ': sinir icinde, degisiklik yok.')
+        if result.get('status') == 'needs_attention' and not result.get('files'):
+            lines.append('Sinir ayari okunamadi; hicbir sey tasinmadi.' if result.get('limits_file') == 'invalid'
+                         else 'Birden fazla companion klasoru var; hicbir sey tasinmadi.')
+        return '\n'.join(lines + ['Hicbir metin silinmedi; model cagrilmadi.'])
     if command == 'doctor':
         labels = {'never_seen': 'Henuz gercek istemci oturumu gozlenmedi.',
                   'observed_metadata': 'Oturum olaylari gozleniyor.',
@@ -140,6 +163,12 @@ def human_result(result, command, installed_version=None):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):
             lines.append('Skill klasorundeki yonetilmeyen girdiler (bilgi): ' + ', '.join(result['skill_unmanaged']) + '.')
+        hygiene = result.get('companion_hygiene') or {}
+        for name in hygiene.get('over_limit', []):
+            entry = hygiene['files'][name]
+            lines.append('Hafiza hijyeni: ' + name + ' ' + str(entry['chars']) + ' karakter (sinir ' + str(entry['limit']) +
+                         '). Ajanina "' + ('py -3' if sys.platform == 'win32' else 'python3') +
+                         ' beyin.py companion-compact" calistirmasini soyle; eski kayitlar arsive tasinir, metin silinmez.')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))
