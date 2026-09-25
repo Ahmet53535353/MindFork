@@ -1,7 +1,7 @@
 # Uygulama Planı: Type-Based Retrieval ve Hybrid RAG (BM25 + RRF)
 
 **Tarih:** 2026-09-25  
-**Tasarım Referansı:** [`docs/specs/2026-09-25-hybrid-rag-type-retrieval-design.md`](file:///home/hayalet/Projects/feat-explicit-memory-typing-dev/docs/specs/2026-09-25-hybrid-rag-type-retrieval-design.md)  
+**Tasarım Referansı:** [`docs/specs/2026-09-25-hybrid-rag-type-retrieval-design.md`](../specs/2026-09-25-hybrid-rag-type-retrieval-design.md)  
 **Metodoloji:** Test Driven Development (TDD) — Her adımda önce test, sonra kod, sonra doğrulama.
 
 ---

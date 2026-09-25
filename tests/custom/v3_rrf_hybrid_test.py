@@ -2,6 +2,7 @@
 """Tests for Reciprocal Rank Fusion (RRF) and pluggable semantic search in beyin_v3."""
 import importlib.util
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
@@ -68,16 +69,31 @@ class RrfHybridSearchTest(unittest.TestCase):
         res_default = self.store.retrieve('Payment transaction', project='mindfork')
         self.assertEqual(res_default['records'][0]['id'], 'note-lex')
 
-        # With mock semantic searcher that prefers note-concept
+        # With mock semantic searcher that prefers note-concept; a phantom id proves
+        # fusion never injects records that retrieval did not admit.
         def mock_semantic_ranker(query, eligible_records):
-            # Orders note-concept first, note-lex second
-            return ['note-concept', 'note-lex']
+            return ['note-concept', 'phantom-not-admitted', 'note-lex']
 
         self.store.semantic_searcher = mock_semantic_ranker
         res_hybrid = self.store.retrieve('Payment transaction', project='mindfork')
-        # note-concept should be elevated
         fused_ids = [r['id'] for r in res_hybrid['records']]
-        self.assertIn('note-concept', fused_ids)
+        self.assertEqual(fused_ids[0], 'note-concept')  # rank assertion, not membership
+        self.assertNotIn('phantom-not-admitted', fused_ids)
+
+    def test_semantic_searcher_failure_falls_back_to_lexical_order(self):
+        self.store.ingest(self.make_record('note-lex', 'Payment transaction logging detail'))
+        self.store.ingest(self.make_record('note-concept', 'Stripe payment retry gateway architecture'))
+        base = [r['id'] for r in self.store.retrieve('Payment transaction', project='mindfork')['records']]
+
+        def broken_searcher(query, eligible_records):
+            raise RuntimeError('embedding provider exploded')
+
+        self.store.semantic_searcher = broken_searcher
+        res = self.store.retrieve('Payment transaction', project='mindfork')
+        self.assertEqual([r['id'] for r in res['records']], base)  # never break the caller
+        with sqlite3.connect(self.store.database) as db:
+            row = db.execute("SELECT value FROM metadata WHERE key='semantic_search_errors'").fetchone()
+        self.assertEqual(row[0] if row else None, '1')  # but the fallthrough is counted
 
 
 if __name__ == '__main__':

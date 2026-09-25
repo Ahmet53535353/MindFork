@@ -161,6 +161,8 @@ def resolve_type_filter(query, types):
             types = [types]
         if not isinstance(types, (list, tuple, set)) or not all(isinstance(t, str) for t in types):
             raise ValueError("invalid memory type")
+        if not types:
+            raise ValueError("memory type filter must not be empty")
         for t in types:
             if t not in VALID_MEMORY_TYPES:
                 raise ValueError(f"invalid memory type: {t}")
@@ -640,6 +642,20 @@ class MemoryStore:
             eligible.append(record)
         return eligible, stale_count
 
+    def _count_retrieval_error(self, key):
+        # Retrieval never breaks on a degraded derived index or a failing searcher hook,
+        # but the silent fallthrough must at least be countable. A read-only store
+        # cannot write and never tries; a broken counter write stays silent too.
+        if self.read_only:
+            return
+        try:
+            with self._connect() as db:
+                row = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+                db.execute("INSERT OR REPLACE INTO metadata VALUES (?,?)",
+                           (key, str(int(row[0]) + 1) if row else "1"))
+        except (sqlite3.Error, ValueError):
+            pass
+
     def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False, types=None):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
@@ -651,13 +667,15 @@ class MemoryStore:
         eligible, stale_count = self._eligible(audience, project)
         if types_set is not None or type_gate is not None:
             eligible = [record for record in eligible if record_matches_types(record, types_set, type_gate)]
-        superseded = {rid for record in eligible for rid in record["supersedes"]}
+        superseded = {rid for record in eligible for rid in record.get("supersedes", [])}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
         fts_rank_map = {}
-        if query and query.strip():
+        # The strict note path ranks with its own IDF scorer and never reads the BM25
+        # map, so it must not pay for the query either way (snapshot ranking does use it).
+        if query and query.strip() and not (strict and not snapshot):
             # FTS matches the raw indexed text, so query tokens stay unstemmed here;
             # stopwords are still dropped, or a common word turns every record into
             # a hit and BM25 ranks noise instead of signal.
@@ -687,7 +705,7 @@ class MemoryStore:
                                 previous_value = value
                             fts_rank_map[rec_id] = rank
                 except sqlite3.Error:
-                    pass
+                    self._count_retrieval_error("fts_query_errors")  # lexical ranking continues
         ranked = []
         vocabularies = {}
         for record in eligible:
@@ -724,7 +742,7 @@ class MemoryStore:
                         fused_map = {doc_id: idx for idx, doc_id in enumerate(fused_ids)}
                         ranked.sort(key=lambda item: fused_map.get(item[1]["id"], 999999))
                 except Exception:
-                    pass
+                    self._count_retrieval_error("semantic_search_errors")  # lexical order survives
         if candidate_only:
             return [record for _, record in ranked[:limit]]
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)

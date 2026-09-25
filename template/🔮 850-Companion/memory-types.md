@@ -41,7 +41,7 @@ Bu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type'ını ta
 ## Kullanım Kuralları
 
 1. **Tek type per dosya** — Bir dosya hem `semantic` hem `procedural` olmaz. Karma içerik ayrı dosyalara bölünür.
-2. **Frontmatter zorunlu** — `note-create` ve `task-create` çağrılarında `metadata.type` alanı zorunludur.
+2. **`type` önerilir, zorunlu değildir** — `note-create` ve `task-create` çağrılarında kaydın taşıdığı bellek türünü biliyorsan `metadata.type` alanını yaz; bilmiyorsan boş bırak. Boş bırakılan kayıtlar tiplendirilmemiş sayılır ve sezgisel filtreleme bunları asla elmez; yazıldığında ise geçerli bir değer olmalıdır.
 3. **Retrieval'da filtre** — Context sorgularında `type` filtresiyle ilgili kayıtlar hızlı bulunur.
 4. **Consolidation stratejisi** — AutoDream-lite consolidation her type için farklı prune/merge kuralları uygular:
    - `episodic`: Eski oturumlar özetlenir, detaylar arşivlenir

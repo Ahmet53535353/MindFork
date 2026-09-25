@@ -152,6 +152,56 @@ class Fts5IndexingTest(unittest.TestCase):
         with sqlite3.connect(reopened.database) as db:
             self.assertEqual(db.execute("SELECT id FROM records_fts").fetchall(), [('ok-1',)])
 
+    def test_missing_supersedes_key_survives_note_path(self):
+        self.store.ingest(self.make_record('ok-1', 'Record without supersedes key'))
+        with sqlite3.connect(self.store.database) as db:
+            payload = json.loads(db.execute("SELECT payload FROM records WHERE id='ok-1'").fetchone()[0])
+            payload.pop('supersedes')
+            db.execute("UPDATE records SET payload=? WHERE id='ok-1'", (json.dumps(payload, ensure_ascii=False),))
+            db.commit()
+        found = self.store.retrieve('Record supersedes', project='mindfork')
+        self.assertEqual([record['id'] for record in found['records']], ['ok-1'])
+
+    def test_bm25_rank_overrides_recency_and_missing_rows_queue_last(self):
+        # Overlap score is only the admission gate; BM25 rank dominates. The rare-token
+        # record wins despite being oldest; when its index row is removed it falls out
+        # of the BM25 list entirely and queues after every BM25 hit.
+        self.store.ingest(self.make_record('nadir-a', 'webhook imza kontrolu', updated_at='2026-01-01T00:00:00Z'))
+        self.store.ingest(self.make_record('sik-b', 'payment fatura listesi', updated_at='2026-06-01T00:00:00Z'))
+        self.store.ingest(self.make_record('sik-c', 'payment geri odeme', updated_at='2026-07-01T00:00:00Z'))
+        order = [record['id'] for record in self.store.retrieve('payment webhook', project='mindfork')['records']]
+        self.assertEqual(order[0], 'nadir-a')
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("DELETE FROM records_fts WHERE id='nadir-a'")
+            db.commit()
+        order = [record['id'] for record in self.store.retrieve('payment webhook', project='mindfork')['records']]
+        self.assertEqual(order[0], 'sik-c')
+        self.assertEqual(order[-1], 'nadir-a')
+
+    def test_strict_path_skips_fts_and_query_errors_are_counted(self):
+        self.store.ingest(self.make_record('ok-1', 'Healthy indexable record'))
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("DROP TABLE records_fts")
+            db.commit()
+        strict = self.store.retrieve('Healthy record', project='mindfork', strict=True)
+        self.assertEqual([record['id'] for record in strict['records']], ['ok-1'])
+        self.assertIsNone(self.metadata_value(self.store, 'fts_query_errors'))  # strict never queries FTS
+        relaxed = self.store.retrieve('Healthy record', project='mindfork')
+        self.assertEqual([record['id'] for record in relaxed['records']], ['ok-1'])  # degrade, never break
+        self.assertEqual(self.metadata_value(self.store, 'fts_query_errors'), '1')
+
+    def test_read_only_store_degrades_without_writing_counters(self):
+        self.store.ingest(self.make_record('ok-1', 'Healthy indexable record'))
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("DROP TABLE records_fts")
+            db.commit()
+        evaluator.close_store(self.store)
+        reader = self.module.MemoryStore(self.state, self.vault, read_only=True)
+        self.addCleanup(lambda: evaluator.close_store(reader))
+        found = reader.retrieve('Healthy record', project='mindfork')
+        self.assertEqual([record['id'] for record in found['records']], ['ok-1'])
+        self.assertIsNone(self.metadata_value(reader, 'fts_query_errors'))
+
 
 if __name__ == '__main__':
     unittest.main()

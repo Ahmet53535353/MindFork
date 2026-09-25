@@ -107,6 +107,12 @@ class MemoryTypesRetrievalTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.retrieve('architecture', project='mindfork', types=['semantic', 'bad_type'])
 
+    def test_empty_types_collection_raises(self):
+        # A silent empty filter in the hook path is worse than a loud error.
+        for bad in ([], (), set()):
+            with self.assertRaises(ValueError):
+                self.store.retrieve('architecture', project='mindfork', types=bad)
+
 
 class SkillGuidanceTest(unittest.TestCase):
     def test_task_creation_guidance_mentions_optional_type(self):

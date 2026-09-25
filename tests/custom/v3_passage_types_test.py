@@ -90,6 +90,19 @@ class PassageTypeGateTest(unittest.TestCase):
                    self.store.retrieve(NEUTRAL_QUERY, types='procedural')['records']]
         self.assertEqual(sources, ['notes/kayit-0.md'])
 
+    def test_missing_supersedes_key_does_not_break_either_path(self):
+        # Payloads normally carry supersedes from validation; a hand-repaired database
+        # without the key must degrade to "supersedes nothing", not KeyError.
+        import sqlite3
+        with sqlite3.connect(self.store.database) as db:
+            payload = json.loads(db.execute("SELECT payload FROM records WHERE id='kayit-0'").fetchone()[0])
+            payload.pop('supersedes')
+            db.execute("UPDATE records SET payload=? WHERE id='kayit-0'", (json.dumps(payload, ensure_ascii=False),))
+            db.commit()
+        self.assertIn('notes/kayit-0.md', self.sources(NEUTRAL_QUERY))  # passage path
+        note_ids = [record['id'] for record in self.store.retrieve(NEUTRAL_QUERY)['records']]
+        self.assertIn('kayit-0', note_ids)  # note path
+
 
 if __name__ == '__main__':
     unittest.main()

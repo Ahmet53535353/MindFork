@@ -44,6 +44,10 @@
   `docs/specs/2026-09-25-upstream-merge-2-plan.md`.
 - **Mimari temizlik seti (hibrit sınır kararı + FTS sayacı): 727/727 yeşil** (+2 sayaç testi);
   `docs/specs/2026-09-25-hybrid-boundary-and-fts-counter-design.md`.
+- **İnceleme sertleştirme seti (harici review, 6 madde): 734/734 yeşil** (+7 test) — supersedes savunması,
+  `types=[]` ValueError, strict-yol FTS atlama, sessiz-düşüş sayaçları
+  (`fts_query_errors`/`semantic_search_errors` + doctor), sıralama-semantiği pin testleri,
+  memory-types.md çelişki düzeltmesi; `docs/specs/2026-09-25-review-hardening-design.md`.
 - Custom testler `tests/custom/` içinde (`__init__.py` sayesinde kök discover artık dahil ediyor):
   - `v3_memory_types_test.py` — tip doğrulama ve filtreleme
   - `v3_fts5_test.py` — FTS5 şema, senkron, rebuild, tam sembol araması, bozuk payload toleransı

@@ -299,10 +299,17 @@ def main(argv=None):
                     'legacy_done': [], 'truncated': False,
                     'error': (type(exc).__name__ + ': ' + str(exc))[:240],
                 }
-            # Informational only: malformed rows the lexical index rebuild skipped.
+            # Informational only: malformed rows the lexical index rebuild skipped, and
+            # silent retrieval fallthroughs counted since the last doctor run.
             with store._connect() as db:
-                fts_row = db.execute("SELECT value FROM metadata WHERE key='fts_malformed_skipped'").fetchone()
-            result['fts_malformed_skipped'] = int(fts_row[0]) if fts_row else 0
+                counters = dict(db.execute(
+                    "SELECT key, value FROM metadata WHERE key IN "
+                    "('fts_malformed_skipped','fts_query_errors','semantic_search_errors')").fetchall())
+            result['fts_malformed_skipped'] = int(counters.get('fts_malformed_skipped', 0))
+            result['retrieval_error_counters'] = {
+                'fts_query': int(counters.get('fts_query_errors', 0)),
+                'semantic_search': int(counters.get('semantic_search_errors', 0)),
+            }
             # A rejection on a plain note leaves the claim in current context; sync stays healthy.
             try:
                 result['validity'] = load_sync().reader(store).validity_health()
