@@ -359,7 +359,7 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED, allowed=No
 
 def pool(store, eligible, statuses=None, exclude=DEFAULT_EXCLUDE):
     """The strict candidate set of MemoryStore._retrieve, minus configured record paths."""
-    superseded = {rid for record in eligible for rid in record["supersedes"]}
+    superseded = {rid for record in eligible for rid in record.get("supersedes", [])}
     prefixes = tuple(_path_key(prefix) for prefix in exclude)
     result = []
     for record in eligible:
