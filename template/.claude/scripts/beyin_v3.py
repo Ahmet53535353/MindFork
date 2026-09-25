@@ -151,6 +151,32 @@ def infer_types(query):
     return matched if len(matched) == 1 else None
 
 
+def resolve_type_filter(query, types):
+    """One policy for every retrieval path: explicit filters are strict, inferred soft."""
+    if types is not None:
+        if isinstance(types, str):
+            types = [types]
+        if not isinstance(types, (list, tuple, set)) or not all(isinstance(t, str) for t in types):
+            raise ValueError("invalid memory type")
+        for t in types:
+            if t not in VALID_MEMORY_TYPES:
+                raise ValueError(f"invalid memory type: {t}")
+        return set(types), None
+    inferred = infer_types(query)
+    return None, set(inferred) if inferred else None
+
+
+def record_matches_types(record, types_set, type_gate):
+    # An inferred gate may only exclude records explicitly typed otherwise; records
+    # written before typing existed (or deliberately untyped) always survive. Explicit
+    # filters are strict.
+    if types_set is not None:
+        return record.get("type") in types_set
+    if type_gate is not None:
+        return record.get("type") is None or record["type"] in type_gate
+    return True
+
+
 def _rrf_fuse(lexical_ids, semantic_ids, k=60):
     scores = {}
     for rank, doc_id in enumerate(lexical_ids, start=1):
@@ -606,31 +632,12 @@ class MemoryStore:
             raise ValueError("invalid audience")
         if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
             raise ValueError("invalid query or budget")
-        if types is not None:
-            if isinstance(types, str):
-                types = [types]
-            if not isinstance(types, (list, tuple, set)) or not all(isinstance(t, str) for t in types):
-                raise ValueError("invalid memory type")
-            for t in types:
-                if t not in VALID_MEMORY_TYPES:
-                    raise ValueError(f"invalid memory type: {t}")
-            types_set = set(types)
-            type_gate = None
-        else:
-            # Inferred types gate softly: a guess may exclude records explicitly typed
-            # otherwise, but never notes written before typing existed (or deliberately
-            # untyped). Explicit filters stay strict above.
-            inferred = infer_types(query)
-            types_set = None
-            type_gate = set(inferred) if inferred else None
+        types_set, type_gate = resolve_type_filter(query, types)
         if isinstance(statuses, str):
             statuses = [statuses]
         eligible, stale_count = self._eligible(audience, project)
-        if types_set is not None:
-            eligible = [record for record in eligible if record.get("type") in types_set]
-        elif type_gate is not None:
-            eligible = [record for record in eligible
-                        if record.get("type") is None or record["type"] in type_gate]
+        if types_set is not None or type_gate is not None:
+            eligible = [record for record in eligible if record_matches_types(record, types_set, type_gate)]
         superseded = {rid for record in eligible for rid in record["supersedes"]}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
