@@ -332,8 +332,20 @@ def main():
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
         settings = read(vault)
+        log_line = None
+        if settings.get('daily_log') and not args.metadata_only and event in ('SessionStart', 'SessionEnd'):
+            try:
+                import beyin_v3_sessionlog
+                if event == 'SessionStart':
+                    log_line = beyin_v3_sessionlog.session_start(vault, state, settings, args.harness,
+                                                                 payload.get('session_id', 'unknown'))
+                else:
+                    beyin_v3_sessionlog.session_end(vault, state, settings, args.harness,
+                                                    payload.get('session_id', 'unknown'))
+            except Exception:
+                log_line = None  # the daily log can never cost the hook its real job
         if not settings['auto_sync']:
-            print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
+            print(json.dumps(output_context(args.harness, event, (notice + (log_line or ''))[:settings['context_chars']])) if (notice or log_line) else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
         enqueue_event(vault, state, payload, args.harness)
         command = [sys.executable, str(Path(__file__).resolve()), "--vault", str(vault),
@@ -421,7 +433,7 @@ def main():
                 if not delivered.get("records"):
                     print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
                     return
-            output = output_context(args.harness, event, (notice + text)[:settings['context_chars']])
+            output = output_context(args.harness, event, (notice + text + (log_line or ''))[:settings['context_chars']])
             print(json.dumps(output))
         else:
             print(json.dumps(reminder) if reminder else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}"))

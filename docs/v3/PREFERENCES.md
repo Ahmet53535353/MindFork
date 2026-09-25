@@ -46,6 +46,10 @@ Receipt özetinde kalıcı bir öğrenim ayrı bir satırda, satır başında be
 
 Yönetilen blok dışında `AGENTS.md` ya da `CLAUDE.md` içinde `knowledge/` klasörünü derleyiciye bırakan V2 ifadesi (`derleyici yönetir`, `derleyici yazar`, `elle düzenlemeyin`, `compiler-managed` gibi) kalmışsa doctor `Talimat celiskisi: ...` satırını yazar ve durumu `needs_attention` yapar. Bu ifade ajanın knowledge notu yazmaktan kaçınmasına yol açar; satırı kaldırmak uyarıyı kapatır.
 
+## Opt-in günlük oturum logu
+
+`python3 beyin.py preferences --daily-log on` her oturumun olgu bloğunu `daily/log/YYYY-MM-DD.md` altına ekler: SessionStart bloğu açar (boş bir `### Özet` bölümüyle), SessionEnd başlık-bitiş saati, istemci, istem sayısı, oturum içi receipt referansları ve reflection işaretiyle kapatır. Özeti makine yazmaz — model çağrılmaz; SessionStart'taki tek satırlık hatırlatmayı gören aktif ajan Özet'i Bağlam / Önemli Konuşmalar / Alınan Kararlar / Öğrenilenler / Yapılacaklar başlıklarıyla doldurur, kalıcı değer yoksa boş bırakır. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez; transcript hiçbir yere gönderilmez. Çökmeyle yarıda kalan oturum bir sonraki açılışta `OPEN (yarıda kaldı)` olarak işaretlenir. Log receipt üretmez, `daily/v3/` indeksiyle ve devir kartıyla oynamaz; passage yolu `daily/` kaynaklarını her zaman dışladığı için tur başı bağlamı şişirmez. Tasarım ve gerekçe: `docs/specs/2026-09-26-daily-log-design.md`.
+
 ## Tur başı bağlam: pasaj düzeyinde strict arama
 
 Her mesajda hook'un eklediği bağlam (`context_mode: turn`) strict aramadan gelir. Bu arama notun tamamını tek bir kelime kümesi olarak puanlamaz; notu Markdown bloklarına böler ve her kaynaktan soruyla en iyi eşleşen bloğu, başlık yoluyla birlikte teslim eder (#83). Cevap uzun bir notun ortasındaysa notun ilk karakterleri değil cevabı taşıyan blok gelir; neredeyse her kelimeyi içeren uzun bir oturum arşivi de her soruda öne çıkamaz. Model çağrısı ve yeni bağımlılık yoktur.

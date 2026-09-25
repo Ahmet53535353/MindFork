@@ -116,6 +116,14 @@ M2 ile geldi). Klon single-branch olduğu için `origin/main` hiç yoktu; refspe
 `main` eklendi ve worktree'deki lokal main `f9a8b5f`'e ff'ledi (dal 28 commit ileride).
 Tarihsel dosyalara (V2, deadend, oturum notları) ilkesel olarak dokunulmadı.
 
+## Günlük oturum logu — model'siz B1 (2026-09-26): 746/746 yeşil (+8)
+
+Hook olguları yazar (aç/kapat bloğu, saat-harness-istem sayısı, receipt pencereleri,
+yarıda-kalan işareti), özeti oturumdaki ajan beş V2 başlığıyla doldurur; `daily_log`
+opt-in, varsayılan kapalı; transcript/k Model çağrısı yok. TDD: 8/8 hedefli (gerçek
+hook subprocess dâhil) → tam paket 746/746. Tasarım, reddedilen A/B1 sentezi gerekçesi
+ve PR savunması: `docs/specs/2026-09-26-daily-log-design.md`.
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
@@ -123,3 +131,4 @@ Tarihsel dosyalara (V2, deadend, oturum notları) ilkesel olarak dokunulmadı.
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f9a8b5f)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
+6. Günlük log Faz-2: PreCompact kurtarma çizgisi (spec'te ertelenen kemer)

@@ -28,7 +28,10 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
 - Last-Session.md: tek bir devir kartıdır, oturum günlüğü değildir. Üstteki kartı baştan
   yeniden yaz: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak
   bağlantıları ve belirsizlikler. Eski kartı alta ekleme; ayrıntısı receipt, `daily/` ve
-  knowledge notlarında yaşar, gerekirse oraya tek bağlantı ver. Varsa `## Previous`/`## Önceki`
+  knowledge notlarında yaşar, gerekirse oraya tek bağlantı ver. Kartı yeniden yazmadan önce
+  eski kartta hâlâ geçerli ya da bitmemiş bilgi varsa onu önce `daily/log/` içindeki bugünün
+  oturum bloğuna taşı (`daily_log` açıksa) ya da bir knowledge notuna yaz; sonra kartı temiz
+  yaz. Varsa `## Previous`/`## Önceki`
   bölümüne ve arşiv bağlantısına dokunma; eski metni yalnız `companion-compact` taşır.
   Varsayılan sınır 3.000 karakter.
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
@@ -127,6 +130,14 @@ Hook bağlamında `Receipt session=...` verilmişse JSON içine `session` alanı
 refs mevcut vault-relative dosyalardır. Aynı gönderimi yeniden denerken aynı event_id ve gövdeyi kullan; farklı sonuç için yeni ID seç. Geçici JSON'u kullanıcı içerik klasörüne dağıtma. Günlük/knowledge otomatik görünümlerini CLI/worker üretir; kaynağını düzenle. Son kaydı ve gerektiğinde `doctor` çıktısını kontrol et; failed/pending/conflict durumunu başarı diye sunma.
 
 Basit soru veya selamlaşma için gereksiz kayıt yazma. Kullanıcının no-memory, no-tools ve dosya sınırları bu akıştan önceliklidir. Kendi skill kurallarını konuşma transkriptinden kendiliğinden değiştirme.
+
+Hook bağlamında `Günlük log:` hatırlatması gördüysen: `daily/log/` içindeki kendi oturum
+bloğunun `### Özet` bölümünü oturum bitmeden şu beş başlıkla doldur — `## Bağlam`,
+`## Önemli Konuşmalar`, `## Alınan Kararlar`, `## Öğrenilenler`, `## Yapılacaklar`. Somut
+kararları, tercihleri, sonuçları ve açık işleri koru; araç çağrılarını, tekrarı ve geçici
+ayrıntıları yazma. Kalıcı değeri olan hiçbir şey yoksa bölümü boş bırak, uydurma. Bloğun
+başlığına ve olgu satırlarına dokunma (kanca yönetir); yalnız kendi oturumunun Özet'ini
+doldur.
 
 
 ## Tüketim ve otomatik kontrol tercihleri

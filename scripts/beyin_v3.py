@@ -118,6 +118,7 @@ def parser():
     settings.add_argument("--context-mode", choices=("turn", "session", "off"))
     settings.add_argument("--context-chars", type=int)
     settings.add_argument("--secret-filter", choices=("on", "off"))
+    settings.add_argument("--daily-log", choices=("on", "off"), help="Append per-session facts blocks to daily/log/YYYY-MM-DD.md")
     settings.add_argument("--update-notifications", choices=("on", "off"))
     settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
     settings.add_argument("--threads-chars", type=int, help="Hygiene limit for Threads.md; 0 turns it off")
@@ -211,6 +212,8 @@ def main(argv=None):
                 changes['auto_sync'] = args.auto_sync == 'on'
             if args.secret_filter is not None:
                 changes['secret_filter'] = args.secret_filter == 'on'
+            if args.daily_log is not None:
+                changes['daily_log'] = args.daily_log == 'on'
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
                       'model_calls': False, 'timer_installed': False}
