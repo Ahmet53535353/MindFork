@@ -108,5 +108,14 @@ class MemoryTypesRetrievalTest(unittest.TestCase):
             self.store.retrieve('architecture', project='mindfork', types=['semantic', 'bad_type'])
 
 
+class SkillGuidanceTest(unittest.TestCase):
+    def test_task_creation_guidance_mentions_optional_type(self):
+        # The typing contract lives in the skill text: type is recommended when
+        # known, never forced, and untyped tasks stay visible to retrieval.
+        skill = (ROOT / 'template/.agents/skills/beyin/SKILL.md').read_text(encoding='utf-8')
+        self.assertIn('"type":"procedural"', skill)
+        self.assertIn('tipsiz görevler aramada filtrelenmez', skill)
+
+
 if __name__ == '__main__':
     unittest.main()
