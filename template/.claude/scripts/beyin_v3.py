@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import datetime
 import functools
 import hashlib
 import json
@@ -243,13 +243,14 @@ class MemoryStore:
             if record.get("validity") == "rejected":
                 if not isinstance(record.get("rejected_reason"), str) or not record["rejected_reason"].strip():
                     raise ValueError("rejected_reason required for rejected validity")
+                # A date or a full timestamp, the same shapes updated_at takes.
                 rejected_at = record.get("rejected_at")
-                if not isinstance(rejected_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rejected_at):
-                    raise ValueError("rejected_at must be an ISO date for rejected validity")
+                if not isinstance(rejected_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[T ]\S+)?", rejected_at):
+                    raise ValueError("rejected_at must be an ISO date or timestamp for rejected validity")
                 try:
-                    date.fromisoformat(rejected_at)
+                    datetime.fromisoformat(rejected_at)
                 except ValueError as exc:
-                    raise ValueError("rejected_at must be an ISO date for rejected validity") from exc
+                    raise ValueError("rejected_at must be an ISO date or timestamp for rejected validity") from exc
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
