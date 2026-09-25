@@ -159,6 +159,16 @@ def human_result(result, command, installed_version=None):
             if d7.get('total', 0) > 0 and d7.get('ratio') is not None:
                 d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
             lines.append('Makbuz kapsami: %' + str(pct) + ' (' + str(cov['covered']) + '/' + str(cov['total']) + ' oturum' + d7_text + ')')
+        kf = result.get('knowledge_freshness')
+        if isinstance(kf, dict):
+            if kf.get('last_distilled_at'):
+                days = kf.get('days_ago', 0)
+                time_text = 'bugun' if days == 0 else ('1 gun once' if days == 1 else str(days) + ' gun once')
+                lines.append('Son bilgi damitmasi: ' + time_text + ' (o tarihten beri ' + str(kf.get('receipts_since', 0)) + ' makbuz)')
+            else:
+                lines.append('Son bilgi damitmasi: henuz kavram notu damitilmadi (toplam ' + str(kf.get('receipts_since', 0)) + ' makbuz)')
+        for conflict in result.get('instruction_conflicts', []):
+            lines.append('Talimat celiskisi: ' + conflict['file'] + ' icinde V2 derleyici ifadesi var ("' + conflict.get('snippet', '') + '"). Bu metin V3 ajan damitmasiyla celisiyor; eski derleyici talimatlarini kaldir.')
         if result.get('skill_conflicts'):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):

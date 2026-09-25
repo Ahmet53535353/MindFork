@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 sys.dont_write_bytecode = True
@@ -17,6 +18,11 @@ RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
     "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}. "
     "Receipt session={session}; put this value in the JSON session field so the receipt closes this checkpoint."
+)
+KNOWLEDGE_REMINDER = (
+    "Learnings were reported in the receipt but no note under knowledge/ was updated in this session. "
+    "Distill lasting learnings into knowledge/concepts/<name>.md (or update an existing concept, then sync); "
+    "if no permanent note is required, state that in one sentence to proceed."
 )
 
 
@@ -48,33 +54,80 @@ def receipt_context(vault):
     return "\nLatest receipt (historical agent claim, not independently verified):\n" + content
 
 
-def _has_receipt(database, harness, session, since):
+def _get_session_receipt(database, harness, session, since):
     """Same (harness, session, created_at) match as beyin_v3_projections.refresh_gaps."""
     from datetime import datetime
     import sqlite3
     if database.is_symlink():
         raise ValueError("database must not be a symlink")
     if not database.is_file():
-        return False  # No runtime store yet, so no receipt can have been recorded.
+        return None
     db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
     try:
         rows = db.execute("SELECT payload FROM receipts WHERE instr(payload, ?) > 0", (session,)).fetchall()
     finally:
         db.close()
     for (raw,) in rows:
-        receipt = json.loads(raw)
-        if (receipt.get("harness") == harness and receipt.get("session") == session and
-                datetime.fromisoformat(receipt.get("created_at", "1970-01-01T00:00:00+00:00")).timestamp() >= since):
-            return True
+        try:
+            receipt = json.loads(raw)
+            if (receipt.get("harness") == harness and receipt.get("session") == session and
+                    datetime.fromisoformat(receipt.get("created_at", "1970-01-01T00:00:00+00:00")).timestamp() >= since):
+                return receipt
+        except Exception:
+            continue
+    return None
+
+
+def _has_receipt(database, harness, session, since):
+    return _get_session_receipt(database, harness, session, since) is not None
+
+
+def _has_declared_learning(summary):
+    if not isinstance(summary, str) or not summary.strip():
+        return False
+    pattern = re.compile(
+        r'(?i)(?:^|\n|[\*#_ ]+)(?:öğrenilen(?:ler)?|ogrenilen(?:ler)?|kalıcı\s+öğrenim|kalici\s+ogrenim|ders(?:ler)?|lessons?\s+learned|learning)\s*[:\n\-#\*_]+\s*(.+)',
+        re.MULTILINE
+    )
+    m = pattern.search(summary)
+    if not m:
+        return False
+    content = m.group(1).strip().lower()
+    negative_words = ('yok', 'none', '-', 'bulunmuyor', 'kalıcı öğrenim yok', 'kalici ogrenim yok', 'n/a', 'yoktur')
+    if any(content.startswith(nw) for nw in negative_words):
+        return False
+    return True
+
+
+def _has_knowledge_update(vault, receipt, since):
+    if not receipt:
+        return False
+    for ref in receipt.get('refs', []):
+        if isinstance(ref, str) and (ref.startswith('knowledge/') or ref.startswith('knowledge\\')):
+            if not ref.replace('\\', '/').startswith('knowledge/v3/'):
+                return True
+    if vault:
+        k_dir = Path(vault) / 'knowledge'
+        if k_dir.is_dir():
+            for p in k_dir.rglob('*.md'):
+                if p.is_file() and not p.is_symlink() and p.name != '.gitkeep':
+                    try:
+                        rel = p.relative_to(vault).as_posix()
+                        if not rel.startswith('knowledge/v3/') and p.stat().st_mtime >= since:
+                            return True
+                    except (ValueError, OSError):
+                        continue
     return False
 
 
-def receipt_reminder(payload, state, harness, event):
+def receipt_reminder(payload, state, harness, event, vault=None):
     """Track edits per session and return a one-time Stop block, or None.
 
     Installed PostToolUse hooks match only Edit|Write|apply_patch for Claude and
     Codex, so that event marks the session as edited without reading transcripts.
     Stop then looks for a receipt of this harness and session in the runtime store.
+    If a receipt declared learnings but no note under knowledge/ was touched,
+    Stop reminds once to distill into knowledge/concepts/.
     """
     if harness not in ("claude", "codex") or event not in ("UserPromptSubmit", "PostToolUse", "Stop"):
         return None
@@ -87,13 +140,15 @@ def receipt_reminder(payload, state, harness, event):
         digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
         folder = Path(state) / "receipt-reminders"
         done, edited = folder / (digest + ".done"), folder / (digest + ".edited")
-        if done.exists():
+        kdone = folder / (digest + ".kdone")
+        if done.exists() and kdone.exists():
             return None
         if event == "UserPromptSubmit":
             prompt = payload.get("prompt")
             if isinstance(prompt, str) and "[kaydetme]" in prompt:
                 folder.mkdir(parents=True, exist_ok=True)
                 done.touch()
+                kdone.touch()
                 edited.unlink(missing_ok=True)
             return None
         if event == "PostToolUse":
@@ -104,13 +159,29 @@ def receipt_reminder(payload, state, harness, event):
             return None
         since = float(json.loads(edited.read_text(encoding="utf-8"))["at"])
         session = digest[:24]  # the queued checkpoint's session value
-        if _has_receipt(Path(state) / "memory.sqlite3", harness, session, since):
-            edited.unlink(missing_ok=True)  # later edits open a new window
+        db_path = Path(state) / "memory.sqlite3"
+        receipt = _get_session_receipt(db_path, harness, session, since)
+        if not receipt:
+            if not done.exists():
+                edited.unlink(missing_ok=True)
+                folder.mkdir(parents=True, exist_ok=True)
+                with done.open("x", encoding="utf-8"):  # FileExistsError if a concurrent Stop reminded first
+                    pass
+                return {"decision": "block", "reason": RECEIPT_REMINDER.format(harness=harness, session=session)}
             return None
-        edited.unlink(missing_ok=True)
-        with done.open("x", encoding="utf-8"):  # FileExistsError if a concurrent Stop reminded first
-            pass
-        return {"decision": "block", "reason": RECEIPT_REMINDER.format(harness=harness, session=session)}
+
+        # Receipt exists! Check if receipt declared learning but knowledge/ was not updated.
+        if not kdone.exists() and _has_declared_learning(receipt.get("summary", "")) and not _has_knowledge_update(vault, receipt, since):
+            folder.mkdir(parents=True, exist_ok=True)
+            try:
+                with kdone.open("x", encoding="utf-8"):
+                    pass
+            except FileExistsError:
+                return None
+            return {"decision": "block", "reason": KNOWLEDGE_REMINDER}
+
+        edited.unlink(missing_ok=True)  # later edits open a new window
+        return None
     except Exception:
         return None  # fail open: never block Stop on a bookkeeping error
 
@@ -254,7 +325,7 @@ def main():
         process = subprocess.Popen(command, **options) if due else None
         # After enqueue, so reminder bookkeeping can never cost the queued checkpoint.
         # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
-        reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event)
+        reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event, vault=vault)
         inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
         if not inject or args.metadata_only:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))

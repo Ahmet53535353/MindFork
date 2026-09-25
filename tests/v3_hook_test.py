@@ -283,6 +283,43 @@ class HookInstallerTest(unittest.TestCase):
         gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))
         self.assertEqual(gaps['potential_missing_receipts'], 0)
 
+    def test_stop_knowledge_reminder_blocks_when_receipt_has_learning_without_knowledge_note(self):
+        engine = self.seed()
+        def session(name):
+            return hashlib.sha256(name.encode()).hexdigest()[:24]
+        sess_name = 'learn-session'
+        self.lifecycle('PostToolUse', sess_name, 'claude')
+        summary = "Completed SQLite refactor.\nÖğrenilen: SQLite WAL modunda timeout süresi en az 5 saniye olmalı."
+        engine.receipt('learn-receipt-1', summary, ['notes/task.md'], 'claude', session=session(sess_name))
+        first = self.lifecycle('Stop', sess_name, 'claude')
+        self.assertEqual(first.get('decision'), 'block')
+        self.assertIn('knowledge/concepts/', first.get('reason', ''))
+        second = self.lifecycle('Stop', sess_name, 'claude')
+        self.assertEqual(second, {})
+
+    def test_stop_knowledge_reminder_passes_when_knowledge_ref_is_present(self):
+        engine = self.seed()
+        def session(name):
+            return hashlib.sha256(name.encode()).hexdigest()[:24]
+        sess_name = 'know-ref-session'
+        self.lifecycle('PostToolUse', sess_name, 'claude')
+        summary = "Completed SQLite refactor.\nÖğrenilen: SQLite WAL modunda timeout süresi en az 5 saniye olmalı."
+        engine.note_create('knowledge/concepts/sqlite-wal.md', 'WAL mode details', {'id': 'sw-1'})
+        engine.receipt('know-receipt-1', summary, ['knowledge/concepts/sqlite-wal.md'], 'claude', session=session(sess_name))
+        response = self.lifecycle('Stop', sess_name, 'claude')
+        self.assertEqual(response, {})
+
+    def test_stop_knowledge_reminder_passes_when_learning_is_declared_none(self):
+        engine = self.seed()
+        def session(name):
+            return hashlib.sha256(name.encode()).hexdigest()[:24]
+        sess_name = 'no-learn-session'
+        self.lifecycle('PostToolUse', sess_name, 'claude')
+        summary = "Routine bugfix completed.\nÖğrenilen: Yok"
+        engine.receipt('no-learn-1', summary, ['notes/task.md'], 'claude', session=session(sess_name))
+        response = self.lifecycle('Stop', sess_name, 'claude')
+        self.assertEqual(response, {})
+
     def test_stop_receipt_reminder_passes_without_edits(self):
         self.assertEqual(self.lifecycle('Stop', 'no-edits', 'claude'), {})
         # The global bridge (--metadata-only) keeps no reminder state.

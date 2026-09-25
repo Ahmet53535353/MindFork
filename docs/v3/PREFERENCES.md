@@ -40,6 +40,10 @@ Kurulum, Claude ve Codex için PostToolUse hook'unu yalnız dosya düzenleyen ar
 
 Stop olayı hatırlatmadan önce kuyruğa alınır. Runtime kaydı okunamazsa akış durdurulmaz. `stop_hook_active` taşıyan ikinci Stop, manuel profil (`auto_sync: false`) ve global köprü hatırlatma yapmaz; tek seferlik hakkı da harcamaz. Kullanıcı mesajında `[kaydetme]` yazarak bu oturumdaki hatırlatmayı kapatabilir; `BEYIN_V3_NO_RECEIPT_REMINDER=1` özelliği tamamen kapatır.
 
+Oturumda receipt yazılmış ancak receipt özetinde kalıcı bir öğrenim beyan edildiği halde (`Öğrenilen`, `Ders`, `Learned` vb.) oturum boyunca `knowledge/` altına yeni ya da güncellenmiş kavram notu damıtılmadıysa, Stop kancası oturum başına bir kez ajana kalıcı öğrenimi `knowledge/concepts/` altına damıtmasını hatırlatır. Kalıcı kavram gerekmiyorsa ajanın bunu tek cümleyle belirtmesi yeterlidir; kanca ikinci kez engellemez.
+
+`beyin.py doctor` komutu sessiz durgunluğu önlemek için son bilgi damıtmasının kaç gün önce yapıldığını ve o tarihten bu yana kaç receipt kaydedildiğini raporlar (`Son bilgi damıtması: X gün önce (o tarihten beri N makbuz)`). Ayrıca yönetilen blok dışında V2'den kalma çelişkili derleyici talimatları tespit edilirse `Talimat çelişkisi` uyarısı verir.
+
 ## Tur başı bağlam: pasaj düzeyinde strict arama
 
 Her mesajda hook'un eklediği bağlam (`context_mode: turn`) strict aramadan gelir. Bu arama notun tamamını tek bir kelime kümesi olarak puanlamaz; notu Markdown bloklarına böler ve her kaynaktan soruyla en iyi eşleşen bloğu, başlık yoluyla birlikte teslim eder (#83). Cevap uzun bir notun ortasındaysa notun ilk karakterleri değil cevabı taşıyan blok gelir; neredeyse her kelimeyi içeren uzun bir oturum arşivi de her soruda öne çıkamaz. Model çağrısı ve yeni bağımlılık yoktur.

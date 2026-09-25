@@ -3,6 +3,7 @@ from collections import defaultdict
 from datetime import datetime
 import json
 from pathlib import Path
+import re
 import time
 
 
@@ -165,3 +166,107 @@ def project_receipts(engine, db):
         db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
     refresh_gaps(engine, db)
     return conflicts
+
+
+def knowledge_freshness(vault, db, now=None):
+    """Diagnose knowledge distillation recency and count receipts since then."""
+    if now is None:
+        now = time.time()
+    vault = Path(vault)
+    knowledge_dir = vault / 'knowledge'
+    latest_mtime = None
+    latest_source = None
+
+    if knowledge_dir.is_dir():
+        for path in sorted(knowledge_dir.rglob('*.md')):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                relative = path.relative_to(vault).as_posix()
+            except ValueError:
+                continue
+            if relative.startswith('knowledge/v3/') or path.name == '.gitkeep':
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            try:
+                text = path.read_text(encoding='utf-8', errors='ignore')
+                if text.startswith('---'):
+                    end_idx = text.find('---', 3)
+                    if end_idx != -1:
+                        fm = text[3:end_idx]
+                        if '"generated": true' in fm or 'generated: true' in fm:
+                            continue
+                        m = re.search(r'(?:updated|modified|date)\s*[:=]\s*["\']?([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T\s][0-9]{2}:[0-9]{2}:[0-9]{2})?)', fm)
+                        if m:
+                            try:
+                                fm_dt = datetime.fromisoformat(m.group(1).replace(' ', 'T'))
+                                mtime = max(mtime, fm_dt.timestamp())
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+            if latest_mtime is None or mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_source = relative
+
+    total_receipts = 0
+    receipts_since = 0
+    try:
+        for (payload,) in db.execute('SELECT payload FROM receipts'):
+            try:
+                receipt = json.loads(payload)
+                created = datetime.fromisoformat(receipt['created_at']).timestamp()
+            except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                continue
+            total_receipts += 1
+            if latest_mtime is not None:
+                if created >= latest_mtime:
+                    receipts_since += 1
+            else:
+                receipts_since += 1
+    except Exception:
+        pass
+
+    days_ago = max(0, int((now - latest_mtime) / 86400)) if latest_mtime is not None else None
+
+    return {
+        'last_distilled_at': latest_mtime,
+        'days_ago': days_ago,
+        'receipts_since': receipts_since,
+        'total_receipts': total_receipts,
+        'latest_source': latest_source,
+    }
+
+
+def check_instruction_conflicts(vault):
+    """Detect contradictory V2 compiler instructions outside the managed V3 block."""
+    vault = Path(vault)
+    conflicts = []
+    START = "<!-- beyin-v3:start -->"
+    END = "<!-- beyin-v3:end -->"
+    pattern = re.compile(
+        r'(?i)(?=.*\bknowledge\b)(?=.*(?:derleyici|elle\s+d[uü]zenleme|dokunma|gece\s+derleyicisi|compiler))'
+    )
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        path = vault / name
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            outside = re.sub(r"\n*" + re.escape(START) + r".*?" + re.escape(END), "", text, flags=re.S)
+            for line in outside.splitlines():
+                line_str = line.strip()
+                if pattern.search(line_str):
+                    conflicts.append({
+                        'file': name,
+                        'snippet': line_str[:120],
+                        'reason': 'legacy_v2_compiler_instruction'
+                    })
+                    break
+        except Exception:
+            pass
+    return conflicts
+
