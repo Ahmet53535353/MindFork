@@ -13,6 +13,13 @@ sys.dont_write_bytecode = True
 JEV_MODES = {'off': 'kapali', 'shadow': 'golge', 'on': 'acik'}
 
 
+def jev_mode(mode, provider):
+    """Laya is shadow-only: a saved or hand-edited `on` still runs as shadow."""
+    if provider == 'laya' and mode in ('shadow', 'on'):
+        return 'golge (yalniz)'
+    return JEV_MODES.get(mode, 'bilinmiyor')
+
+
 def update_lines(result):
     status = result.get('status', 'unknown')
     if status == 'available':
@@ -35,28 +42,60 @@ def update_lines(result):
 def jev_lines(result):
     """Shared by the jev command and the doctor summary; reads only reported fields."""
     lines = []
+    laya = result.get('provider') == 'laya'
     if result.get('automatic_model_calls'):
         lines.append('Otomatik baglam acik: her turda istemin ve en fazla 8 aday ic/kamu notunun basligi ile'
-                     ' ilk 600 karakteri saglayiciya gider. Ozel notlar gonderilmez.')
-    if result.get('mode', 'off') != 'off' and not result.get('key_present'):
+                     ' ilk 600 karakteri ' + ('yerel Laya sunucusuna' if laya else 'saglayiciya') +
+                     ' gider. Ozel notlar gonderilmez.')
+        if laya and not result.get('auto_context_applied'):
+            lines.append('Laya yalniz golge modda calisir: otomatik baglam puanlari yalniz kaydedilir, baglami degistirmez.')
+    if laya:
+        if result.get('mode_refused') == 'laya_shadow_only':
+            lines.append('jev.json acik mod istiyor ama Laya yalniz golge modda calisir; sonuclar degismez.'
+                         ' Acik mod icin: jev on --provider typesafe.')
+        if result.get('mode', 'off') != 'off':
+            lines.append('Laya yerel sunucusu: ' + ascii_text(result.get('laya', {}).get('base_url')) +
+                         '; LAYA_HOST=127.0.0.1 ile baslat. Puanlar olcum icin kaydedilir, sonuclari degistirmez.')
+    elif result.get('mode', 'off') != 'off' and not result.get('key_present'):
         lines.append('TYPESAFE_API_KEY yok: cagrilar yerel sonuca duser.')
+    server = result.get('server')
+    if isinstance(server, dict) and server.get('checked'):
+        if server.get('reachable') and server.get('pinned_model_loaded'):
+            lines.append('Laya sunucusu hazir (' + ascii_text(server.get('device')) + ').')
+        elif server.get('reachable'):
+            lines.append('Laya sunucusu cevap veriyor ama sabitlenen model yuklu degil.')
+        else:
+            lines.append('Laya sunucusuna ulasilamadi: cagrilar yerel sonuca duser.')
+    elif isinstance(server, dict) and server.get('reason') == 'not_applicable':
+        lines.append('--check yalniz laya saglayicisinda sunucuyu yoklar.')
     return lines
+
+
+def ascii_text(value):
+    """Human lines stay ASCII even if a field ever carries something else."""
+    return str(value if value is not None else '?').encode('ascii', 'replace').decode('ascii')
 
 
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
-        return 'Islem tamamlanamadi: ' + str(result.get('message', result['error']))
+        return ('Islem tamamlanamadi: ' + str(result.get('message', result['error'])) +
+                ('\n' + ascii_text(result['hint']) if result.get('hint') else ''))
     if command == 'jev':
         features = result.get('features', {})
-        lines = ['Jev: ' + JEV_MODES.get(result.get('mode'), 'bilinmiyor') +
-                 (' (kayitli: ' + JEV_MODES.get(result.get('saved_mode'), 'bilinmiyor') + ')'
+        provider = result.get('provider')
+        lines = ['Jev: ' + jev_mode(result.get('mode'), provider) +
+                 (' (kayitli: ' + jev_mode(result.get('saved_mode'), provider) + ')'
                   if result.get('kill_switch') else ''),
                  'Ozellikler: ' + (', '.join(name + ' ' + ('acik' if value else 'kapali')
-                                             for name, value in features.items()) or 'yok'),
-                 'Anahtar: ' + ('var' if result.get('key_present') else 'yok'),
-                 'Acil kapatma: ' + ('acik' if result.get('kill_switch') else 'kapali'),
-                 'Son 24 saat: ' + str(result.get('last_24h', {}).get('calls', 0)) + ' cagri']
+                                             for name, value in features.items()) or 'yok')]
+        if result.get('provider') == 'laya':
+            lines += ['Saglayici: laya (yerel, model ' + ascii_text(result.get('laya', {}).get('model')) + ')',
+                      'Anahtar: gerekmez' + (' (LAYA_API_KEY var)' if result.get('key_present') else '')]
+        else:
+            lines.append('Anahtar: ' + ('var' if result.get('key_present') else 'yok'))
+        lines += ['Acil kapatma: ' + ('acik' if result.get('kill_switch') else 'kapali'),
+                  'Son 24 saat: ' + str(result.get('last_24h', {}).get('calls', 0)) + ' cagri']
         if not result.get('config_valid', True):
             lines.append('Ayar dosyasi bozuk; jev.json elle duzeltilmeli.')
         return '\n'.join(lines + jev_lines(result))
@@ -68,8 +107,31 @@ def human_result(result, command, installed_version=None):
                 '\nBaglam ust siniri: ' + str(prefs['context_chars']) + ' karakter' +
                 '\nSir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali') +
                 '\nSurum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali') +
+                ''.join('\nHafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali')
+                        for name, value in (result.get('companion_limits') or {}).items()) +
                 '\nAcikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.' +
                 '\nYerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
+    if command == 'companion-compact':
+        lines = []
+        for name, entry in result.get('files', {}).items():
+            if entry.get('status') in ('compacted', 'planned'):
+                lines.append(name + ': ' + str(entry.get('chars')) + ' -> ' + str(entry.get('chars_after')) + ' karakter' +
+                             (' olacak' if entry['status'] == 'planned' else '') + ', ' + str(entry.get('moved_chars')) +
+                             ' karakter arsive ' + ('tasinacak' if entry['status'] == 'planned' else 'tasindi') + '.')
+                if not entry.get('within_limit_after'):
+                    lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde; dosyayi sinir icinde yeniden yaz.')
+            elif entry.get('status') == 'needs_rewrite':
+                lines.append(name + ': tasinacak tarihli eski kayit yok; dosyayi sinir icinde yeniden yaz.')
+            elif entry.get('status') == 'conflict':
+                lines.append(name + ': islem sirasinda dosya degisti; hicbir sey tasinmadi, tekrar dene.')
+            elif entry.get('status') == 'needs_attention':
+                lines.append(name + ': ' + str(entry.get('reason', 'kontrol gerekiyor')) + '.')
+            elif entry.get('status') in ('within_limit', 'limit_off'):
+                lines.append(name + ': sinir icinde, degisiklik yok.')
+        if result.get('status') == 'needs_attention' and not result.get('files'):
+            lines.append('Sinir ayari okunamadi; hicbir sey tasinmadi.' if result.get('limits_file') == 'invalid'
+                         else 'Birden fazla companion klasoru var; hicbir sey tasinmadi.')
+        return '\n'.join(lines + ['Hicbir metin silinmedi; model cagrilmadi.'])
     if command == 'doctor':
         labels = {'never_seen': 'Henuz gercek istemci oturumu gozlenmedi.',
                   'observed_metadata': 'Oturum olaylari gozleniyor.',
@@ -82,15 +144,31 @@ def human_result(result, command, installed_version=None):
         if jev.get('mode', 'off') == 'off':
             lines.append('Jev: kapali')
         else:
-            lines.append('Jev: ' + JEV_MODES.get(jev['mode'], 'bilinmiyor') + ' (otomatik baglam: ' +
+            lines.append('Jev: ' + jev_mode(jev['mode'], jev.get('provider')) +
+                         (', saglayici: laya (' if jev.get('provider') == 'laya' else ' (') + 'otomatik baglam: ' +
                          ('acik' if jev.get('automatic_model_calls') else 'kapali') + '), son 24 saat ' +
                          str(jev.get('last_24h', {}).get('calls', 0)) + ' cagri')
         if result.get('secrets_redacted'):
             lines.append('Sir suzgeci ' + str(result['secrets_redacted']) + ' eslesmeyi [REDACTED] olarak yazdi.')
+        cov = result.get('receipt_coverage')
+        if isinstance(cov, dict) and cov.get('total', 0) > 0:
+            ratio = cov.get('ratio')
+            pct = int(round(ratio * 100)) if ratio is not None else 0
+            d7 = cov.get('last_7d', {})
+            d7_text = ''
+            if d7.get('total', 0) > 0 and d7.get('ratio') is not None:
+                d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
+            lines.append('Makbuz kapsami: %' + str(pct) + ' (' + str(cov['covered']) + '/' + str(cov['total']) + ' oturum' + d7_text + ')')
         if result.get('skill_conflicts'):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):
             lines.append('Skill klasorundeki yonetilmeyen girdiler (bilgi): ' + ', '.join(result['skill_unmanaged']) + '.')
+        hygiene = result.get('companion_hygiene') or {}
+        for name in hygiene.get('over_limit', []):
+            entry = hygiene['files'][name]
+            lines.append('Hafiza hijyeni: ' + name + ' ' + str(entry['chars']) + ' karakter (sinir ' + str(entry['limit']) +
+                         '). Ajanina "' + ('py -3' if sys.platform == 'win32' else 'python3') +
+                         ' beyin.py companion-compact" calistirmasini soyle; eski kayitlar arsive tasinir, metin silinmez.')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))

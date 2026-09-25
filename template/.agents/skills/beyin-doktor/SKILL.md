@@ -13,6 +13,8 @@ Kaynak değişikliği indekslenmemişse `python3 beyin.py sync`; skill dosyalar�
 
 İstemci bağlantısını doğrulamak gerektiğinde özel veri içermeyen bir deneme notu kullan. Yeni gerçek oturumda yalnız hook bağlamından bu nottaki bilgiyi istemek, dosyanın varlığını kontrol etmekten daha güçlü kanıttır. Codex'te doğru proje ve `/hooks` güvenini, Claude'da yeni proje oturumunu, Antigravity headless kullanımında `--add-dir VAULT` bağını, OpenCode'da vault klasöründe açılmasını ve `.opencode/plugins/beyin-v3.js` dosyasını, OMP'de vault klasöründe açılmasını ve `.omp/hooks/pre/beyin-v3.ts` dosyasını kontrol et. Güven hashlerini yazma ve bypass ile alınan sonucu normal kurulum kanıtı sayma.
 
+`companion_hygiene` bölümü companion dosyalarının karakter sayısını gösterir. `over_limit` içinde Last-Session.md veya Threads.md varsa bu bir hafıza hijyeni bulgusudur, senkronizasyon arızası değildir: `python3 beyin.py companion-compact --dry-run` ile planı göster, uygunsa `companion-compact` çalıştır. Komut eski bölümleri kelimesi kelimesine `Arşiv/` altına taşır, hiçbir metni silmez. Kurallar.md, Core.md ve Journal.md bilerek birikir; boyutları yalnız bilgi olarak raporlanır.
+
 Kullanıcıya üç şey söyle: çalışan kısım, doğrulanmamış/bozuk kısım, varsa tek sonraki düzeltme. Ham JSON yerine kısa ve somut bir sonuç ver. Kullanıcının mevcut onayı güvenli düzeltmeyi kapsıyorsa gereksiz tekrar onay isteme.
 
 V3.1: `doctor` içindeki `updates` en son sürüm kontrolünü gösterir; ağ hatası güncel olunduğunu kanıtlamaz. Yalnız sürüm sorusunda `beyin.py update --check --metadata-only` kullan. Güncelleme talebini beyin-guncelle skill'ine yönlendir.

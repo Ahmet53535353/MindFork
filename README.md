@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.3.0:** Claude Code artık kurulumdan sonra da `AGENTS.md` kurallarını görüyor, OMP (Oh My Pi) altıncı istemci olarak destekleniyor ve özelleştirilmiş eski runner V3'ün yanında tutulabiliyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.3.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.4.0:** Her mesajdaki bağlam artık notun başını değil cevabı taşıyan bölümü getiriyor, `Last-Session.md` ve `Threads.md` sınırsız büyümüyor, iş bitince receipt unutulursa Stop'ta hatırlatılıyor ve Windows'ta yarım kalan kurulum düzeldi. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.4.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
@@ -92,9 +92,13 @@ Ajanına **“ekonomik moda geç”**, **“otomatik kontrolleri kapat”** veya
 
 Süre dolunca kendi başına çalışan bir zamanlayıcı kurulmaz; bir sonraki istemci olayı kontrolü başlatır. İstemciler kapalıyken işlem yapılmaz. Yerel Python kontrolleri **model çağırmaz**; otomatik Luna/Sonnet maliyeti yoktur. Ajana yaptırdığın işler ve eklenen bağlam normal istemci tüketimine girer. Ekonomik veya manuel modda gerektiğinde kaynaklar açık `context`/`sync` komutuyla tazelenir.
 
-İsteğe bağlı Jev danışmanı bundan ayrıdır: varsayılan kapalıdır, yalnız kendi TypeSafe API anahtarı olanlar içindir ve kurucu onu ne sorar ne kurar. Durumu `python3 beyin.py jev status` gösterir; `jev shadow`, `jev on` ve `jev off` ile değiştirilir. [Ayrıntılar ve sınırlar](docs/v3/JEV.md).
+İsteğe bağlı Jev danışmanı bundan ayrıdır: varsayılan kapalıdır, yalnız kendi TypeSafe API anahtarı olanlar içindir ve kurucu onu ne sorar ne kurar. Durumu `python3 beyin.py jev status` gösterir; `jev shadow`, `jev on` ve `jev off` ile değiştirilir. Anahtar istemeyen yerel seçenek olarak ayrı kurulan açık ağırlıklı Laya sunucusu da seçilebilir (`jev shadow --provider laya`); Beyin'e PyTorch veya model girmez. Laya yalnız gölge modda çalışır: ölçümde Jev'den çok daha zayıf çıktığı için puanları ölçüm ve gizlilik denemeleri için kaydedilir, gördüğün sonucu değiştirmez. [Ayrıntılar ve sınırlar](docs/v3/JEV.md).
 
 Tercihler: `python3 beyin.py preferences`. Ekonomik: `preferences --profile economical`. Manuel: `preferences --profile manual`. Aralık: `preferences --interval-minutes 30`. Opt-in sır süzgeci: `preferences --secret-filter on`. Windows'ta `py -3` kullan. [Ayrıntılar](docs/v3/PREFERENCES.md).
+
+## Hafıza dosyalarının boyutu
+
+`Last-Session.md` son oturumun devir kartıdır, `Threads.md` açık konuların güncel durumudur. İkisi de yerinde yeniden yazılır, alta eklenmez. Varsayılan sınır 3.000 ve 8.000 karakterdir. Sınır aşılırsa oturum başı bağlamı tek satırlık `Memory hygiene:` uyarısıyla açılır ve `doctor` aynı bilgiyi gösterir. Ajan o zaman `python3 beyin.py companion-compact` çalıştırır: eski bölümler ve eski tarihli kayıtlar kelimesi kelimesine companion klasöründeki `Arşiv/` altına, özel işaretli aylık bir dosyaya taşınır. Hiçbir metin silinmez veya özetlenmez, model çağrılmaz, zamanlayıcı kurulmaz. Planı önce görmek için `--dry-run`, sınırları değiştirmek için `preferences --last-session-chars 4000 --threads-chars 12000` (`0` kapatır). [Ayrıntılar](docs/v3/COMPANION-PARITY.md).
 
 ## Güncelleme
 
