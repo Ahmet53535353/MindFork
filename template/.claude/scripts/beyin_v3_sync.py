@@ -366,6 +366,15 @@ class SyncEngine:
                 'legacy_done_count': len(legacy_done), 'legacy_done': legacy_done[:20],
                 'truncated': len(strict_issues) > 20 or len(legacy_done) > 20}
 
+    def validity_health(self):
+        """Report `validity: rejected` that has no effect because the record is not an inference or preference."""
+        with self.store._connect() as db:
+            records = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')]
+        ignored = [{'id': record.get('id'), 'source': record.get('source'), 'kind': record.get('kind')}
+                   for record in records
+                   if record.get('validity') == 'rejected' and record.get('kind') not in ('inference', 'preference')]
+        return {'ignored_rejection_count': len(ignored), 'ignored_rejections': ignored[:20], 'truncated': len(ignored) > 20}
+
     def _scan(self):
         records, warnings, conflicts = {}, [], []
         duplicate = set()
