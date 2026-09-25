@@ -502,8 +502,12 @@ class MemoryStore:
     # matching block (#83, beyin_v3_passage.py). An empty passage result is an answer.
     STRICT_PASSAGES = True
 
-    def _eligible(self, audience="internal", project=None):
-        """Visibility, trust, project and source-freshness gates shared by every retrieval path."""
+    def _eligible(self, audience="internal", project=None, rejected_only=False):
+        """Visibility, trust, project and source-freshness gates shared by every retrieval path.
+
+        rejected_only inverts the rejection gate alone, for rejected_matches: the same
+        scope applies to history that is looked up but never delivered.
+        """
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         with self._connect() as db:
@@ -512,7 +516,7 @@ class MemoryStore:
         eligible = []
         stale_count = 0
         for record in records:
-            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record):
+            if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record) != rejected_only:
                 continue
             if project is not None and record.get("project") != project:
                 continue
@@ -569,6 +573,45 @@ class MemoryStore:
             return [record for _, record in ranked[:limit]]
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)
 
+
+# A rejected claim is proposed again when the new text restates most of it. Coverage is
+# measured on the rejected statement, not on the new text, so a proposal that wraps the
+# old claim in extra context is still caught. Both constants are pinned by tests.
+REJECTED_MIN_SHARED = 2
+REJECTED_MIN_COVERAGE = 0.6
+
+
+def rejected_matches(store, text, project, audience="internal", limit=4):
+    """Rejected inference/preference records in scope that the text restates.
+
+    Lexical and local: no model call, no write. The comparison uses _tokens, so casing,
+    Unicode form and Turkish suffixes normalize the same way on both sides. A record is
+    compared by its title and by its text separately, and the better coverage counts.
+    Only identities are returned; the rejected text and reason never leave this function,
+    so they cannot reach context or an advisor request.
+    """
+    if (not isinstance(text, str) or not isinstance(project, str) or not project.strip() or
+            type(limit) is not int or limit < 0):
+        raise ValueError("invalid rejected match query")
+    ignored = STOPWORDS | _tokens(project)
+    claim = _tokens(text) - ignored
+    if not claim:
+        return []
+    records, _ = store._eligible(audience, project, rejected_only=True)
+    matches = []
+    for record in records:
+        coverage = 0.0
+        for statement in (str(record.get("title", "")), record["text"]):
+            terms = _tokens(statement) - ignored
+            shared = len(claim & terms)
+            if shared >= REJECTED_MIN_SHARED:
+                coverage = max(coverage, shared / len(terms))
+        if coverage >= REJECTED_MIN_COVERAGE:
+            matches.append((coverage, record))
+    matches.sort(key=lambda item: (-item[0], item[1]["id"]))
+    return [{"record_id": record["id"], "source": record["source"],
+             "rejected_at": record.get("rejected_at"), "coverage": round(coverage, 3)}
+            for coverage, record in matches[:limit]]
 
 CONTEXT_MARKER = " [truncated]"
 MIN_CONTEXT_TEXT = 150     # smallest excerpt of a source that is worth a slot
