@@ -16,7 +16,7 @@ _MODULE_DIR = str(Path(__file__).resolve().parent)
 if _MODULE_DIR not in sys.path:
     sys.path.insert(0, _MODULE_DIR)
 
-from beyin_v3 import HARNESSES, MemoryStore, ReceiptConflict, RevisionConflict, _json
+from beyin_v3 import HARNESSES, VALID_MEMORY_TYPES, MemoryStore, ReceiptConflict, RevisionConflict, _json
 from beyin_v3_projections import project_receipts
 from beyin_v3_preferences import read as read_preferences
 from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
@@ -519,6 +519,7 @@ class SyncEngine:
                     old = json.loads(row[0])
                     db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('delete',?,?,?)", (id, old['revision'], row[0]))
                     db.execute('DELETE FROM records WHERE id=?', (id,))
+                    MemoryStore.fts_delete(db, id)
                     deleted += 1
                 db.execute('DELETE FROM markdown_sources WHERE id=?', (id,))
             for id, record in records.items():
@@ -536,6 +537,7 @@ class SyncEngine:
                 if not row or row[0] != payload:
                     event_type = 'update' if row else 'ingest'
                     db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (id, payload))
+                    MemoryStore.fts_write(db, record)
                     db.execute('INSERT INTO events(event_type,record_id,revision,record) VALUES (?,?,?,?)', (event_type, id, record['revision'], payload))
                 db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
             conflicts.extend(project_receipts(self, db))
@@ -629,7 +631,7 @@ class SyncEngine:
         if not source.startswith(('notes/', 'knowledge/', '🔮 850-Companion/')) or not source.endswith('.md'):
             raise ValueError('new semantic notes belong under notes/, knowledge/, or 🔮 850-Companion/')
         metadata = dict(metadata or {})
-        valid_types = ('episodic', 'semantic', 'procedural')
+        valid_types = VALID_MEMORY_TYPES
         if 'type' in metadata and metadata['type'] not in valid_types:
             raise ValueError('metadata.type must be episodic|semantic|procedural')
         for field in ('project', 'kind', 'status', 'updated_at'):
@@ -695,7 +697,7 @@ class SyncEngine:
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
-        valid_types = ('episodic', 'semantic', 'procedural')
+        valid_types = VALID_MEMORY_TYPES
         if 'type' in metadata and metadata['type'] not in valid_types:
             raise ValueError('metadata.type must be episodic|semantic|procedural')
         text, redacted = self._protect(text)

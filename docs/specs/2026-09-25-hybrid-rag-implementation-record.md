@@ -48,6 +48,10 @@
   `types=[]` ValueError, strict-yol FTS atlama, sessiz-düşüş sayaçları
   (`fts_query_errors`/`semantic_search_errors` + doctor), sıralama-semantiği pin testleri,
   memory-types.md çelişki düzeltmesi; `docs/specs/2026-09-25-review-hardening-design.md`.
+- **FTS↔Sync yazma omurgası (P0 düzeltme, 2. inceleme): 738/738 yeşil** (+4) — sync artık
+  records_fts'i aynı transaction'da günceller; `FTS_PARAMS` imzasıyla drift'li DB'ler
+  kendini onarır; doctor `fts_consistency`; tip sabiti tek kaynak; context_for fail-fast;
+  `docs/specs/2026-09-25-fts-sync-spine-design.md`.
 - Custom testler `tests/custom/` içinde (`__init__.py` sayesinde kök discover artık dahil ediyor):
   - `v3_memory_types_test.py` — tip doğrulama ve filtreleme
   - `v3_fts5_test.py` — FTS5 şema, senkron, rebuild, tam sembol araması, bozuk payload toleransı

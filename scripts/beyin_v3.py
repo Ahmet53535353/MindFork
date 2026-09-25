@@ -299,17 +299,22 @@ def main(argv=None):
                     'legacy_done': [], 'truncated': False,
                     'error': (type(exc).__name__ + ': ' + str(exc))[:240],
                 }
-            # Informational only: malformed rows the lexical index rebuild skipped, and
-            # silent retrieval fallthroughs counted since the last doctor run.
+            # Informational only: malformed rows the lexical index rebuild skipped, silent
+            # retrieval fallthroughs counted since, and derived-index consistency.
             with store._connect() as db:
                 counters = dict(db.execute(
                     "SELECT key, value FROM metadata WHERE key IN "
                     "('fts_malformed_skipped','fts_query_errors','semantic_search_errors')").fetchall())
+                counts = db.execute(
+                    "SELECT (SELECT COUNT(*) FROM records), (SELECT COUNT(*) FROM records_fts), "
+                    "(SELECT COUNT(*) FROM records_fts LEFT JOIN records ON records.id = records_fts.id "
+                    "WHERE records.id IS NULL)").fetchone()
             result['fts_malformed_skipped'] = int(counters.get('fts_malformed_skipped', 0))
             result['retrieval_error_counters'] = {
                 'fts_query': int(counters.get('fts_query_errors', 0)),
                 'semantic_search': int(counters.get('semantic_search_errors', 0)),
             }
+            result['fts_consistency'] = {'records': counts[0], 'indexed': counts[1], 'orphans': counts[2]}
             # A rejection on a plain note leaves the claim in current context; sync stays healthy.
             try:
                 result['validity'] = load_sync().reader(store).validity_health()

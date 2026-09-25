@@ -191,6 +191,11 @@ def _rrf_fuse(lexical_ids, semantic_ids, k=60):
     return sorted(scores.keys(), key=lambda doc_id: -scores[doc_id])
 
 
+# Signature of the derived lexical index. A schema or tokenizer change MUST bump this;
+# existing databases self-rebuild once on the next open (see MemoryStore.__init__).
+FTS_PARAMS = _json([1, "unicode61 remove_diacritics 2", "id|type|project|text|facts"])
+
+
 class MemoryStore:
     VALID_MEMORY_TYPES = VALID_MEMORY_TYPES
     def __init__(self, state_dir, vault_root, read_only=False):
@@ -249,23 +254,26 @@ class MemoryStore:
             if not binding and db.execute("SELECT COUNT(*) FROM records").fetchone()[0]:
                 raise ValueError("unbound existing runtime requires explicit migration")
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('vault_root',?)", (root,))
+            stored = db.execute("SELECT value FROM metadata WHERE key='fts_params'").fetchone()
             fts_count = db.execute("SELECT COUNT(*) FROM records_fts").fetchone()[0]
             records_count = db.execute("SELECT COUNT(*) FROM records").fetchone()[0]
-            if fts_count == 0 and records_count > 0:
+            if records_count > 0 and (fts_count == 0 or (stored is None or stored[0] != FTS_PARAMS)):
+                # The lexical index is derived data: it is rebuilt whole when empty or
+                # when its signature (schema/tokenizer) changed. This also self-heals
+                # legacy databases whose index drifted before the sync spine wrote it.
+                db.execute("DELETE FROM records_fts")
                 skipped = 0
                 for row in db.execute("SELECT payload FROM records"):
-                    # The lexical index is derived data: one malformed payload must
-                    # never break opening the store. That row stays unindexed, and the
-                    # retrieval and doctor paths report it exactly as before this index.
+                    # One malformed or partial payload must never break opening the
+                    # store. That row stays unindexed, and the retrieval and doctor
+                    # paths report it exactly as before this index.
                     try:
                         rec = json.loads(row[0])
-                        rec_id = rec["id"]
+                        self.fts_write(db, rec)
                     except (ValueError, KeyError, TypeError):
                         skipped += 1
                         continue
-                    facts_str = " ".join(f"{k} {v}" for k, v in rec.get("facts", {}).items() if isinstance(v, (str, int, float)))
-                    db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
-                               (rec_id, rec.get("type", ""), rec.get("project", ""), rec.get("text", ""), facts_str))
+                db.execute("INSERT OR REPLACE INTO metadata VALUES ('fts_params',?)", (FTS_PARAMS,))
                 if skipped:
                     db.execute("INSERT OR REPLACE INTO metadata VALUES ('fts_malformed_skipped',?)", (str(skipped),))
         self.database.chmod(0o600)
@@ -291,6 +299,8 @@ class MemoryStore:
         """Connections are scoped to each operation; provided for callers."""
 
     def context_for(self, harness, query, **kwargs):
+        if "types" in kwargs:
+            resolve_type_filter(query, kwargs["types"])  # fail fast before any index work
         if kwargs.get("strict") is True and self.STRICT_PASSAGES:
             try:
                 from beyin_v3_passage import context_for as passage_context
@@ -372,6 +382,19 @@ class MemoryStore:
         record["supersedes"] = supersedes
         return record
 
+    @staticmethod
+    def fts_write(db, record):
+        # The single writer for the derived lexical row: every write path (ingest,
+        # update, sync scan, rebuild) folds facts here and replaces the row atomically.
+        facts_str = " ".join(f"{k} {v}" for k, v in record.get("facts", {}).items() if isinstance(v, (str, int, float)))
+        db.execute("DELETE FROM records_fts WHERE id=?", (record["id"],))
+        db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
+                   (record["id"], record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
+
+    @staticmethod
+    def fts_delete(db, id):
+        db.execute("DELETE FROM records_fts WHERE id=?", (id,))
+
     def ingest(self, record):
         self._require_writable()
         record = self._validate(record)
@@ -385,9 +408,7 @@ class MemoryStore:
             else:
                 db.execute("INSERT INTO records VALUES (?,?)", (record["id"], payload))
                 db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('ingest',?,?,?)", (record["id"], record["revision"], payload))
-                facts_str = " ".join(f"{k} {v}" for k, v in record.get("facts", {}).items() if isinstance(v, (str, int, float)))
-                db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
-                           (record["id"], record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
+                self.fts_write(db, record)
         return record
 
     def update_task(self, id, expected_revision, changes):
@@ -407,10 +428,7 @@ class MemoryStore:
             record = self._validate(record)
             db.execute("UPDATE records SET payload=? WHERE id=?", (_json(record), id))
             db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('update',?,?,?)", (id, record["revision"], _json(record)))
-            facts_str = " ".join(f"{k} {v}" for k, v in record.get("facts", {}).items() if isinstance(v, (str, int, float)))
-            db.execute("DELETE FROM records_fts WHERE id=?", (id,))
-            db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
-                       (id, record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
+            self.fts_write(db, record)
         return record
 
     def history(self, record_id, audience="internal"):
