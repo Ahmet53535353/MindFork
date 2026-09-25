@@ -115,10 +115,20 @@ STOPWORDS = _tokens("the a an is are was were what which who when where how why 
 VALID_MEMORY_TYPES = ("episodic", "semantic", "procedural")
 
 
+def _rrf_fuse(lexical_ids, semantic_ids, k=60):
+    scores = {}
+    for rank, doc_id in enumerate(lexical_ids, start=1):
+        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    for rank, doc_id in enumerate(semantic_ids, start=1):
+        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    return sorted(scores.keys(), key=lambda doc_id: -scores[doc_id])
+
+
 class MemoryStore:
     VALID_MEMORY_TYPES = VALID_MEMORY_TYPES
     def __init__(self, state_dir, vault_root, read_only=False):
         self.read_only = bool(read_only)
+        self.semantic_searcher = None
         self.vault_root = Path(vault_root).expanduser().resolve()
         if not self.vault_root.is_dir():
             raise ValueError("vault_root must be an existing directory")
@@ -516,7 +526,17 @@ class MemoryStore:
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
         fts_rank_map = {}
         if query and query.strip():
-            fts_tokens = re.findall(r'[a-zA-Z0-9_\u00c0-\u017f]+', query)
+            # FTS matches the raw indexed text, so query tokens stay unstemmed here;
+            # stopwords are still dropped, or a common word turns every record into
+            # a hit and BM25 ranks noise instead of signal.
+            seen_tokens = set()
+            fts_tokens = []
+            for token in re.findall(r'[a-zA-Z0-9_\u00c0-\u017f]+', query):
+                folded = token.casefold()
+                if folded in seen_tokens or _tokens(token) <= STOPWORDS:
+                    continue
+                seen_tokens.add(folded)
+                fts_tokens.append(token)
             if fts_tokens:
                 fts_query = " OR ".join(f'"{token}"' for token in fts_tokens)
                 try:
@@ -525,8 +545,15 @@ class MemoryStore:
                             "SELECT id, bm25(records_fts) FROM records_fts WHERE records_fts MATCH ? ORDER BY bm25(records_fts)",
                             (fts_query,)
                         ).fetchall()
-                        for rank_idx, (rec_id, _) in enumerate(rows, start=1):
-                            fts_rank_map[rec_id] = rank_idx
+                        # Dense ranking: equal BM25 scores share a rank so the stable
+                        # sort keeps the established tie-break (recency, then id).
+                        previous_value = None
+                        rank = 0
+                        for rec_id, value in rows:
+                            if value != previous_value:
+                                rank += 1
+                                previous_value = value
+                            fts_rank_map[rec_id] = rank
                 except sqlite3.Error:
                     pass
         ranked = []
@@ -546,8 +573,7 @@ class MemoryStore:
             vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
             vocabularies[record["id"]] = vocabulary
             score = len(terms & vocabulary)
-            fts_hit = record["id"] in fts_rank_map
-            if score or scoped_listing or snapshot or fts_hit:
+            if score or scoped_listing or snapshot:
                 ranked.append((score, record))
         if strict and not snapshot:
             ranked = self._strict_rank(ranked, terms, vocabularies)
@@ -556,6 +582,17 @@ class MemoryStore:
             ranked.sort(key=lambda item: -item[0])
             if fts_rank_map:
                 ranked.sort(key=lambda item: fts_rank_map.get(item[1]["id"], 999999))
+            if callable(self.semantic_searcher):
+                candidate_records = [record for _, record in ranked]
+                try:
+                    semantic_ranked = self.semantic_searcher(query, candidate_records)
+                    if semantic_ranked:
+                        lexical_ids = [record["id"] for _, record in ranked]
+                        fused_ids = _rrf_fuse(lexical_ids, semantic_ranked, k=60)
+                        fused_map = {doc_id: idx for idx, doc_id in enumerate(fused_ids)}
+                        ranked.sort(key=lambda item: fused_map.get(item[1]["id"], 999999))
+                except Exception:
+                    pass
         if candidate_only:
             return [record for _, record in ranked[:limit]]
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)
