@@ -183,6 +183,29 @@ class KnowledgeDistillationTest(unittest.TestCase):
         conflicts = check_instruction_conflicts(self.vault)
         self.assertEqual(conflicts, [])
 
+    def test_instruction_conflicts_ignore_unrelated_rules(self):
+        """Only V2 wording that hands knowledge/ to the compiler counts; ordinary rules do not."""
+        clean = [
+            'knowledge/ notlarına dokunmadan önce knowledge/index.md oku.',
+            'Old compiler is retired; agents write knowledge/concepts directly.',
+            'Operator knowledge base: derleyici çıktısı değil, elle yazılır.',
+            'Gece derleyicisi artık yok; knowledge/ notlarını ajan damıtır.',
+        ]
+        for line in clean:
+            with self.subTest(line=line):
+                (self.vault / 'AGENTS.md').write_text('# Kurallar\n' + line + '\n', encoding='utf-8')
+                self.assertEqual(check_instruction_conflicts(self.vault), [])
+        for line in ('- `knowledge/` (elle düzenleme, derleyici yönetir)',
+                     '- KNOWLEDGE/ (ELLE DÜZENLEME, DERLEYİCİ YÖNETİR)',
+                     '- knowledge/ is compiler-managed; do not edit.'):
+            with self.subTest(line=line):
+                (self.vault / 'AGENTS.md').write_text(line + '\n', encoding='utf-8')
+                self.assertEqual(len(check_instruction_conflicts(self.vault)), 1)
+
+    def test_shipped_template_instructions_have_no_conflict(self):
+        template = ROOT / 'template'
+        self.assertEqual(check_instruction_conflicts(template), [])
+
     def test_doctor_cli_includes_freshness_and_conflicts(self):
         """Full CLI 'doctor' command includes knowledge_freshness and instruction_conflicts in JSON output."""
         engine = SyncEngine(self.vault, self.state)

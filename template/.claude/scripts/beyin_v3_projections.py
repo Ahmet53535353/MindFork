@@ -241,15 +241,23 @@ def knowledge_freshness(vault, db, now=None):
     }
 
 
+def _fold_tr(text):
+    return (text.replace('\u0130', 'i').replace('I', 'i').lower().replace('\u0307', '')
+            .translate(str.maketrans('ıüşğöç', 'iusgoc')))
+
+
+# Only the V2 wording that hands knowledge/ to the compiler. Bare "compiler",
+# "derleyici" or "dokunma" also matched V3 rules such as "notlara dokunmadan önce".
+_V2_COMPILER_RULE = re.compile(r'derleyici\s+(?:yonetir|yazar|gunceller)|elle\s+duzenlemeyin|'
+                               r'managed\s+by\s+the\s+compiler|compiler[- ]managed')
+
+
 def check_instruction_conflicts(vault):
     """Detect contradictory V2 compiler instructions outside the managed V3 block."""
     vault = Path(vault)
     conflicts = []
     START = "<!-- beyin-v3:start -->"
     END = "<!-- beyin-v3:end -->"
-    pattern = re.compile(
-        r'(?i)(?=.*\bknowledge\b)(?=.*(?:derleyici|elle\s+d[uü]zenleme|dokunma|gece\s+derleyicisi|compiler))'
-    )
     for name in ("AGENTS.md", "CLAUDE.md"):
         path = vault / name
         if not path.is_file() or path.is_symlink():
@@ -259,7 +267,8 @@ def check_instruction_conflicts(vault):
             outside = re.sub(r"\n*" + re.escape(START) + r".*?" + re.escape(END), "", text, flags=re.S)
             for line in outside.splitlines():
                 line_str = line.strip()
-                if pattern.search(line_str):
+                folded = _fold_tr(line_str)
+                if 'knowledge' in folded and _V2_COMPILER_RULE.search(folded):
                     conflicts.append({
                         'file': name,
                         'snippet': line_str[:120],
