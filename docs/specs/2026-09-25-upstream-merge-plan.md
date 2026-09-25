@@ -1,6 +1,6 @@
 # Upstream Birleştirme Planı (merge upstream/main → feat/explicit-memory-typing)
 
-Tarih: 2026-09-25 · Dal: feat/explicit-memory-typing · Durum: ONAY BEKLİYOR
+Tarih: 2026-09-25 · Dal: feat/explicit-memory-typing · Durum: UYGULANDI (merge commit 3ceb8e9)
 
 ## Bağlam
 
@@ -64,3 +64,20 @@ noktada çözmez sağlar, iptali güvenlidir.
 - `pack_context` taban sözleşmesi değişti (#79): custom bütçe testimizin
   `.95` eşiği upstream'in "best source share"ı ile gerileirse eşik
   yükseltilmez, ends() dolum davranışı yeniden ölçülür.
+
+## Uygulama sonucu (2026-09-25)
+
+- Kuru deneme yalnız 2 dosyada çakışma öngördü; planlandığı gibi çözüldü
+  (`_validate` birleşimi, `_retrieve`/`_eligible` portu, sync `allowed` birleşimi).
+- Plan dışı çıkan tek şey: dalımızın `note_create`/`task_create` içindeki
+  **"type zorunlu"** kuralı upstream'in ~24 tipsiz testini kurulumda kırardı →
+  "varsa geçerli olmalı"ya gevşetildi (yumuşak kapı felsefesiyle tutarlı;
+  doküman `memory-types.md` güncellendi).
+- İkinci kök neden: aşama-2 FTS rebuild döngüsü bozuk payload'da kurucuyu
+  çökertiyordu; türetilmiş veri ilkeleriyle satır-atla savunması eklendi ve
+  `v3_fts5_test` ile kilitlendi (doctor'un bozuk-indeks sözleşmesi korundu).
+- Tam paket: **673/673 yeşil** (custom paket dahil), merge commit `3ceb8e9`.
+- Fork `main` zaten upstream ile aynıydı (f88fa59); ek işlem gerekmedi.
+- **Bilinen port boşluğu:** strict passage yolu (#83, `beyin_v3_passage.py`)
+  tip kapılarını uygulamıyor; hook bağlamında tip sezgisi passage geçişinde
+  şimdilik devre dışı. Ayrı iş kalemi: passage yoluna tip filtre devri.
