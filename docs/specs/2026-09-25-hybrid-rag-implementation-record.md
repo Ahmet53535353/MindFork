@@ -36,6 +36,9 @@
 - Aşama sonu kilometre taşları: 466/466 → tip sezgisi + discovery düzeltmesiyle 493/493.
 - **Upstream merge sonrası: 673/673 yeşil** (`python3 -m unittest discover tests -p "*test.py"`; upstream'in ~200 yeni testi dahil, skipped=1 platform testi).
 - **Passage tip kapısı sonrası: 681/681 yeşil** (+7: `v3_passage_types_test`).
+- **İkinci upstream merge (M2, `a136a2a`, upstream `f9a8b5f`): 725/725 yeşil** — reddedilen
+  çıkarım olgunlaştırma, görev sözleşmesi sertleştirme, bilgi tazeliği #109; plan + sonuç
+  `docs/specs/2026-09-25-upstream-merge-2-plan.md`.
 - Custom testler `tests/custom/` içinde (`__init__.py` sayesinde kök discover artık dahil ediyor):
   - `v3_memory_types_test.py` — tip doğrulama ve filtreleme
   - `v3_fts5_test.py` — FTS5 şema, senkron, rebuild, tam sembol araması, bozuk payload toleransı
