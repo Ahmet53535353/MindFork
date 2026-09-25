@@ -265,6 +265,11 @@ def main(argv=None):
                 result['companion_hygiene'] = companion.hygiene(vault, state)
             except Exception as exc:  # a size report must never hide the rest of doctor
                 result['companion_hygiene'] = {'status': 'unavailable', 'error': type(exc).__name__}
+            try:
+                import beyin_v3_references as references
+                result['instruction_references'] = references.check(vault)
+            except Exception as exc:  # information only; never hides the rest of doctor
+                result['instruction_references'] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['jev'] = jev_status(state)
             result['automatic_model_calls'] = result['jev'].get('automatic_model_calls', False)
             health = result['hook-health.json'] or {}

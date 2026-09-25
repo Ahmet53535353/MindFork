@@ -169,6 +169,13 @@ def human_result(result, command, installed_version=None):
             lines.append('Hafiza hijyeni: ' + name + ' ' + str(entry['chars']) + ' karakter (sinir ' + str(entry['limit']) +
                          '). Ajanina "' + ('py -3' if sys.platform == 'win32' else 'python3') +
                          ' beyin.py companion-compact" calistirmasini soyle; eski kayitlar arsive tasinir, metin silinmez.')
+        references = result.get('instruction_references') or {}
+        if references.get('dead_count'):
+            shown = ', '.join(entry['file'] + ':' + str(entry['line']) + ' -> ' + entry['target']
+                              for entry in references['dead'][:3])
+            more = references['dead_count'] - min(3, len(references['dead']))
+            lines.append('Talimat ve skill dosyalarinda kirik baglanti (bilgi): ' + shown +
+                         (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))
