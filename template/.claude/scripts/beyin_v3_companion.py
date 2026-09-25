@@ -109,9 +109,13 @@ def ends(text, budget):
 
     The first marker is sized with the whole length, so the final one, counting only
     what was really dropped, can never be longer and the result stays inside budget.
+    Whatever the line-boundary cut gives back is taken from the middle by the closing,
+    because a water-filled allocation that renders short is budget thrown away.
     """
-    gap = f'\n[truncated: {len(text)} characters omitted here; read source]\n'
-    keep = budget - len(gap)
+    def gap(omitted):
+        return f'\n[truncated: {omitted} characters omitted here; read source]\n'
+
+    keep = budget - len(gap(len(text)))
     if keep < 80:
         return None
     # Cut on line boundaries so neither end is a half rule; the closing part also takes
@@ -120,7 +124,20 @@ def ends(text, budget):
     head = head[:head.rfind('\n') + 1] or head
     closing = text[len(text) - (keep - len(head)):]
     closing = closing[closing.find('\n') + 1:] or closing
-    return head + f'\n[truncated: {len(text) - len(head) - len(closing)} characters omitted here; read source]\n' + closing
+    best = head + gap(len(text) - len(head) - len(closing)) + closing
+    # Fill the slack the snaps created: grow the closing back into the middle until the
+    # budget is full, only a marker digit oscillation away from exact.
+    start = len(text) - len(closing)
+    for _ in range(6):
+        slack = budget - (len(head) + len(gap(start - len(head))) + len(text) - start)
+        if slack == 0:
+            break
+        moved = min(max(start - slack, len(head)), len(text))
+        if moved == start:
+            break
+        start = moved
+    result = head + gap(start - len(head)) + text[start:]
+    return result if len(result) <= budget else best
 
 
 def clip(text, budget, tail=False, both=False):
