@@ -160,8 +160,10 @@ def human_result(result, command, installed_version=None):
                 d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
             lines.append('Makbuz kapsami: %' + str(pct) + ' (' + str(cov['covered']) + '/' + str(cov['total']) + ' oturum' + d7_text + ')')
         kf = result.get('knowledge_freshness')
-        if isinstance(kf, dict):
-            if kf.get('last_distilled_at'):
+        if isinstance(kf, dict) and kf.get('status') == 'unavailable':
+            lines.append('Son bilgi damitmasi: olculemedi (' + str(kf.get('error') or 'hata') + ')')
+        elif isinstance(kf, dict):
+            if kf.get('last_distilled_at') is not None:
                 days = kf.get('days_ago', 0)
                 time_text = 'bugun' if days == 0 else ('1 gun once' if days == 1 else str(days) + ' gun once')
                 lines.append('Son bilgi damitmasi: ' + time_text + ' (o tarihten beri ' + str(kf.get('receipts_since', 0)) + ' makbuz)')

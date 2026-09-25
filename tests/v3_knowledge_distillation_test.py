@@ -8,6 +8,10 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
+import importlib.util
+import io
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -94,6 +98,54 @@ class KnowledgeDistillationTest(unittest.TestCase):
 
         self.assertIsNone(freshness['last_distilled_at'])
         self.assertIsNone(freshness['latest_source'])
+
+    def test_knowledge_freshness_ignores_template_seed_files(self):
+        """A fresh install ships knowledge/index.md and log.md; they are not a distillation."""
+        engine = SyncEngine(self.vault, self.state)
+        (self.vault / 'knowledge/concepts').mkdir(parents=True)
+        (self.vault / 'knowledge/concepts/.gitkeep').touch()
+        (self.vault / 'knowledge/index.md').write_text('# Bilgi Tabanı İndeksi\n', encoding='utf-8')
+        (self.vault / 'knowledge/log.md').write_text('# Derleme Günlüğü\n', encoding='utf-8')
+        with engine.store._connect() as db:
+            freshness = knowledge_freshness(self.vault, db)
+        self.assertIsNone(freshness['last_distilled_at'])
+        text = beyin_entry.human_result({'knowledge_freshness': freshness}, 'doctor')
+        self.assertIn('henuz kavram notu damitilmadi', text)
+        self.assertNotIn('bugun', text)
+
+    def test_knowledge_freshness_prefers_frontmatter_date_over_checkout_mtime(self):
+        """git checkout and iCloud restore reset mtime; the recorded updated/modified date wins."""
+        engine = SyncEngine(self.vault, self.state)
+        now = datetime(2026, 9, 25, 12, tzinfo=timezone.utc).timestamp()
+        concepts = self.vault / 'knowledge/concepts'
+        concepts.mkdir(parents=True)
+        (concepts / 'yaml.md').write_text('---\ntitle: WAL\nupdated: 2026-06-01\n---\nx\n', encoding='utf-8')
+        (concepts / 'json.md').write_text('---\n{"id": "j", "modified": "2026-06-10T08:00:00"}\n---\nx\n', encoding='utf-8')
+        for note in concepts.iterdir():
+            os.utime(note, (now, now))  # what a fresh checkout looks like
+        with engine.store._connect() as db:
+            freshness = knowledge_freshness(self.vault, db, now=now)
+        self.assertEqual(freshness['latest_source'], 'knowledge/concepts/json.md')
+        self.assertGreaterEqual(freshness['days_ago'], 106)
+
+    def test_doctor_renders_unavailable_freshness_as_unmeasured(self):
+        text = beyin_entry.human_result(
+            {'knowledge_freshness': {'status': 'unavailable', 'error': 'OperationalError'}}, 'doctor')
+        self.assertIn('Son bilgi damitmasi: olculemedi (OperationalError)', text)
+        self.assertNotIn('henuz kavram notu damitilmadi', text)
+
+    def test_doctor_keeps_conflicts_when_freshness_fails(self):
+        (self.vault / 'AGENTS.md').write_text('- `knowledge/` (elle düzenleme, derleyici yönetir)\n', encoding='utf-8')
+        spec = importlib.util.spec_from_file_location('v3_distillation_cli', ROOT / 'scripts/beyin_v3.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        out = io.StringIO()
+        with patch('beyin_v3_projections.knowledge_freshness', side_effect=OSError('evicted')), redirect_stdout(out):
+            self.assertEqual(cli.main(['--vault', str(self.vault), '--state', str(self.state), 'doctor']), 0)
+        doc = json.loads(out.getvalue())
+        self.assertEqual(doc['knowledge_freshness'], {'status': 'unavailable', 'error': 'OSError'})
+        self.assertEqual(len(doc['instruction_conflicts']), 1)
+        self.assertEqual(doc['status'], 'needs_attention')
 
     def test_instruction_conflicts_detected_outside_managed_block(self):
         """Legacy V2 compiler instructions outside the managed block are detected and flagged."""

@@ -276,14 +276,13 @@ def main(argv=None):
                     result['receipt_coverage'] = receipt_coverage(db, now=time.time())
             else:
                 result['receipt_coverage'] = None
-            try:
-                from beyin_v3_projections import knowledge_freshness, check_instruction_conflicts
+            from beyin_v3_projections import knowledge_freshness, check_instruction_conflicts
+            try:  # a recency report must never hide the rest of doctor, conflicts included
                 with store._connect() as db:
                     result['knowledge_freshness'] = knowledge_freshness(vault, db, now=time.time())
-                result['instruction_conflicts'] = check_instruction_conflicts(vault)
             except Exception as exc:
                 result['knowledge_freshness'] = {'status': 'unavailable', 'error': type(exc).__name__}
-                result['instruction_conflicts'] = []
+            result['instruction_conflicts'] = check_instruction_conflicts(vault)
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])

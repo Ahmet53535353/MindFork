@@ -168,6 +168,13 @@ def project_receipts(engine, db):
     return conflicts
 
 
+# YAML lines (updated: 2026-09-25) and one-line JSON frontmatter ("updated": "2026-09-25").
+_FRONTMATTER_KEY = r'(?:^|[\s{,])["\']?%s["\']?\s*[:=]\s*'
+_FRONTMATTER_GENERATED = re.compile(_FRONTMATTER_KEY % 'generated' + r'true\b', re.M)
+_FRONTMATTER_UPDATED = re.compile(_FRONTMATTER_KEY % '(?:updated|modified)' +
+                                  r'["\']?([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?)?)', re.M)
+
+
 def knowledge_freshness(vault, db, now=None):
     """Diagnose knowledge distillation recency and count receipts since then."""
     if now is None:
@@ -185,50 +192,43 @@ def knowledge_freshness(vault, db, now=None):
                 relative = path.relative_to(vault).as_posix()
             except ValueError:
                 continue
-            if relative.startswith('knowledge/v3/') or path.name == '.gitkeep':
+            # Generated views and the V2 compiler seeds are not distillation.
+            if relative.startswith('knowledge/v3/') or relative in ('knowledge/index.md', 'knowledge/log.md'):
                 continue
             try:
                 mtime = path.stat().st_mtime
+                with path.open('rb') as handle:  # frontmatter only; a whole (possibly evicted) note is never read
+                    head = handle.read(4096).decode('utf-8', errors='ignore')
             except OSError:
                 continue
-            try:
-                text = path.read_text(encoding='utf-8', errors='ignore')
-                if text.startswith('---'):
-                    end_idx = text.find('---', 3)
-                    if end_idx != -1:
-                        fm = text[3:end_idx]
-                        if '"generated": true' in fm or 'generated: true' in fm:
-                            continue
-                        m = re.search(r'(?:updated|modified|date)\s*[:=]\s*["\']?([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T\s][0-9]{2}:[0-9]{2}:[0-9]{2})?)', fm)
-                        if m:
-                            try:
-                                fm_dt = datetime.fromisoformat(m.group(1).replace(' ', 'T'))
-                                mtime = max(mtime, fm_dt.timestamp())
-                            except ValueError:
-                                pass
-            except Exception:
-                pass
+            end_idx = head.find('\n---', 3) if head.startswith('---') else -1
+            frontmatter = head[3:end_idx] if end_idx != -1 else ''
+            if _FRONTMATTER_GENERATED.search(frontmatter):
+                continue
+            # git checkout, clone and iCloud restore reset mtime; a recorded updated/modified date wins.
+            m = _FRONTMATTER_UPDATED.search(frontmatter)
+            # A bare date keeps the same-day mtime, so receipts earlier that day do not count as later.
+            if m and not (len(m.group(1)) == 10 and datetime.fromtimestamp(mtime).date().isoformat() == m.group(1)):
+                try:
+                    mtime = datetime.fromisoformat(m.group(1).replace(' ', 'T')).timestamp()
+                except (ValueError, OverflowError, OSError):
+                    pass
             if latest_mtime is None or mtime > latest_mtime:
                 latest_mtime = mtime
                 latest_source = relative
 
     total_receipts = 0
     receipts_since = 0
-    try:
-        for (payload,) in db.execute('SELECT payload FROM receipts'):
-            try:
-                receipt = json.loads(payload)
-                created = datetime.fromisoformat(receipt['created_at']).timestamp()
-            except (KeyError, TypeError, ValueError, OverflowError, OSError):
-                continue
-            total_receipts += 1
-            if latest_mtime is not None:
-                if created >= latest_mtime:
-                    receipts_since += 1
-            else:
-                receipts_since += 1
-    except Exception:
-        pass
+    # A store error propagates: doctor reports "unavailable" instead of a silent zero.
+    for (payload,) in db.execute('SELECT payload FROM receipts'):
+        try:
+            receipt = json.loads(payload)
+            created = datetime.fromisoformat(receipt['created_at']).timestamp()
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        total_receipts += 1
+        if latest_mtime is None or created >= latest_mtime:
+            receipts_since += 1
 
     days_ago = max(0, int((now - latest_mtime) / 86400)) if latest_mtime is not None else None
 
