@@ -17,7 +17,8 @@ HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
 RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
     "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}. "
-    "Receipt session={session}; put this value in the JSON session field so the receipt closes this checkpoint."
+    "Receipt session={session}; put this value in the JSON session field so the receipt closes this checkpoint. "
+    "If the work produced a lasting learning, distill it under knowledge/concepts/ before the receipt and list that note in refs."
 )
 KNOWLEDGE_REMINDER = (
     "Learnings were reported in the receipt but no note under knowledge/ was updated in this session. "
@@ -82,41 +83,63 @@ def _has_receipt(database, harness, session, since):
     return _get_session_receipt(database, harness, session, since) is not None
 
 
+def _tr_fold(text):
+    # str.lower() turns İ into i + U+0307 and keeps ı; fold both so İ, I, ı and i compare equal.
+    return text.replace("\u0130", "i").replace("I", "i").lower().replace("\u0307", "").replace("ı", "i")
+
+
+# Matched against _tr_fold()ed lines, so labels are written without ı/İ.
+_LEARNING_LABEL = re.compile(
+    r"^[\s>*#_\-\u2022]*(?:öğrenilen(?:ler)?|ogrenilen(?:ler)?|kalici\s+(?:öğrenim|ogrenim)(?:ler)?|"
+    r"ders(?:ler)?|learned|lessons?(?:\s+learned)?|learnings?)[\s*_]*[:\u2014\u2013=][\s*_]*(.*)$")
+# The whole remainder must be a "none" answer; "yoklama ..." is still a learning.
+_NO_LEARNING = re.compile(
+    r"(?:(?:kalici\s+)?(?:öğrenim|ogrenim|ders)(?:ler)?\s+)?"
+    r"(?:yok(?:tur)?|hi[çc]\s+yok|hi[çc]biri|bulunmuyor|bulunmadi|none|nothing|no|n/?a|-+)")
+
+
 def _has_declared_learning(summary):
-    if not isinstance(summary, str) or not summary.strip():
+    """True when a line-leading learning label (Öğrenilen:, Ders:, Learned:) carries real content.
+
+    Only the label's own line counts: an empty "Öğrenilen:" must not borrow the next section,
+    and "machine learning:" or "ders-plan" in running text is not a declaration.
+    """
+    if not isinstance(summary, str):
         return False
-    pattern = re.compile(
-        r'(?i)(?:^|\n|[\*#_ ]+)(?:öğrenilen(?:ler)?|ogrenilen(?:ler)?|kalıcı\s+öğrenim|kalici\s+ogrenim|ders(?:ler)?|lessons?\s+learned|learning)\s*[:\n\-#\*_]+\s*(.+)',
-        re.MULTILINE
-    )
-    m = pattern.search(summary)
-    if not m:
-        return False
-    content = m.group(1).strip().lower()
-    negative_words = ('yok', 'none', '-', 'bulunmuyor', 'kalıcı öğrenim yok', 'kalici ogrenim yok', 'n/a', 'yoktur')
-    if any(content.startswith(nw) for nw in negative_words):
-        return False
-    return True
+    for line in summary.splitlines():
+        match = _LEARNING_LABEL.match(_tr_fold(line).strip())
+        if match:
+            content = match.group(1).strip().strip(".!*_` ").strip()
+            if content and not _NO_LEARNING.fullmatch(content):
+                return True
+    return False
+
+
+# Generated views and the V2 compiler seeds change without any agent distilling.
+_NOT_DISTILLATION = ("knowledge/v3/", "knowledge/index.md", "knowledge/log.md")
+
+
+def _is_distilled_note(relative):
+    relative = relative.replace("\\", "/")
+    return (relative.startswith("knowledge/") and relative.endswith(".md") and
+            not any(relative == item or relative.startswith(item) for item in _NOT_DISTILLATION))
 
 
 def _has_knowledge_update(vault, receipt, since):
     if not receipt:
         return False
-    for ref in receipt.get('refs', []):
-        if isinstance(ref, str) and (ref.startswith('knowledge/') or ref.startswith('knowledge\\')):
-            if not ref.replace('\\', '/').startswith('knowledge/v3/'):
+    if any(isinstance(ref, str) and _is_distilled_note(ref) for ref in receipt.get("refs", [])):
+        return True
+    k_dir = Path(vault) / "knowledge" if vault else None
+    if k_dir is None or not k_dir.is_dir():
+        return False
+    for path in k_dir.rglob("*.md"):
+        try:
+            if (path.is_file() and not path.is_symlink() and path.stat().st_mtime >= since and
+                    _is_distilled_note(path.relative_to(vault).as_posix())):
                 return True
-    if vault:
-        k_dir = Path(vault) / 'knowledge'
-        if k_dir.is_dir():
-            for p in k_dir.rglob('*.md'):
-                if p.is_file() and not p.is_symlink() and p.name != '.gitkeep':
-                    try:
-                        rel = p.relative_to(vault).as_posix()
-                        if not rel.startswith('knowledge/v3/') and p.stat().st_mtime >= since:
-                            return True
-                    except (ValueError, OSError):
-                        continue
+        except (ValueError, OSError):
+            continue
     return False
 
 
@@ -163,7 +186,8 @@ def receipt_reminder(payload, state, harness, event, vault=None):
         receipt = _get_session_receipt(db_path, harness, session, since)
         if not receipt:
             if not done.exists():
-                edited.unlink(missing_ok=True)
+                # Keep the edit window: a receipt written in answer to this reminder arrives
+                # during the stop_hook_active Stop, so only the next Stop can check its learning.
                 folder.mkdir(parents=True, exist_ok=True)
                 with done.open("x", encoding="utf-8"):  # FileExistsError if a concurrent Stop reminded first
                     pass
