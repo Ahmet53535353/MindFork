@@ -577,8 +577,13 @@ class SyncEngine:
             metadata, body = parse(raw.decode('utf-8'))
             if metadata.get('id') != id or type(metadata.get('revision')) is not int or metadata['revision'] > expected_revision:
                 raise RevisionConflict('source revision conflict')
+            before = {field: metadata.get(field) for field in ('status', 'completion_criterion')}
             metadata.update(changes)
             metadata['revision'] = expected_revision + 1
+            # The criterion is judged as it stood before completion, so it cannot move with the closing update.
+            if (metadata.get('completion_contract') == 'strict' and metadata.get('status') == 'done'
+                    and before['status'] != 'done' and metadata.get('completion_criterion') != before['completion_criterion']):
+                raise ValueError('completion_criterion cannot change in the update that marks a strict task done')
             # A task that never opted in keeps unrelated updates, even with a same-named legacy field.
             if metadata.get('completion_contract') is not None or COMPLETION_FIELDS & set(changes):
                 issue = self._completion_issue(metadata, record['source'])
