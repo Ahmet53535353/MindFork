@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
@@ -63,6 +64,27 @@ class ReferencesTest(unittest.TestCase):
             'Satır içi `[[Kod Notu]]` sayılmaz.', '[[<not-adı>]] ve [x]({yol}) de sayılmaz.',
             '~~~', '[[Başka Örnek]]', '~~~', '[[Gerçek Kırık]]', '']))
         self.assertEqual(self.dead(), [('.claude/skills/ornek/SKILL.md', 9, 'Gerçek Kırık')])
+
+    def test_links_resolve_like_obsidian_on_every_file_system(self):
+        self.write(unicodedata.normalize('NFD', 'notlar/Kaşık Ğöz.md'), 'x')
+        self.write('Notlar2/v3.2 Plan.md', 'x')
+        self.write('ekler/Not (1).md', 'x')
+        self.write('.agents/skills/ornek/SKILL.md', '# skill\n')
+        self.write('.agents/skills/ornek/references/a.md', '[b](references/b.md)\n')
+        self.write('.agents/skills/ornek/references/b.md', 'x')
+        self.write('AGENTS.md', '\n'.join([
+            '[[Kaşık Ğöz]] [[notlar/kaşık ğöz]] [[concepts/Var Olan Not]] [[notlar2/V3.2 PLAN]]',
+            '[x](notlar2/v3.2%20plan) [x](ekler/Not%20(1).md) [x](concepts/Var%20Olan%20Not.md)',
+            '<!-- beyin-v3:start -->', '<!-- [[Yorumdaki Not]] -->', '%% [[Obsidian Yorumu]] %%',
+            '````markdown', '```', '[[İç İçe Örnek]]', '```', '````', '```', '[[Kapanmamış]]', '']))
+        self.assertEqual(self.dead(), [])
+
+    def test_each_dead_link_is_reported_once_and_bounded(self):
+        for root in ('.agents', '.claude'):
+            self.write(root + '/skills/ornek/SKILL.md', '[[Kopyada Kırık]]\n')
+        self.write('AGENTS.md', '[[' + 'u' * 500 + ']]\n')
+        self.assertEqual(sorted(self.dead()), [('.agents/skills/ornek/SKILL.md', 1, 'Kopyada Kırık'),
+                                               ('AGENTS.md', 1, 'u' * 200)])
 
     def test_hidden_folders_do_not_satisfy_a_bare_wikilink(self):
         self.write('.obsidian/Gizli.md', '# gizli\n')
