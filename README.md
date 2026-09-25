@@ -136,7 +136,7 @@ V2'nin arka planda model çağıran günlük özetleyici/derleyici akışı V3't
 
 Kullanıcı notları updater'ın değiştireceği sistem dosyaları değildir. Yönetilen dosyada farklı bir değişiklik görülürse conflict bildirilir; ilgisiz desteklenen ayar değişiklikleri birleştirilir. Yedek ve journal vault dışında yereldir. Bir kesinti sonrası `recover` veya `rollback` kullanılabilir.
 
-Arama yerel kelime eşleştirmesi kullanır; genel doğal dil anlama veya her soruda doğru hatırlama sözü vermez. Motor kendisi model çağırmaz; ajana yaptırdığın işler istemcinin normal kullanımına girer. Otomatik doğrulamalar ve gerçek istemci kontrolleri [ayrı raporlanır](docs/v3/README.md).
+Arama tamamen yereldir ve model çağırmaz: Türkçe gövde ayıklama + SQLite üzerinde türetilmiş bir BM25 (FTS5) kelime dizini kullanır; notlar isteğe bağlı bellek tipiyle (`episodic`/`semantic`/`procedural`) etiketlenebilir ve sorgu tipine göre süzülebilir, her mesajdaki bağlam ise notun tamamı yerine cevabı taşıyan Markdown bloğundan gelir. İsterseniz kendi sağlayıcınızı bağlayabileceğiniz semantik arama kancası ve RRF füzyonu hazırdır; varsayılan kurulumda hiçbir model veya bulut servisi çağrılmaz. Bu, genel doğal dil anlama veya her soruda doğru hatırlama sözü olmadığı anlamına gelir; ajana yaptırdığın işler istemcinin normal kullanımına girer. Otomatik doğrulamalar ve gerçek istemci kontrolleri [ayrı raporlanır](docs/v3/README.md).
 
 ## Geliştiriciler
 

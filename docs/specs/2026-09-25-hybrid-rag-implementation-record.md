@@ -101,6 +101,21 @@ yalnız gerçek CLI + salt-okunur store API ile çatala özel tüm işlevler uç
 
 Kod değişikliği gerekmedi; upstream yüzeyi çatalda davranış koruyarak çalışıyor.
 
+## Belge tazeliği denetimi (2026-09-25)
+
+Dal dokümanları baştan tarandı; bayat olan dört nokta giderildi, kod değişmedi:
+`RUNTIME.md` retrieval paragrafları artık FTS5/BM25 türetilmiş dizinini (yazma
+omurgası bakımı + imza-self-heal + yeni sıralama sözleşmesi + `types=` + üç doctor
+alanı) anlatıyordu; `MARKDOWN.md`'ye şema kaynağı olarak **"Optional memory type"**
+bölümü eklendi; `PREFERENCES.md` sıralama maddesine `fts_consistency` yarım cümlesi;
+README'nin "yerel kelime eşleştirmesi" cümlesi çatalın gerçek arama mimarisine
+(BM25 + tipli hafıza + pasaj blokları + semantik kanca hazırlığı, model/uzak servis
+çağrılmıyor dürüstlüğü korunarak) güncellendi. Temiz çıkanlar: PREFERENCES passage
+bölümü, MARKDOWN #92 sözleşmesi, SKILL.md, memory-types.md, release banner'ı (3.4.0
+M2 ile geldi). Klon single-branch olduğu için `origin/main` hiç yoktu; refspec'e
+`main` eklendi ve worktree'deki lokal main `f9a8b5f`'e ff'ledi (dal 28 commit ileride).
+Tarihsel dosyalara (V2, deadend, oturum notları) ilkesel olarak dokunulmadı.
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
