@@ -91,3 +91,4 @@ yalnız gerçek CLI + salt-okunur store API ile çatala özel tüm işlevler uç
 2. AutoDream-lite konsolidasyon motoru (Prune/Merge/Refresh/Re-index + boyut disiplini)
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f9a8b5f)
+5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
