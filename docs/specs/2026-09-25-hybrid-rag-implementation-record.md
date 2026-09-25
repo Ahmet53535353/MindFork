@@ -60,9 +60,34 @@
   - `v3_type_inference_test.py` — ipucu birim testleri, yumuşak kapı, override, entegrasyon
   - `v3_passage_types_test.py` — passage yolunda tip kapıları: yumuşak/açık filtre, override, cache-değişmezliği, ValueError sırası
  
+## Canlı vault E2E doğrulaması (2026-09-25)
+
+Unit Paket'in dışında, taze bir vault (`/tmp/beyin-e2e-vault`, 2 proje / 7 kaynak) üzerinde
+yalnız gerçek CLI + salt-okunur store API ile çatala özel tüm işlevler uçtan uca denendi:
+
+| Alan | Komut/yöntem | Sonuç |
+|---|---|---|
+| Doctor yeni alanları | `doctor` | `fts_consistency {records,indexed,orphans}` + sayaçlar + `fts_malformed_skipped` yayında ✓ |
+| Tip boru hattı | seed + `task-update` + db okuması | tipli dosyalar tipli; tipsiz → `type:null` (gevşek sözleşme: yumuşak kapıda kalır, açık filtrede dışlanır); update'te tip kalıcı ✓ |
+| Rev-çakışması / history | `task-update` ×2, `history` | yanlış revision → `RevisionConflict`; history sıralı snapshot'lar ✓ |
+| **P0 spine (canlı)** | dosya düzenle→`context`; dosya sil→`sync`→`doctor` | yeni token sync'li sorguda ANINDA bulunur, `--no-sync` snapshot'ında yoktur; silmede `orphans:0`, FTS hit'i kalktı, delete event ✓ |
+| İpucu sezimi | store API | "hatırla/geçen hafta"→episodic, "nasılırım/adım adım"→procedural, "tanimi neydi"→semantic ✓ |
+| Tip kapıları | store API | `[episodic]`→yalnız episodic; tip-None kayıt açık filtrede dışlanıyor; ipucu kapısı yumuşak; `types=[]`/bozuk tip → ValueError ✓ |
+| Proje izolasyonu | store API | bravo oturumunda alpha sorgusu → boş ✓ |
+| Passage yolu | strict context | gerçek bütçede blok+citation üretir; küçük bütçe ve eşleşmeyen sorguda **bilinçli abstain**; `types=[episodic]` passage'te de uygulanıyor; hook yolu `strict=True` ile production'da canlı ✓ |
+| note-create CLI | JSON metadata `type` | dosya üretildi, sync'te `type:semantic` korundu ✓ |
+
+**Bulgular:**
+1. *CLI yüzey boşluğu (düşük öncelik):* kök CLI `context` `--types`/`--strict` bayrağı
+   sunmuyor ve `--file` beyaz listesi `types` alanını reddediyor. Production hook yolu
+   `strict=True`'yu kendi geçer, `types` API'den kullanılabilir; belge (`SKILL.md`) CLI'de
+   `--types` önermiyor — çelişki yok. İstenirse yarım saatlik ek: bayraklar + beyaz liste.
+2. Test gözlemi: passage katmanı çok küçük `budget_chars`'ta bilinçli abstain ediyor —
+   tasarım gereği (halüsinasyon yerine boş); dokümanda vurgulanabilir.
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
 2. AutoDream-lite konsolidasyon motoru (Prune/Merge/Refresh/Re-index + boyut disiplini)
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
-4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f88fa59)
+4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f9a8b5f)
