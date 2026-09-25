@@ -85,6 +85,22 @@ yalnız gerçek CLI + salt-okunur store API ile çatala özel tüm işlevler uç
 2. Test gözlemi: passage katmanı çok küçük `budget_chars`'ta bilinçli abstain ediyor —
    tasarım gereği (halüsinasyon yerine boş); dokümanda vurgulanabilir.
 
+## Canlı vault E2E — genel/upstream işlevler (2026-09-25)
+
+Üçüncü bir taze vault (`/tmp/beyin-general-vault`) üzerinde çatal özelliklerinden bağımsız
+16 senaryoluk upstream işlev koşucusu: **16/16 PASS**.
+
+| Grup | Senaryo → sonuç |
+|---|---|
+| Temel | sync(4) · doctor · context+citation · eşleşmeyen sorguda abstain ✓ |
+| Yazma API | task-create · geçersiz kaynak yolunun reddi · receipt **idempotency** (aynı event_id → tek `receipts/` dosyası) · history ✓ |
+| Ayarlar | preferences yaz/ok (context_chars/mode) · secret-filter: `AKIA…` → `[REDACTED]`, ham anahtar DB'de YOK, doctor sayacı 2 ✓ |
+| Companion | compact dry-run + gerçek koşu — limitler dahilinde doğru no-op, hiçbir girdi kaybı yok ✓ |
+| Bütünlük | **duplicate id karantinası** (`all copies quarantined`, temizlik sonrası succeeded) · done-görev → `legacy_done=1` (#92 sözleşmesi: sözleşmesiz eski görev suçlanmaz) · olay/gap sayacı ✓ |
+| Skill | skill-import → `.claude/skills/denama` + skill-sync + doctor temiz ✓ |
+
+Kod değişikliği gerekmedi; upstream yüzeyi çatalda davranış koruyarak çalışıyor.
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
