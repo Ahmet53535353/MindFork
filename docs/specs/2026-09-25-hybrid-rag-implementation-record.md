@@ -35,16 +35,18 @@
 
 - Aşama sonu kilometre taşları: 466/466 → tip sezgisi + discovery düzeltmesiyle 493/493.
 - **Upstream merge sonrası: 673/673 yeşil** (`python3 -m unittest discover tests -p "*test.py"`; upstream'in ~200 yeni testi dahil, skipped=1 platform testi).
+- **Passage tip kapısı sonrası: 681/681 yeşil** (+7: `v3_passage_types_test`).
 - Custom testler `tests/custom/` içinde (`__init__.py` sayesinde kök discover artık dahil ediyor):
   - `v3_memory_types_test.py` — tip doğrulama ve filtreleme
   - `v3_fts5_test.py` — FTS5 şema, senkron, rebuild, tam sembol araması, bozuk payload toleransı
   - `v3_rrf_hybrid_test.py` — RRF matematiği ve semantik kanca
   - `v3_companion_ends_fill_test.py` — iki uçlu kırpma bütçe dolumu
   - `v3_type_inference_test.py` — ipucu birim testleri, yumuşak kapı, override, entegrasyon
-
+  - `v3_passage_types_test.py` — passage yolunda tip kapıları: yumuşak/açık filtre, override, cache-değişmezliği, ValueError sırası
+ 
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
 2. AutoDream-lite konsolidasyon motoru (Prune/Merge/Refresh/Re-index + boyut disiplini)
-3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu — hook bağlamında tip sezgisi passage'da işlemiyor)
+3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f88fa59)
