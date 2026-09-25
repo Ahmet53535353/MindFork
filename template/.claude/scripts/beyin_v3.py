@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import datetime
 import functools
 import hashlib
 import json
@@ -15,6 +15,9 @@ import unicodedata
 
 # Every supported client. "manual" is accepted for receipts only.
 HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode", "omp")
+
+# rejected_at grammar: a date, optionally with an RFC 3339-style time.
+REJECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})?)?", re.ASCII)
 
 # Frontmatter keys other tools write instead of updated_at, in precedence order.
 RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")
@@ -243,13 +246,15 @@ class MemoryStore:
             if record.get("validity") == "rejected":
                 if not isinstance(record.get("rejected_reason"), str) or not record["rejected_reason"].strip():
                     raise ValueError("rejected_reason required for rejected validity")
+                # A date or an RFC 3339-style timestamp. The explicit grammar keeps acceptance
+                # identical across Python versions (3.14 fromisoformat also takes T24:00).
                 rejected_at = record.get("rejected_at")
-                if not isinstance(rejected_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", rejected_at):
-                    raise ValueError("rejected_at must be an ISO date for rejected validity")
+                if not isinstance(rejected_at, str) or not REJECTED_AT.fullmatch(rejected_at):
+                    raise ValueError("rejected_at must be an ISO date or timestamp for rejected validity")
                 try:
-                    date.fromisoformat(rejected_at)
+                    datetime.fromisoformat(rejected_at)
                 except ValueError as exc:
-                    raise ValueError("rejected_at must be an ISO date for rejected validity") from exc
+                    raise ValueError("rejected_at must be an ISO date or timestamp for rejected validity") from exc
         record.setdefault("facts", {})
         if not isinstance(record["facts"], dict):
             raise ValueError("facts must be an object")
