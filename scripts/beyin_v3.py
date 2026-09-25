@@ -281,6 +281,13 @@ def main(argv=None):
                     result['receipt_coverage'] = receipt_coverage(db, now=time.time())
             else:
                 result['receipt_coverage'] = None
+            from beyin_v3_projections import knowledge_freshness, check_instruction_conflicts
+            try:  # a recency report must never hide the rest of doctor, conflicts included
+                with store._connect() as db:
+                    result['knowledge_freshness'] = knowledge_freshness(vault, db, now=time.time())
+            except Exception as exc:
+                result['knowledge_freshness'] = {'status': 'unavailable', 'error': type(exc).__name__}
+            result['instruction_conflicts'] = check_instruction_conflicts(vault)
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
@@ -298,7 +305,7 @@ def main(argv=None):
             except Exception as exc:
                 result['validity'] = {'ignored_rejection_count': 0, 'ignored_rejections': [], 'truncated': False,
                                       'error': (type(exc).__name__ + ': ' + str(exc))[:240]}
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":

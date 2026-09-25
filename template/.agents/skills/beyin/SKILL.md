@@ -116,8 +116,10 @@ Anlamlı çalışma bittiğinde, kullanıcı hafızaya yazılmamasını istemedi
 `python3 beyin.py receipt --file RECEIPT_JSON --harness codex` komutunu çalıştır; mevcut istemciye göre `claude`, `antigravity`, `hermes`, `opencode` veya `omp` seç. Şema:
 
 ```json
-{"event_id":"bu-sonuca-ozel-kararli-id","summary":"Yapılan iş, doğrulama ve açık kalan adım.","refs":["notes/kaynak.md"]}
+{"event_id":"bu-sonuca-ozel-kararli-id","summary":"Yapılan iş, doğrulama ve açık kalan adım.\nÖğrenilen: yok","refs":["notes/kaynak.md"]}
 ```
+
+summary içinde kalıcı öğrenimi ayrı bir satırda `Öğrenilen: <tek cümle>` olarak beyan et; öğrenim yoksa `Öğrenilen: yok` yaz. Öğrenim beyan ettiysen receipt'ten önce `knowledge/concepts/` altında notu oluştur ya da mevcut notu güncelle ve bu notu refs içine ekle. Stop kancası beyan edilen öğrenim için yazılmış bir knowledge notu görmezse oturumda bir kez hatırlatır; kalıcı not gerekmiyorsa bunu tek cümleyle söylemen yeterli.
 
 Hook bağlamında `Receipt session=...` verilmişse JSON içine `session` alanını bu değerle aynen ekle; değer yoksa session uydurma. Bu, sonucun doğru istemci oturumuna bağlanmasını sağlar.
 
