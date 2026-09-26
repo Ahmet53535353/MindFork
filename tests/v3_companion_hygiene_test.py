@@ -245,6 +245,26 @@ class HygieneCliTest(unittest.TestCase):
         self.assertEqual((self.directory / 'Last-Session.md').read_bytes(), before)
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_multi_card_parallel_sessions_compacted_losslessly_keeping_newest_card(self):
+        moment = datetime(2026, 9, 26, 16, 30)
+        cards = ['# Son oturum\n\n']
+        for i in range(12):
+            stamp = (moment - timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M')
+            cards.append(f'## {stamp} · session_{i:02d} · a{i:07x}\n'
+                         f'CARD_{i:02d}: Oturum kararı ve sonuçları. ' + FILLER * 5 + '\n\n')
+        last = self.write('Last-Session.md', ''.join(cards))
+        self.run_cli('sync')
+        self.assertIn('Memory hygiene: Last-Session.md is', self.hook())
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'compacted')
+        live = last.read_text(encoding='utf-8')
+        self.assertLessEqual(len(live), 3000)
+        self.assertIn('CARD_00', live, 'the newest session card is preserved')
+        self.assertNotIn('CARD_11', live, 'oldest session card is moved to archive')
+        month = datetime.now(timezone.utc).strftime('%Y-%m')
+        archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
+        self.assertIn('CARD_11', archive, 'oldest session card is safely preserved in archive')
+
     def test_instructions_ask_for_a_rewrite_not_an_append(self):
         skill = (ROOT / 'template/.agents/skills/beyin/SKILL.md').read_text(encoding='utf-8')
         installer = (ROOT / 'scripts/install_v3.py').read_text(encoding='utf-8')
@@ -253,6 +273,7 @@ class HygieneCliTest(unittest.TestCase):
             self.assertIn('companion-compact', text)
             self.assertIn('baştan yeniden', text)
             self.assertIn('her cevapta', text)
+            self.assertIn('kendi kartını', text)
         for text in (skill, installer, (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_text(encoding='utf-8')):
             for forbidden in ('\u2014', '\u2013', '\u00e2'):  # em dash, en dash, circumflex a
                 self.assertNotIn(forbidden, text)
@@ -362,6 +383,25 @@ class CompactionPlanTest(unittest.TestCase):
         self.assertIn('## Previous Sessions\n' + self.POINTER + '\n', result['live'])
         self.assertIn('## Session: 2026-09-20', result['archive'])
         self.assertIn('## Previous Sessions\n(none yet)\n', result['archive'])
+
+    def test_multi_card_parallel_session_headings_keep_newest_card(self):
+        text = (
+            '# Son oturum\n\n'
+            '## 2026-09-26 16:30 · ev · 3f9a1c2b\n'
+            'EN_YENİ_KART: 4. oturum kararı ve sonraki adım.\n- test adımı\n\n'
+            '## 2026-09-26 14:15 · ofis · 7c8b2d1a\n'
+            'KART_3: 3. oturum kararı. ' + FILLER * 3 + '\n\n'
+            '## 2026-09-26 11:00 · ev · 1a2b3c4d\n'
+            'KART_2: 2. oturum kararı. ' + FILLER * 3 + '\n\n'
+            '## 2026-09-26 09:00 · ofis · 9e8d7c6b\n'
+            'EN_ESKİ_KART_1: 1. oturum kararı. ' + FILLER * 3 + '\n'
+        )
+        result = self.plan(text, 'Last-Session.md', 350)
+        self.assertIn('## 2026-09-26 16:30 · ev · 3f9a1c2b\nEN_YENİ_KART: 4. oturum kararı', result['live'])
+        self.assertNotIn('EN_ESKİ_KART_1', result['live'])
+        self.assertIn('EN_ESKİ_KART_1', result['archive'])
+        self.assertIn('## Önceki oturumlar\n\n' + self.POINTER, result['live'])
+        self.assertLessEqual(len(result['live']), 350)
 
     def test_thread_fields_with_dates_code_fences_and_crlf_stay(self):
         text = ('# Threads\r\n## Active Threads\r\n### Thread: A\r\n**Status:** waiting, 2026-10-01\r\n'

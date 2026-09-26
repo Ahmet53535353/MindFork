@@ -65,10 +65,11 @@ sayan istemcilerde güncelleme her turda yeni tarihli paragraf olarak ekleniyord
 
 Düzeltme dört parçadır:
 
-- **Talimat.** `Last-Session.md` üstündeki devir kartı baştan yeniden yazılır, eski kart alta
-  eklenmez. `Threads.md` içinde konu yerinde güncellenir. Süreklilik kontrolü her cevapta
-  değil, anlamlı bir iş parçası bittiğinde yapılır. `## Previous`/`## Önceki` bölümüne ajan
-  dokunmaz; eski metni yalnız aşağıdaki komut taşır.
+- **Talimat.** `Last-Session.md` içinde oturum başına bir devir kartı açılır (`## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>`)
+  ve oturum yalnız kendi kartını yerinde günceller; başka oturumların kartları ezilmez. `Threads.md`
+  içinde konu yerinde güncellenir. Süreklilik kontrolü her cevapta değil, anlamlı bir iş parçası
+  bittiğinde yapılır. `## Previous`/`## Önceki` bölümüne ajan dokunmaz; eski kartları yalnız
+  aşağıdaki komut taşır.
 - **Ölçülebilir sınır.** Varsayılan sınır `Last-Session.md` için 3.000, `Threads.md` için
   8.000 karakterdir. Sayım Unicode karakteridir; bayt veya UTF-16 birimi değildir, bu yüzden
   Türkçe veya emoji yoğun bir dosya olduğundan büyük görünmez. `preferences

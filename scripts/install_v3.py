@@ -423,10 +423,10 @@ taşınır. Mevcut kişiselleştirilmiş klasörü kullan; ikinci kimlik açma.
 cevapları Core.md'ye kaydet. Mevcut kimliği tekrar sorgulama veya şablonla değiştirme.
 
 Anlamlı bir iş parçası bittiğinde (her cevapta değil) beyin skill'indeki ilişki ve öğrenme
-protokolünü uygula: Last-Session'daki devir kartını sonuç ve gerekçeyle baştan yeniden yaz
-(eski kartı alta ekleme, önceki oturumlar bölümüne dokunma), açık konuyu Threads'te yerinde
-güncelle, açık kullanıcı düzeltmesini kapsamıyla Kurallar'a, kalıcı öğrenimi kaynak bağlantılı
-knowledge notuna kaydet.
+protokolünü uygula: Last-Session'da oturum kartını aç ya da yalnız kendi kartını baştan
+yeniden yaz (başka oturumların kartını ezme, önceki oturumlar bölümüne dokunma),
+açık konuyu Threads'te yerinde güncelle, açık kullanıcı düzeltmesini kapsamıyla
+Kurallar'a, kalıcı öğrenimi kaynak bağlantılı knowledge notuna kaydet.
 Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; istenmesini
 beklemeden kaydedilir. Core ve Journal'ı yalnız yeni ve dayanaklı bir şey olduğunda
 güncelle. Bunlar kullanıcı notlarıdır; güncellemelerde korunur. Ardından kaynak
