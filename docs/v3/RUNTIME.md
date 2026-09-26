@@ -2,6 +2,16 @@
 
 This module is an opt-in foundation, not a replacement installer or lifecycle migration. Existing hooks and the isolated compiler are unchanged. It makes no model calls and imports no remote provider. It must be given an existing synthetic or explicitly authorized vault and a runtime directory outside that vault.
 
+The consolidation window is a maintenance reader, not a lifecycle stage. `beyin_v3_dream.py`
+computes, from the same SQLite projection and the same Markdown sources, three things a
+maintenance pass needs: the window gates (24 hours since the recorded `dream.last_run` in the
+metadata table, at least five receipts created after it, and whether `state/dream.lock` is free),
+the size inventory, and the per-source citation tally. A query-count log does not exist, so
+usage heat is passive: how often the agent itself cited a source in a receipt. Its report
+writes nothing at all, and it reports the gates instead of consuming the watermark, so the
+measurement week a phase-1 report exists for cannot close its own window. `doctor` republishes
+the same size inventory as one `oversize` field, marking engine-written views `generated`.
+
 `template/.claude/scripts/beyin_v3.py` exposes `MemoryStore(state_dir, vault_root)`. SQLite records and receipts persist in `state_dir/memory.sqlite3`; the runtime directory is private to the local account. Each operation owns and closes its connection. Write operations use `BEGIN IMMEDIATE` transactions; this is local process coordination, not distributed cloud synchronization.
 
 ## Records and source references
