@@ -79,35 +79,27 @@ def _read_start(state, key):
         return None
 
 
-def _mark_abandoned(state, vault, now):
-    """A session whose start state outlived the TTL never saw SessionEnd; mark its
-    open block so the next boot explains the gap instead of silently keeping OPEN."""
-    for state_file in Path(state).glob('sessionlog_start.*'):
-        key = state_file.name.removeprefix('sessionlog_start.')
-        started = _read_start(state, key)
-        if started is None or now - started <= ABANDONED_AFTER_SECONDS:
-            continue
-        marker = _marker(key)
-        for day in sorted(_day(started + n * 86400) for n in range(0, 4)):
-            path = _log_path(vault, day)
-            if not path.exists() or marker not in path.read_text(encoding='utf-8'):
-                continue
-            lines = path.read_text(encoding='utf-8').split('\n')
-            for index, line in enumerate(lines):
-                if line == marker and index + 1 < len(lines) and lines[index + 1].startswith('## OPEN ·'):
-                    lines[index + 1] = lines[index + 1].replace('## OPEN ·', '## OPEN (yarıda kaldı) ·', 1)
-            _atomic(path, '\n'.join(lines))
-        state_file.unlink(missing_ok=True)
+def _clear_session_state(state, key):
+    for prefix in ('sessionlog_start', 'prompt_count', 'needs_reflection'):
+        (Path(state) / f'{prefix}.{key}').unlink(missing_ok=True)
 
 
-def _receipt_lines(vault, state, started, now):
+def _prompt_count(state, key):
+    try:
+        return int((Path(state) / f'prompt_count.{key}').read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _receipt_events(vault, state, started, now):
+    """(created_at timestamp, line) for every receipt inside the window, oldest first."""
     database = Path(state) / 'memory.sqlite3'
     if not database.exists():
         return []
     # Receipts carry a UTC created_at; compare aware datetimes, not clock-local strings.
     start_dt = dt.datetime.fromtimestamp(started, dt.timezone.utc)
     end_dt = dt.datetime.fromtimestamp(now, dt.timezone.utc)
-    lines = []
+    events = []
     with contextlib.closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as db:
         for receipt_id, payload in db.execute('SELECT id, payload FROM receipts ORDER BY id').fetchall():
             try:
@@ -120,8 +112,56 @@ def _receipt_lines(vault, state, started, now):
             if start_dt <= created <= end_dt:
                 summary = str(event.get('summary', '')).replace('\n', ' ')
                 source = hashlib.sha256(str(receipt_id).encode()).hexdigest()
-                lines.append(f'- receipt: {summary} → receipts/{source}.md')
-    return lines
+                events.append((created.timestamp(), f'- receipt: {summary} → receipts/{source}.md'))
+    return events
+
+
+def _receipt_lines(vault, state, started, now):
+    return [line for _, line in _receipt_events(vault, state, started, now)]
+
+
+def _close_header(started, now, harness, count, label, last_active=None):
+    tail = f' · {count} istem' if count is not None else ''
+    moment = f' · son etkinlik {_hm(last_active if last_active else started)}'
+    return f'## {_hm(started)}–? · {harness}{tail}{moment} ({label})'
+
+
+def _mark_abandoned(state, vault, now):
+    """Close a block whose start state outlived the TTL without ever seeing a SessionEnd.
+
+    OpenCode only reports SessionEnd when a session is deleted, and Antigravity has no
+    close event at all, so an ordinary exit looks exactly like a crash. The honest record
+    is a closed span with a neutral label and the last observed activity, not a block left
+    open and not "interrupted" either.
+    """
+    for state_file in Path(state).glob('sessionlog_start.*'):
+        key = state_file.name.removeprefix('sessionlog_start.')
+        started = _read_start(state, key)
+        if started is None or now - started <= ABANDONED_AFTER_SECONDS:
+            continue
+        marker = _marker(key)
+        for day in sorted(_day(started + n * 86400) for n in range(0, 4)):
+            path = _log_path(vault, day)
+            if not path.exists() or marker not in path.read_text(encoding='utf-8'):
+                continue
+            lines = path.read_text(encoding='utf-8').split('\n')
+            for index, line in enumerate(lines):
+                if line != marker or index + 1 >= len(lines):
+                    continue
+                header = lines[index + 1]
+                if not header.startswith('## OPEN ·'):
+                    continue
+                harness = header.split('·')[-1].strip() if '·' in header else 'bilinmiyor'
+                events = _receipt_events(vault, state, started, now)
+                last_active = events[-1][0] if events else None
+                details = [line for _, line in events]
+                if (Path(state) / f'needs_reflection.{key}').exists():
+                    details.append('- reflection: son promptlar hafıza güncellenmeden geçti')
+                closed = _close_header(started, now, harness, _prompt_count(state, key),
+                                       'kapanış kaydı yok', last_active=last_active)
+                lines[index + 1] = closed + ('\n' + '\n'.join(details) if details else '')
+            _atomic(path, '\n'.join(lines))
+        _clear_session_state(state, key)
 
 
 def session_start(vault, state, settings, harness, session_id, now=None):
@@ -151,7 +191,9 @@ def session_end(vault, state, settings, harness, session_id, now=None):
     key = _key(session_id)
     with _locked(state):
         started = _read_start(state, key)
-        (Path(state) / f'sessionlog_start.{key}').unlink(missing_ok=True)
+        count = _prompt_count(state, key)
+        reflected = (Path(state) / f'needs_reflection.{key}').exists()
+        _clear_session_state(state, key)
         if started is None or started > now:
             return
         marker = _marker(key)
@@ -164,13 +206,11 @@ def session_end(vault, state, settings, harness, session_id, now=None):
         header = lines[index + 1] if index + 1 < len(lines) else ''
         if not header.startswith('## OPEN ·'):
             return
-        try:
-            count = int((Path(state) / f'prompt_count.{key}').read_text().strip())
-            span = f'## {_hm(started)}–{_hm(now)} · {harness} · {count} istem'
-        except (OSError, ValueError):
-            span = f'## {_hm(started)}–{_hm(now)} · {harness}'
+        span = f'## {_hm(started)}–{_hm(now)} · {harness}'
+        if count is not None:
+            span += f' · {count} istem'
         details = _receipt_lines(vault, state, started, now)
-        if (Path(state) / f'needs_reflection.{key}').exists():
+        if reflected:
             details.append('- reflection: son promptlar hafıza güncellenmeden geçti')
         lines[index + 1] = span + ('\n' + '\n'.join(details) if details else '')
         _atomic(path, '\n'.join(lines))

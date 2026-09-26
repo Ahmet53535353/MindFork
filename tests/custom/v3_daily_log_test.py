@@ -1,9 +1,11 @@
 """Daily session log (daily/log/) — model-free B1. Spec: docs/specs/2026-09-26-daily-log-design.md."""
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -67,6 +69,30 @@ class DailyLogTest(unittest.TestCase):
         return self.module.session_end(self.vault, self.state, settings, 'codex', session,
                                        now=when or at(self.today, 15, 10))
 
+    def prompt_count(self, session, count):
+        (self.state / f'prompt_count.{key_of(session)}').write_text(f'{count}\n')
+        return count
+
+    def receipt(self, event_id, when, refs=('knowledge/notlar.md',)):
+        """Insert a real receipt row so the block can reference the window."""
+        from beyin_v3_sync import SyncEngine
+        engine = SyncEngine(self.vault, self.state)
+        self.addCleanup(engine.store.close)
+        for ref in refs:
+            path = self.vault / ref
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists():
+                path.write_text('# not\n', encoding='utf-8')
+        engine.sync()
+        engine.receipt(event_id, 'bir sey', list(refs), 'codex')
+        with contextlib.closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db:
+            stamp = dt.datetime.fromtimestamp(when, dt.timezone.utc).isoformat()
+            row = db.execute('SELECT payload FROM receipts WHERE id=?', (event_id,)).fetchone()
+            event = json.loads(row[0])
+            event['created_at'] = stamp
+            db.execute('UPDATE receipts SET payload=? WHERE id=?', (json.dumps(event), event_id))
+            db.commit()
+
     def test_gate_off_writes_and_injects_nothing(self):
         reminder = self.start('s1', SETTINGS_OFF)
         self.end('s1', SETTINGS_OFF)
@@ -112,9 +138,49 @@ class DailyLogTest(unittest.TestCase):
         self.start('s5', when=at(self.today, 9, 0))  # opens, never closes
         self.start('s6', when=at(self.today, 18, 0))  # 9h later: s5 is dead by TTL
         text = self.log_text()
-        self.assertIn('OPEN (yarıda kaldı)', text)
+        self.assertIn('kapanış kaydı yok', text)
+        self.assertIn('## OPEN · 18:00', text)
+        self.assertEqual(text.count('## OPEN'), 1)  # only the live session stays open
         self.assertTrue((self.state / f'sessionlog_start.{key_of("s6")}').exists())
         self.assertFalse((self.state / f'sessionlog_start.{key_of("s5")}').exists())
+
+    def test_orphaned_block_closes_with_span_count_and_last_activity(self):
+        self.start('s5b', when=at(self.today, 9, 0))
+        self.prompt_count('s5b', 4)
+        self.receipt('e-orphan', when=at(self.today, 10, 30))
+        self.start('s6b', when=at(self.today, 18, 0))
+        text = self.log_text()
+        self.assertIn('## 09:00–? · codex · 4 istem · son etkinlik 10:30 (kapanış kaydı yok)', text)
+        self.assertIn('receipts/', text)
+        # The next session's own block stays open and untouched.
+        self.assertIn('## OPEN', text)
+        self.assertIn('18:00', text)
+
+    def test_orphaned_block_falls_back_to_the_start_time_without_receipts(self):
+        self.start('s5c', when=at(self.today, 9, 0))
+        self.start('s6c', when=at(self.today, 18, 0))
+        self.assertIn('son etkinlik 09:00 (kapanış kaydı yok)', self.log_text())
+
+    def test_orphaned_block_reports_a_missing_prompt_count(self):
+        self.start('s5d', when=at(self.today, 9, 0))
+        (self.state / f'prompt_count.{key_of("s5d")}').unlink(missing_ok=True)
+        self.start('s6d', when=at(self.today, 18, 0))
+        text = self.log_text()
+        self.assertIn('## 09:00–? · codex · son etkinlik 09:00 (kapanış kaydı yok)', text)
+
+    def test_closing_and_abandoning_clear_every_session_state_file(self):
+        self.start('s8a', when=at(self.today, 9, 0))
+        self.prompt_count('s8a', 3)
+        (self.state / f'needs_reflection.{key_of("s8a")}').write_text('not')
+        self.end('s8a', when=at(self.today, 9, 30))
+        for suffix in ('sessionlog_start', 'prompt_count', 'needs_reflection'):
+            self.assertFalse((self.state / f'{suffix}.{key_of("s8a")}').exists(), suffix)
+        self.start('s8b', when=at(self.today, 9, 0))
+        self.prompt_count('s8b', 2)
+        (self.state / f'needs_reflection.{key_of("s8b")}').write_text('not')
+        self.start('s8c', when=at(self.today, 18, 0))
+        for suffix in ('sessionlog_start', 'prompt_count', 'needs_reflection'):
+            self.assertFalse((self.state / f'{suffix}.{key_of("s8b")}').exists(), suffix)
 
     def test_two_sessions_two_blocks(self):
         self.start('s7a', when=at(self.today, 9, 0))
