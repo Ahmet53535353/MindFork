@@ -156,6 +156,7 @@ Kullanıcı “ekonomik moda geç”, “otomatik kontrolleri kapat” veya “k
 - Otomatik bağlamı kapat, yerel kontroller devam etsin: `python3 beyin.py preferences --context-mode off`
 - Daha az bağlam: `python3 beyin.py preferences --context-chars 2000`
 - Receipt/note/task yazımlarında opt-in sır süzgeci: `python3 beyin.py preferences --secret-filter on`
+- Günlük oturum logu (varsayılan açık): `python3 beyin.py preferences --daily-log off` kapatır, `on` tekrar açar. Kullanıcı bir tercihi hiç belirtmediyse oturum başında bir kez "günlük log açık, şunu çalıştırarak kapatabilirsin" de; belirttikten sonra tekrar etme.
 - Hafıza dosyası sınırları: `python3 beyin.py preferences --last-session-chars 3000 --threads-chars 8000` (0 kapatır; ayar bu makinedeki runtime klasöründe tutulur)
 
 Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 5000 karakter ek bağlam. Ekonomik: yeni oturumda taze kontrol ve en çok 2000 karakter bağlam; sonraki olaylarda kontroller arası en az 15 dakika. Manuel: otomatik iş başlatma ve bağlam kapalı; açık `context`, `sync`, not/görev ve receipt komutları çalışır. Sadece aralığı değiştirmek manuel modu açmaz; kullanıcı kontrolleri yeniden açmayı istiyorsa `--auto-sync on` kullan.

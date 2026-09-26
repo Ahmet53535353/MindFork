@@ -47,6 +47,35 @@ class PreferencesTest(unittest.TestCase):
         self.assertFalse(result['model_calls'])
         self.assertFalse(result['timer_installed'])
 
+    def test_daily_log_is_on_by_default_in_every_profile(self):
+        # Insan kullanimi E2E'si: gunluk log en gorunur hatirlatma ozelligiydi ama
+        # hicbir profilde varsayilan kapaliydi, o yuzden hic kimse bulamadi.
+        for name, profile in prefs.PROFILES.items():
+            self.assertTrue(profile['daily_log'], name)
+        self.assertTrue(prefs.read(self.vault)['daily_log'])
+        self.assertTrue(self.cli('preferences')['preferences']['daily_log'])
+
+    def test_daily_log_opt_out_survives_profile_changes_and_stays_off(self):
+        # Ayar artik belirlendigi icin profil degisimi onu sifirlamamali.
+        self.assertFalse(self.cli('preferences', '--daily-log', 'off')['preferences']['daily_log'])
+        for name in ('economical', 'manual', 'normal'):
+            self.assertFalse(self.cli('preferences', '--profile', name)['preferences']['daily_log'], name)
+        self.assertFalse(self.cli('preferences')['preferences']['daily_log'])
+        self.assertFalse(prefs.read(self.vault)['daily_log'])
+
+    def test_daily_log_chosen_is_false_until_the_user_sets_it(self):
+        # Gorusulur uyari yalniz hic secim yapmamis kullaniciya gider. Salt okuma
+        # tercih dosyasini yaratmaz; herhangi bir kalici tercih soru sayilir.
+        self.assertFalse(prefs.daily_log_chosen(self.vault))
+        self.cli('preferences')
+        self.assertFalse(prefs.daily_log_chosen(self.vault))
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists())
+        self.cli('preferences', '--daily-log', 'off')
+        self.assertTrue(prefs.daily_log_chosen(self.vault))
+        self.vault.joinpath('.beyin-preferences.json').unlink()
+        self.cli('preferences', '--context-chars', '6000')
+        self.assertTrue(prefs.daily_log_chosen(self.vault))
+
     def test_secret_filter_is_explicit_and_survives_profile_changes(self):
         self.assertFalse(self.cli('preferences')['preferences']['secret_filter'])
         self.assertTrue(self.cli('preferences', '--secret-filter', 'on')['preferences']['secret_filter'])

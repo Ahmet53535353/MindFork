@@ -88,6 +88,7 @@ class Month:
         self.session_days = {}
         self.log_bodies = {}
         self.events = []
+        self.start_contexts = []   # her SessionStart ciktisi (gunluk log uyarisi bir kez olmali)
         self.json_dir = self.root / 'json'
         self.json_dir.mkdir(exist_ok=True)
         self.db = self.state / 'memory.sqlite3'
@@ -135,7 +136,10 @@ class Month:
         self.events.append(('hook', event, result.returncode))
         if result.returncode:
             raise AssertionError(f'hook {event} rc={result.returncode} {result.stdout} {result.stderr}')
-        return json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+        output = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+        if event == 'SessionStart':
+            self.start_contexts.append(str(output))
+        return output
 
     def write_json(self, name, payload):
         path = self.json_dir / name
@@ -418,7 +422,7 @@ class HumanMonthE2ETest(unittest.TestCase):
         # ---------------- G1 (2026-08-27) tanisma ------------------------
         s1 = f'{PERSON}-g1'
         m.session_days[hashlib.sha256(s1.encode()).hexdigest()[:24]] = vday(0)
-        m.hook('SessionStart', s1)
+        m.first_context = str(m.hook('SessionStart', s1))   # gunluk log uyarisi burada olmali
         m.hook('UserPromptSubmit', s1, prompt='Beyin skill, beni tanimak icin kisa sorular sor')
         m.write_core_identity()
         m.note('g1-proje', 'knowledge/concepts/kahve-dukkani-projesi.md',
@@ -434,7 +438,8 @@ class HumanMonthE2ETest(unittest.TestCase):
                   'Öğrenilen: yok',
                   ['knowledge/concepts/kahve-dukkani-projesi.md', 'tasks/menu-sayfasi.md'], 0, session=_session(s1))
         m.hook('Stop', s1)
-        m.preferences('--daily-log', 'on')   # kullanici: "oturum gunlugunu de ac"
+        # Gunluk log varsayilan acik: kullanici hicbir sey yapmiyor. Ilk oturumda
+        # ajana kapatma yolu anlatilir (keşfedilebilirlik olcumu, m.first_context).
         m.fill_log(s1, '## Bağlam\nKahve Dükkanı projesi ilk kez konuşuldu.\n\n'
                        '## Alınan Kararlar\nMenü sayfası ilk iş olacak.\n\n'
                        '## Yapılacaklar\nMenü içeriği girilecek.')
@@ -837,6 +842,13 @@ class HumanMonthE2ETest(unittest.TestCase):
         daily = sorted(p.name for p in (m.vault / 'daily/v3').glob('*.md'))
         self.assertIn(f'{vday(6)}.md', daily, 'receipt projectioni geriye tarihlemedi')
         self.assertNotIn(f'{dt.date.today().isoformat()}.md', daily)
+        # Gun 1: kullanici hicbir sey yapmadi ve gunluk log yine yazildi (varsayilan acik).
+        self.assertIn(f'{vday(0)}.md', logs, 'varsayilan acikken ilk gun gunluk logu olusmadi')
+        # Kesfedilebilirlik: ajan ilk oturumda kapatma yolunu ogrendi, sonraki oturumlarda
+        # tekrar etmedi (uyari bir kez).
+        self.assertIn('--daily-log off', m.first_context)
+        self.assertEqual([c for c in m.start_contexts if '--daily-log off' in c], [m.first_context],
+                         'gunluk log uyarisi birden fazla oturumda tekrarlandi')
 
     def test_q10_strict_task_gate_rejects_unevidenced_done(self):
         """Kanitsiz strict done reddedildi, kanitli kabul edildi."""

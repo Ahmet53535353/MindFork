@@ -1,7 +1,8 @@
 # Günlük Oturum Logu (`daily/log/`) — model'siz B1
 
 - **Durum:** ONAYLANDI, uygulama başlıyor (2026-09-26)
-- **Kapsam:** opt-in, varsayılan kapalı; Last-Session semantiğine dokunulmaz
+- **Kapsam:** varsayılan **açık** (2026-09-26'da değişti, aşağıdaki karar günlüğü);
+  seçim yapmamış kullanıcıya tek satır görünür uyarı; Last-Session semantiğine dokunulmaz
 
 ## Problem
 
@@ -49,8 +50,11 @@
 
 ### Kapı ve hatırlatma
 
-- `preferences --daily-log on|off`; **varsayılan `false`**, üç profilde de; profil
-  değişimlerinde korunur (`secret_filter` kalıbı, `beyin_v3_preferences.py:50`).
+- `preferences --daily-log on|off`; **varsayılan `true`**, üç profilde de; profil
+  değişimlerinde korunur (`secret_filter` kalıbı, `beyin_v3_preferences.py:52`).
+  Orijinal karar `false` idi; bir aylık insan kullanımı E2E'si bunu tersine çevirdi
+  (kimse özelliği keşfedemiyordu) — gerekçe ve güvenlik tarafı:
+  `docs/specs/2026-09-26-followup-findings-plan.md`.
 - Kapalıysa: dosya oluşmaz, hiçbir şey enjekte edilmez.
 - Hatırlatma **yalnız SessionStart** enjeksiyonunda tek satır (tur-başı strict bağlamına
   girmez): "Oturum bitmeden bugünün daily-log bloğundaki Özet'i beş bölüm şemasıyla
@@ -95,8 +99,10 @@
 - V2 promptunun tamamını kopyalamak: transcript sarmalayıcı, "untrusted data" çerçevesi,
   `FLUSH_BOS` nöbeteri ve şema-retry yalnız ayrı model çağrısı için anlamlı; şema ve
   süzme kuralları alındı, çağrı artıkları alınmadı.
-- Installer'da soru/bayrak: ürün duruşu "installer soru sormaz"; açma tek seferlik
-  `preferences --daily-log on` (karar A).
+- Installer'da soru/bayrak: ürün duruşu "installer soru sormaz" **korunur**; artık
+  varsayılan açık olduğu için açmak için ek adım gerekmiyor. Seçim yapmamış kullanıcıya
+  hatırlatmada tek satır ile kapatma komutu söylenir (`beyin_v3_preferences.daily_log_chosen`),
+  tercihi belirtilmiş kullanıcıya bir daha söylenmez (karar A → B-safe).
 - `daily/v3/{gün}.md`'ye yazmak: projeksiyon mülkiyeti; çakışırdı.
 - Log'a receipt otomatığı: iddia üretimi olurdu (bkz. receipt tasarım gerekçesi).
 
@@ -107,7 +113,9 @@
 - Çökme anındaki Özet boş kalabilir — olgu bloğu yine tamdır (Faz-2 kemer 2 bunu
   azaltır).
 - PR tartışma başlığı ayrı olabilir; savunma: *"V3 oturum izini disipline bıraktı;
-  biz izi mekanizmaya geri verdik — yoruma dokunmadan, model'siz, varsayılan kapalı."*
+  biz izi mekanizmaya geri verdik — yoruma dokunmadan, model'siz, varsayılan kapalı."
+  Bu satır artık **yalnız onaylı değişiklikler için** geçerlidir; varsayılanın açılması
+  ölçülen bir bulguyla gerekçelendirildi ve kullanıcıya tek satır görünür uyarı verildi.
 
 ## Uygulama sırası
 
@@ -121,7 +129,7 @@ tam paket → 4. docs (RUNTIME/PREFERENCES/SKILL.md + record) → 5. commit + pu
   atomic yazım, UTC-duyarlı receipt penceresi (`receipts` tablosu, sha256 kaynak yolu),
   TTL 8s'lik yetim-işaretleme, `needs_reflection` satırı. V2'den yalnız beş bölüm şeması
   ve süzme kuralları alındı; model çağrısı yok.
-- `preferences.daily_log` üç profilde `False`; profil değişiminde korunur
+- `preferences.daily_log` üç profilde `True` (2026-09-26 değişikliği); profil değişiminde korunur
   (`secret_filter` ile birlikte); kök CLI `preferences --daily-log on|off`.
 - Hook: `settings = read()` hemen ardında senkron çağrı (queue worker'dan bağımsız),
   try/except ile hook'u asla kırmaz; hatırlatma yalnız SessionStart çıktısına eklenir.

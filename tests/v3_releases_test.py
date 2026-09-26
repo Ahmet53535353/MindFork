@@ -215,7 +215,10 @@ class ReleasesTest(unittest.TestCase):
         result = install(self.vault, self.state, self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         entry = self.vault / 'beyin.py'
-        result = run_python(entry, ['preferences', '--profile', 'manual', '--update-notifications', 'on'], self.vault, self.env)
+        # Bu testin konusu tercih/hook/no_memory/no_sync; gunluk logun varsayilani
+        # acik oldugu icin bagimliligi acikca kapatiyoruz (bkz. daily-log testleri).
+        result = run_python(entry, ['preferences', '--profile', 'manual', '--daily-log', 'off',
+                                    '--update-notifications', 'on'], self.vault, self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('update', (self.vault / '.beyin-preferences.json').read_text())
         self.seed_cache(now=time.time())

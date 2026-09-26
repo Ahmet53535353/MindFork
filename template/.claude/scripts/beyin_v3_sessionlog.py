@@ -164,6 +164,30 @@ def _mark_abandoned(state, vault, now):
         _clear_session_state(state, key)
 
 
+NOTICE_MARKER = 'daily_log_notice'
+
+
+def default_notice(vault, state):
+    """One line, once, while the log is on by default and the user never chose.
+
+    The default is now on, so someone who never answered should be told their sessions
+    are written to disk and how to stop it. A marker in the runtime directory keeps this
+    to a single line per install: repeating it every session would be nagging, and
+    `daily_log_chosen` silences it for anyone who did state a preference.
+    """
+    from beyin_v3_preferences import daily_log_chosen
+    marker = Path(state) / NOTICE_MARKER
+    if daily_log_chosen(vault) or marker.exists():
+        return ''
+    try:
+        _atomic(marker, time.strftime('%Y-%m-%dT%H:%M:%S') + '\n')
+    except OSError:
+        return ''  # a marker we cannot keep must not cost the session its context
+    return ('Günlük oturum logu varsayılan olarak açık ve kullanıcı henüz tercih '
+            'belirtmedi. Bu oturumda bir kez kullanıcıya söyle: oturum izleri '
+            'daily/log/ altına yazılıyor; kapatmak için preferences --daily-log off.\n')
+
+
 def session_start(vault, state, settings, harness, session_id, now=None):
     """Open (or reuse) today's block for this session; returns the reminder line or None."""
     if not settings.get('daily_log'):

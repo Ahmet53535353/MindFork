@@ -339,6 +339,7 @@ def main():
                 if event == 'SessionStart':
                     log_line = beyin_v3_sessionlog.session_start(vault, state, settings, args.harness,
                                                                  payload.get('session_id', 'unknown'))
+                    log_line = (log_line or '') + beyin_v3_sessionlog.default_notice(vault, state)
                 else:
                     beyin_v3_sessionlog.session_end(vault, state, settings, args.harness,
                                                     payload.get('session_id', 'unknown'))
