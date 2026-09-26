@@ -171,6 +171,20 @@ class DreamTest(unittest.TestCase):
         paths = {entry['path'] for entry in self.report()['inventory']['oversize']}
         self.assertIn('knowledge/v3/outcomes.md', paths)
 
+    def test_daily_projection_is_size_checked(self):
+        self.write_source('daily/v3/2026-09-20.md', 'g' * (12 * 1024 + 2))
+        paths = {entry['path'] for entry in self.report()['inventory']['oversize']}
+        self.assertIn('daily/v3/2026-09-20.md', paths)
+
+    def test_generated_indexes_are_never_refresh_candidates(self):
+        # Generated files are rewritten by the engine; a human cannot refresh them, so the
+        # window reports their size and leaves the repair to the generator.
+        self.write_source('knowledge/v3/outcomes.md', 'o' * (12 * 1024 + 1))
+        self.write_source('knowledge/huge.md', 'h' * (12 * 1024 + 1))
+        self.seed(records=[self.note('knowledge/huge.md')])
+        refresh = {entry['path'] for entry in self.report()['candidates']['refresh']}
+        self.assertEqual(refresh, {'knowledge/huge.md'})
+
     # -- heat and candidates -------------------------------------------
     def test_heat_counts_receipt_citations_per_source(self):
         self.seed(receipts=[self.receipt('r1', ['knowledge/a.md']),

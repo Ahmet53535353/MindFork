@@ -145,7 +145,41 @@ class HygieneCliTest(unittest.TestCase):
         self.assertEqual((self.state / 'companion-limits.json').read_text(encoding='utf-8'), '{broken')
         self.assertEqual((self.vault / '.beyin-preferences.json').read_bytes(), before, 'nothing saved on a damaged limits file')
 
-    def test_doctor_reports_sizes_as_hygiene_not_as_a_sync_failure(self):
+    def test_doctor_reports_a_single_oversize_field_across_notes_and_indexes(self):
+        # Spec: docs/specs/2026-09-26-autodream-lite-roadmap.md §9.1. One field, no new
+        # setting: the companion budgets stay authoritative where they exist.
+        self.run_cli('sync')
+        knowledge = self.vault / 'knowledge'
+        (knowledge / 'concepts').mkdir(parents=True, exist_ok=True)
+        (knowledge / 'index.md').write_text('# Index\n' + 'x' * 12500, encoding='utf-8')
+        (knowledge / 'concepts' / 'buyuk.md').write_text('# Buyuk\n' + 'y' * 13000, encoding='utf-8')
+        (self.vault / 'daily' / 'v3').mkdir(parents=True, exist_ok=True)
+        (self.vault / 'daily' / 'v3' / '2026-09-20.md').write_text('g' * 12500, encoding='utf-8')
+        report = self.run_cli('doctor')['oversize']
+        by_path = {entry['path']: entry for entry in report['files']}
+        self.assertIn('knowledge/index.md', by_path)
+        self.assertIn('knowledge/concepts/buyuk.md', by_path)
+        self.assertIn('daily/v3/2026-09-20.md', by_path)
+        self.assertTrue(by_path['daily/v3/2026-09-20.md']['generated'])
+        self.assertFalse(by_path['knowledge/concepts/buyuk.md']['generated'])
+        self.assertEqual(report['notes_over_cap'], 2)
+        self.assertEqual(report['cap'], 12000)
+        self.assertEqual(self.run_cli('dream')['inventory']['oversize'], report['files'])
+
+    def test_doctor_oversize_is_empty_for_a_small_vault(self):
+        self.write('Journal.md', '# Journal\n## 2026-09-20\nkisa gözlem\n')
+        self.run_cli('sync')
+        report = self.run_cli('doctor')['oversize']
+        self.assertEqual(report['files'], [])
+        self.assertEqual(report['notes_over_cap'], 0)
+
+    def test_compaction_keeps_oversize_and_hygiene_separate(self):
+        self.oversized()
+        self.run_cli('sync')
+        doctor = self.run_cli('doctor')
+        self.assertIn('Last-Session.md', doctor['companion_hygiene']['over_limit'])
+        oversize = {entry['path'] for entry in doctor['oversize']['files']}
+        self.assertTrue(any(path.endswith('Last-Session.md') for path in oversize), oversize)
         self.oversized()
         doctor = self.run_cli('doctor')
         hygiene = doctor['companion_hygiene']
