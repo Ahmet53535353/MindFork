@@ -28,9 +28,10 @@ class PreferencesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
-    def hook(self, event, harness='codex', extra=()):
+    def hook(self, event, harness='codex', extra=(), prompt=''):
         payload = {'hook_event_name': event, 'session_id': 'synthetic', 'event_id': event,
-                   'conversationId': 'synthetic', 'invocationNum': 0, 'fullyIdle': True}
+                   'conversationId': 'synthetic', 'invocationNum': 0, 'fullyIdle': True,
+                   'prompt': prompt}
         r = subprocess.run([sys.executable, str(ROOT / 'template/.claude/scripts/beyin_v3_hook.py'),
             '--vault', str(self.vault), '--state', str(self.state), '--harness', harness, *extra],
             input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8',
@@ -101,6 +102,35 @@ class PreferencesTest(unittest.TestCase):
             self.assertNotIn('injectSteps', result)
             self.hook('Stop', harness)
         self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
+
+    def test_economical_still_answers_a_returning_user_mid_session(self):
+        # Insan kullanimi E2E'si: ekonomik profilde oturum ortasinda "tatilden
+        # donduk, neler yapmistik" yazan kullaniciya HICBIR sey gelmiyordu;
+        # profil normal olunca ayni cumle companion kaynaklarini getiriyordu.
+        prefs.save(self.vault, {}, 'economical')
+        self.hook('SessionStart')            # araligi bu oturumda tuketir
+        for prompt in ('bir hafta once ne yapmistik', 'neler yapmistik', 'we just got back, what did we do',
+                       'neredeydik', 'kaldigimiz yer nerede'):
+            result = self.hook('UserPromptSubmit', prompt=prompt)
+            text = result.get('hookSpecificOutput', {}).get('additionalContext', '')
+            self.assertIn('Receipt session=', text, prompt)
+            self.assertLessEqual(len(text), 2000, prompt)
+        # Ilgisiz mesaj ekonomik profilde sessiz kalmaya devam eder.
+        self.assertEqual(self.hook('UserPromptSubmit', prompt='bugun hava nasil'), {})
+
+    def test_economical_continuity_turn_says_memory_may_be_stale(self):
+        # Aralik kapisi gecildigi icin otomatik kontrol yapilmadi; teslim edilen
+        # baglamda indeksli hafizanin bayat olabilecegi soylenmeli.
+        prefs.save(self.vault, {}, 'economical')
+        self.hook('SessionStart')
+        text = self.hook('UserPromptSubmit', prompt='neredeydik') \
+            .get('hookSpecificOutput', {}).get('additionalContext', '')
+        self.assertIn('may be stale', text)
+        # Normal profilde her tur senkronlandigi icin bu uyari gelmez.
+        prefs.save(self.vault, {'context_mode': 'turn', 'interval_minutes': 0})
+        self.hook('SessionStart')
+        self.hook('UserPromptSubmit', prompt='menu icerigi')
+        self.assertNotIn('may be stale', str(self.hook('UserPromptSubmit', prompt='neredeydik')))
 
     def test_economical_injects_only_start_and_caps_entire_context(self):
         prefs.save(self.vault, {}, 'economical')
