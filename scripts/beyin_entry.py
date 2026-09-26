@@ -118,7 +118,8 @@ def human_result(result, command, installed_version=None):
                  'Otomatik baglam: ' + prefs['context_mode'],
                  'Baglam ust siniri: ' + str(prefs['context_chars']) + ' karakter',
                  'Sir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali'),
-                 'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali')]
+                 'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali'),
+                 'Proje oturum basi baglami: ' + ('acik' if result.get('project_context') == 'on' else 'kapali')]
         for name, value in (result.get('companion_limits') or {}).items():
             lines.append('Hafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali'))
         if result.get('excluded_components'):

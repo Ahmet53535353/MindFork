@@ -26,6 +26,16 @@ anlatılır.
 
 Ek sabit sır değerleri vault dışındaki runtime klasöründe `secret-patterns.txt` dosyasına, satır başına bir değer olarak yazılabilir. Dosya regex çalıştırmaz; yorum satırları `#` ile başlar. Eşleşen metinler veya değerler sağlık kaydına yazılmaz, yalnız toplam eşleşme sayısı `doctor` sonucunda gösterilir. Bu önlem kazara kalıcı yazımı azaltır; tam bir DLP veya önceden yazılmış notları temizleme aracı değildir.
 
+## Projeyi tanıyan oturum başı
+
+`python3 beyin.py preferences --project-context on` komutu harici projelerde çalışan global bridge'in SessionStart anında çalışılan projeyi tanımasını sağlar. Varsayılan kapalıdır. Açıldığında:
+- Projenin (`project_id`) en son yazılmış makbuz özeti (en fazla 600 karakter) eklenir.
+- O projeye ait tarihi gelmiş (`due_at` bugüne eşit veya geçmiş) aktif ve bekleyen görevlerin başlığı ve sonraki adımı listelenir.
+- Başka projelerin tarihi gelmiş görevleri için başlık verilmez, yalnız toplam sayı bildirilir (`(başka projelerde N tarihi gelmiş görev)`).
+- `visibility: private` olan makbuz ve görevler bu bağlama asla girmez.
+- Tüm blok en fazla 1.200 karakterle sınırlıdır ve bütçe sınırında kayıtları yarım kesmeden temizce tamamlar.
+- Ayar vault içindeki şemayı değiştirmemek ve rollback uyumunu korumak için runtime klasöründeki `project-context.json` dosyasında saklanır. Kapatmak için `--project-context off` kullanılır.
+
 Süre en son otomatik başlatmaya göre yerel SQLite kaydıyla, istemciler arasında atomik olarak sınırlandırılır. Bir sonraki olay gelmedikçe kontrol çalışmaz. Yeni oturumda daima taze kontrol; kaydedilmiş worker hatasında yeniden deneme. Bu düşük seviyeli kontrol model çağırmaz. Otomatik bağlam kapalı olsa bile açık not/görev/receipt ve context komutları çalışır. Kapatmadan önce başlatılmış bir işlem tamamlanabilir; önceden bekleyen metadata saklanır. Açık `--drain-queue` bakım komutu bu kuyruğu işler.
 
 Aralığa takılmış bir kontrolde turn bağlamı istenirse eski kayıtları güncel diye sunmak yerine kısa tazeleme uyarısı verilir. Ekonomik modda sonraki mesajlarda tekrar bağlam eklenmez; beyin skill'i bilgi gerektiğinde kaynakları doğrudan tazeler.

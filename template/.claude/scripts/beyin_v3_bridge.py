@@ -35,6 +35,122 @@ def origin(payload, harness):
     return dict(project=name, project_id=hashlib.sha256(str(cwd).encode()).hexdigest()[:24])
 
 
+def read_project_context(state):
+    """Read machine-local project-context setting (default False). Rollback-safe outside vault."""
+    path = Path(state) / 'project-context.json'
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return bool(data.get('enabled', False))
+    except (ValueError, OSError):
+        return False
+
+
+def save_project_context(state, enabled):
+    """Save machine-local project-context setting atomically."""
+    path = Path(state) / 'project-context.json'
+    from beyin_v3_sync import atomic
+    atomic(path, json.dumps({'schema': 1, 'enabled': bool(enabled)}))
+    return bool(enabled)
+
+
+def project_context(vault, state, project_id, project_name, budget=1200, today_iso=None):
+    """Build scoped project context (latest receipt summary + due tasks).
+
+    - Latest receipt for this project_id (max 600 chars).
+    - Due tasks where due_at <= today, status active/waiting, visibility != private,
+      and task.project matching project_name (casefold).
+    - Other projects: count only, no titles.
+    - Whole block capped at budget (default 1200 chars), cleanly omitting entries
+      before the budget is exceeded without half-cut records.
+    """
+    if budget < 80 or not project_id:
+        return ''
+    from datetime import datetime, timezone
+    from beyin_v3_sync import SyncEngine
+    if today_iso is None:
+        today_iso = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    engine = SyncEngine(vault, state)
+    with engine.store._connect() as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        latest_summary = None
+        if 'receipt_checkpoints' in tables and 'receipts' in tables:
+            matching_sessions = {row[0] for row in db.execute(
+                'SELECT session FROM receipt_checkpoints WHERE project_id=?', (project_id,)
+            )}
+            if matching_sessions:
+                candidates = []
+                for (payload_str,) in db.execute('SELECT payload FROM receipts'):
+                    try:
+                        receipt = json.loads(payload_str)
+                        if receipt.get('session') in matching_sessions and receipt.get('visibility') != 'private':
+                            created_at = receipt.get('created_at')
+                            summary = receipt.get('summary')
+                            if created_at and summary:
+                                candidates.append((created_at, summary))
+                    except Exception:
+                        continue
+                if candidates:
+                    candidates.sort(key=lambda item: item[0], reverse=True)
+                    latest_summary = candidates[0][1][:600].strip()
+
+        current_tasks = []
+        other_due_count = 0
+        norm_current_project = project_name.strip().casefold() if project_name else ''
+
+        if 'records' in tables:
+            for (payload_str,) in db.execute('SELECT payload FROM records'):
+                try:
+                    rec = json.loads(payload_str)
+                    if rec.get('kind') != 'task':
+                        continue
+                    if rec.get('visibility') == 'private':
+                        continue
+                    if rec.get('status') not in ('active', 'waiting'):
+                        continue
+                    due_at = rec.get('due_at')
+                    if not due_at or str(due_at)[:10] > str(today_iso)[:10]:
+                        continue
+                    task_proj = (rec.get('project') or '').strip().casefold()
+                    if task_proj and norm_current_project and task_proj == norm_current_project:
+                        title = (rec.get('title') or '').strip()
+                        next_act = (rec.get('next_action') or '').strip()
+                        if title:
+                            current_tasks.append((title, next_act))
+                    else:
+                        other_due_count += 1
+                except Exception:
+                    continue
+
+    if not latest_summary and not current_tasks and other_due_count == 0:
+        return ''
+
+    lines = [f'Project context ({project_name}):']
+    if latest_summary:
+        lines.append(f'Son kayit: {latest_summary}')
+    if current_tasks:
+        lines.append('Tarihi gelen gorevler:')
+        for title, next_act in current_tasks:
+            task_line = f'- {title}: {next_act}' if next_act else f'- {title}'
+            lines.append(task_line)
+    if other_due_count > 0:
+        lines.append(f'(baska projelerde {other_due_count} tarihi gelmis gorev)')
+
+    assembled = []
+    current_len = 0
+    for line in lines:
+        added_len = len(line) + (1 if assembled else 0)
+        if current_len + added_len > budget:
+            break
+        assembled.append(line)
+        current_len += added_len
+
+    if len(assembled) <= 1:
+        return ''
+    return '\n'.join(assembled)
+
+
 def eligible(cwd, vault, roots):
     if cwd is None or not cwd.is_dir() or cwd.is_relative_to(vault):
         return False
@@ -139,6 +255,12 @@ def main(argv=None):
                 'Receipt JSON: event_id (unique), summary, refs (existing vault-relative sources), session (above). '
                 'Read vault sources before claiming facts. Do not infer completion from checkpoints. '
                 'Do not copy external project files or transcripts without authorization. No-memory requests take precedence.')
+        if read_project_context(state):
+            proj_info = origin(payload, args.harness)
+            rem_budget = min(1200, max(0, args.context_chars - len(text) - 2))
+            extra = project_context(vault, state, proj_info.get('project_id', ''), proj_info.get('project', ''), budget=rem_budget)
+            if extra:
+                text = text + '\n\n' + extra
         # Do not cut a command, path or JSON token in half for a small budget.
         print(json.dumps(output_context(args.harness, event, text)) if len(text) <= args.context_chars else '{}')
         return 0
