@@ -147,13 +147,44 @@ gereksiz" (ürünün kendisi: 6 istemci), `date.now` benzeri modeller dışı.
    en az bir hafta gerçek kullanım ölçümü yapılmadan eklenmez. İhtiyaç
    kanıtlanmazsa kod yazılmaz (Lite planının "bir hafta dene + kontrol noktası"
    disiplininin genelleştirilmiş hâli; kendi hedefi de dahil: ölçüm geçmiyorsa
-   `--types/--strict` bayrakları da yazılmaz).
+   `--types/--strict` bayrakları da yazılmaz). **Kapsam netleştirmesi:** kural
+   *sıcak yol* (retrieval/hook) değişikliklerini bağlar; kullanıcı çağrılı pencere
+   komutları (`dream`) ve skill kuralları ölçümün kendisini üretir, kapı dışındadır.
 3. **Damıtma öncesi kopya → zorunlu ön-image.** Lite "workbench kopyası iki hafta
    saklansın" önerisi, bizim mimaride maskelenmiş biçimde daha kritik bir riski
    kapatır: Prune/Merge geri döndürülemez. AutoDream penceresi, etkilenecek her
    dosyanın ön-image'ını `archive/auto-dream/<tarih>/files/` altına manifest
    sha256 ile alır, `dream --restore` ile birebir geri alınır (test sha256 kümesi
    ile assert eder).
+
+## Dış doğrulama ve "tam AutoDream" kararı (2026-09-26)
+
+Dış metin (*Beyond the Session: Memory Engineering for Agent Teams*, 2026-04-21)
+denetlendi. **Kaynak uyarısı:** metinde anlatılan AutoDream/KAIROS ayrıntıları
+Anthropic'in *yayımlanmamış* iç yapısına ilişkin üçüncü-taraf sızıntı
+raporlarından gelir; birincil doğrulama yok — bu yüzden kayıt ve PR metinlerinde
+"doğrulanmış ürün davranışı" değil **"ilham alınan dış desen"** olarak geçer.
+
+Konverjans (bizde zaten var, PR'da kullanılabilir kanıt): üç bellek boyutu —
+`VALID_MEMORY_TYPES = ("episodic","semantic","procedural")` birebir; pre-task
+hydration / post-task konsolidasyon ayrımı; aday belleğin terfi incelemesi
+metaforu (bizim staging→sync + karantina hattı); hybrid BM25+vektör+RRF
+(Cloudflare'ın 5-kanallı RRF vardığı yazıda bağımsız olarak aynı sonuca
+varıyor); boyut disiplini; tarih mutlaklaştırma; 3 kapı + kilit. Alınmayanlar:
+Redis/NATS, Temporal, bulut dosya deposu, vektör DB bağımlılığı, organizasyon
+ikinci bellek katmanı — organizasyon ölçeğinin altyapısı, tek kullanıcılı yerel
+vault'ta Altın Kural 3'ün ihlali.
+
+"Tam AutoDream" üçe ayrıldı: (1) **4 faz + 3 kapı + ön-image** → modelsiz
+benimseniyor (`docs/specs/2026-09-26-autodream-lite-roadmap.md` §0-§5);
+(2) **model küratörü** → `--llm` fazı **reddedildi**: kullanıcının çalıştırabileceği
+yerel model yok, uzak API ise "uzak servis çağrısı yok" ilkesini ihlal eder —
+muhakeme zaten oturumdaki ajanın işi; (3) **KAIROS daemon** → yapılmaz, ama kapılı
+ve idempotent `dream` komutu kullanıcının kendi cron/systemd timer'ıyla
+çağrılabilir (paket daemon'laşmaz).
+
+Uygulama sırası: A+F (kapılar + metadata + bu bölüm) → C (doctor `oversize`) →
+B+D (SKILL kuralları) → faz-1 `--dry-run` ölçümü → ≥1 hafta ölçüm → faz 2-5 kararı.
 
 ## Kalan işler
 
