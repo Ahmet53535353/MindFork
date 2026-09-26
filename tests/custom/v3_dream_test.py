@@ -79,9 +79,11 @@ class DreamTest(unittest.TestCase):
              'created_at': when or iso(0)})}
 
     def note(self, source, **overrides):
+        # Synced records carry no derived title: the heading lives in the body, exactly
+        # like a real vault. Only an explicit frontmatter title sets the record title.
         record = {'id': source.replace('/', '-').replace('.md', ''), 'source': source,
-                  'title': source.rsplit('/', 1)[-1][:-3], 'kind': 'note', 'status': 'active',
-                  'visibility': 'internal', 'revision': 1}
+                  'text': '# ' + source.rsplit('/', 1)[-1][:-3] + '\n',
+                  'kind': 'note', 'status': 'active', 'visibility': 'internal', 'revision': 1}
         record.update(overrides)
         return record
 
@@ -192,9 +194,9 @@ class DreamTest(unittest.TestCase):
         self.assertEqual(refresh, {'knowledge/huge.md'})
 
     def test_merge_pairs_titles_that_differ_only_in_shape(self):
-        self.seed(records=[self.note('knowledge/stripe-webhook.md', title='Stripe Webhook'),
-                           self.note('knowledge/stripe_webhook_race.md', title='stripe_webhook: race'),
-                           self.note('knowledge/billing.md', title='Billing')],
+        self.seed(records=[self.note('knowledge/stripe-webhook.md', text='# Stripe Webhook\n'),
+                           self.note('knowledge/stripe_webhook_race.md', text='# stripe_webhook: race\n'),
+                           self.note('knowledge/billing.md', text='# Billing\n')],
                   receipts=[self.receipt('r1', ['knowledge/stripe-webhook.md']),
                             self.receipt('r2', ['knowledge/stripe_webhook_race.md']),
                             self.receipt('r3', ['knowledge/billing.md'])])
@@ -204,9 +206,18 @@ class DreamTest(unittest.TestCase):
                          ['knowledge/stripe-webhook.md', 'knowledge/stripe_webhook_race.md'])
 
     def test_merge_never_pairs_uncited_notes(self):
-        self.seed(records=[self.note('knowledge/stripe-webhook.md', title='Stripe Webhook'),
-                           self.note('knowledge/stripe_webhook_race.md', title='stripe_webhook: race')])
+        self.seed(records=[self.note('knowledge/stripe-webhook.md', text='# Stripe Webhook\n'),
+                           self.note('knowledge/stripe_webhook_race.md', text='# stripe_webhook: race\n')])
         self.assertEqual(self.report()['candidates']['merge'], [])
+
+    def test_merge_falls_back_to_the_source_stem_without_a_heading(self):
+        self.seed(records=[self.note('knowledge/stripe-webhook.md', text='duz metin, baslik yok\n'),
+                           self.note('knowledge/stripe_webhook.md.copy', text='duz metin\n')],
+                  receipts=[self.receipt('r1', ['knowledge/stripe-webhook.md']),
+                            self.receipt('r2', ['knowledge/stripe_webhook.md.copy'])])
+        pairs = self.report()['candidates']['merge']
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]['sources'], ['knowledge/stripe-webhook.md', 'knowledge/stripe_webhook.md.copy'])
 
     def test_dry_run_report_is_deterministic(self):
         self.seed(records=[self.note('knowledge/a.md')],

@@ -133,20 +133,36 @@ def _age_days(record, vault, now):
     return (now - stamp).days
 
 
+def _title(record):
+    # A synced record carries no derived title: the heading lives in the body. Fall back
+    # through frontmatter title, first heading, then the source stem.
+    title = record.get('title')
+    if isinstance(title, str) and title.strip():
+        return title
+    for line in str(record.get('text') or '').splitlines():
+        stripped = line.strip()
+        if stripped.startswith('#'):
+            heading = stripped.lstrip('#').strip()
+            if heading:
+                return heading
+    source = str(record.get('source') or '')
+    return source.rsplit('/', 1)[-1][:-3] if source.endswith('.md') else source
+
+
 def _merge_pairs(records, citations):
-    # Only cited notes, and only titles that share at least two words with one contained in
+    # Only cited notes, and only headings that share at least two words with one contained in
     # the other. The window proposes; a human or the session agent decides.
     eligible = [record for record in records
-                if citations.get(str(record.get('source') or ''), 0) > 0 and _tokens(record.get('title'))]
+                if citations.get(str(record.get('source') or ''), 0) > 0 and _tokens(_title(record))]
     pairs, used = [], set()
     for first_index, first in enumerate(eligible):
         if first['source'] in used:
             continue
-        first_tokens = _tokens(first.get('title'))
+        first_tokens = _tokens(_title(first))
         for second in eligible[first_index + 1:]:
             if second['source'] in used:
                 continue
-            second_tokens = _tokens(second.get('title'))
+            second_tokens = _tokens(_title(second))
             if len(first_tokens) < 2 or len(second_tokens) < 2:
                 continue
             if first_tokens <= second_tokens or second_tokens <= first_tokens:
