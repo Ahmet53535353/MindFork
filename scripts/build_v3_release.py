@@ -6,9 +6,12 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+import install_v3  # noqa: E402  one source of truth for runtime modules
 
 
 def installer():
@@ -21,7 +24,7 @@ def build(output, version='3.0.0'):
     if not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', version):
         raise ValueError('stable version required')
     paths = [ROOT / 'scripts' / name for name in ('install_v3.py', 'beyin_v3.py', 'beyin_entry.py')]
-    paths += sorted((ROOT / 'template/.claude/scripts').glob('beyin_v3*.py'))
+    paths += install_v3.RUNTIME_MODULES()
     paths += [ROOT / 'template/.agents/skills' / name / 'SKILL.md' for name in ('beyin', 'beyin-doktor', 'beyin-guncelle')]
     files = {p.relative_to(ROOT).as_posix(): p.read_bytes() for p in paths}
     manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
