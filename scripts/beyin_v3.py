@@ -168,6 +168,7 @@ def parser():
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
     history.add_argument("record_id")
+    sub.add_parser("dream", help="Report consolidation window gates, size inventory, citation heat and candidates; writes nothing")
     return root
 
 
@@ -327,6 +328,15 @@ def main(argv=None):
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
+        elif args.command == "dream":
+            load_sync()
+            import beyin_v3_dream
+            import beyin_v3_companion as companion
+            try:
+                limits = {name: value for name, value in companion.read_limits(state)[0].items() if value}
+            except Exception:  # a missing or invalid hygiene budget never hides the window report
+                limits = {}
+            result = beyin_v3_dream.report(vault, state, store, limits=limits)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
         elif args.command == "companion-compact":
