@@ -38,7 +38,7 @@ def version(value):
 
 
 def allowed(name):
-    return name in ('scripts/install_v3.py', 'scripts/beyin_v3.py', 'scripts/beyin_entry.py') or bool(re.fullmatch(r'template/\.claude/scripts/beyin_v3(?:_[a-z]+)*\.py', name)) or bool(re.fullmatch(r'template/\.agents/skills/(beyin|beyin-doktor|beyin-guncelle)/SKILL\.md', name))
+    return name in ('scripts/install_v3.py', 'scripts/beyin_v3.py', 'scripts/beyin_entry.py', 'template/.claude/scripts/_portalock.py') or bool(re.fullmatch(r'template/\.claude/scripts/beyin_v3(?:_[a-z]+)*\.py', name)) or bool(re.fullmatch(r'template/\.agents/skills/(beyin|beyin-doktor|beyin-guncelle)/SKILL\.md', name))
 
 
 def atomic(path, data):

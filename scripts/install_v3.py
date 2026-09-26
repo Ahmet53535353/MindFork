@@ -30,6 +30,17 @@ SKILL_ROOTS = (".agents", ".claude")
 # The planner mirrors the .agents template bytes into both roots, so a vault installed by any
 # released tag holds those bytes twice. Without its state manifest the reinstall sees plain
 # unmanaged files, which is why every (root, skill) pair carries the released digests.
+def RUNTIME_MODULES():
+    """Every template module a vault needs, in one place.
+
+    The installed runtime must be self-contained: a private helper that shipped modules
+    import but the installer never copies stays invisible to unit tests and breaks only
+    inside a real vault. `_portalock.py` is the one module outside the public prefix.
+    """
+    directory = ROOT / 'template/.claude/scripts'
+    return sorted(directory.glob('beyin_v3*.py')) + [directory / '_portalock.py']
+
+
 MANAGED_SKILL_PATHS = tuple(root + "/skills/" + name + "/SKILL.md"
                             for root in SKILL_ROOTS for name in STARTER_SKILLS)
 RELEASED_SKILL_HASHES = {
@@ -248,7 +259,7 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             stub = RETIRED_STUB + (b'raise SystemExit(0)\n' if name.endswith('.py') else b'exit 0\n')
             if name.endswith('.sh'): stub = b'#!/bin/sh\n' + stub
             add(name, stub)
-    for source in sorted((ROOT / "template/.claude/scripts").glob("beyin_v3*.py")):
+    for source in RUNTIME_MODULES():
         add(".claude/scripts/" + source.name, source.read_bytes())
     add("beyin.py", (ROOT / "scripts/beyin_entry.py").read_bytes())
     add(".beyin-runtime.json", jbytes({"state": str(state), "schema": 1}))
@@ -489,7 +500,7 @@ def package_defaults():
             if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
                 raise ValueError('Extracted package path escapes root')
             output.writestr(name, path.read_bytes())
-    for path in (ROOT / 'template/.claude/scripts').glob('beyin_v3*.py'):
+    for path in RUNTIME_MODULES():
         if path.relative_to(ROOT).as_posix() not in files:
             raise ValueError('Unlisted extracted runtime module')
     archive.seek(0)

@@ -203,6 +203,35 @@ geliyordu. Bir spec çelişkisi de düzeltildi: filigranı tüketen rapor kendi 
 kapatırdı, artık kapılar mutasyonlu pencereyi uygular, rapor yalnızca bildirir.
 Tasarım: `docs/specs/2026-09-26-autodream-lite-roadmap.md` §11, `...-daily-log-design.md`.
 
+## Kurulum yolunda canlı E2E (2026-09-26): bir P0 bulundu
+
+Bu dalın paketi gerçek bir vault'a kurulup ajanın kullandığı yolun tamamı
+geçirildi (`/tmp/beyin-full-e2e`): kurulum → oturum döngüsü → receipt/öğrenim →
+not/görev kapıları → tip süzgeci → doctor/dream → çökme telafisi → kural bütünlüğü.
+
+**Bulunan hata (P0):** `_portalock.py` alt çizgiyle başladığı için kurulumun
+`beyin_v3*.py` glob'una girmiyordu; vault'a hiç kopyalanmıyordu. Birim testleri
+bunu göremez (kaynak ağacında her modül kardeştir), ama gerçek vault'ta
+`beyin_v3_sessionlog` ve `beyin_v3_dream` bu modülü import edemiyor → **günlük log
+hiç açılmıyor**, hook'un `try/except` sayesinde sessizce düşüyor. Dört yer birden
+düzeltildi: kurulum, paket bütünlük denetimi, release listesi ve güncelleyici
+allowlist'i; dördü de `install_v3.RUNTIME_MODULES()` tek kaynağına bağlandı.
+Regresyon testi: kurulumdan sonra **yalnız vault'un kendi dizini** sys.path'te
+olacak biçimde her kurulu modül import edilir (v3_product_test).
+
+Diğer doğrulamalar: not üzerine yazma reddi, strict görevde kanıtsız `done`
+reddi, revision çakışması, geçersiz tip reddi, alıntı dışı/traversal/boş refs
+reddi, sır süzgeci (`[REDACTED]`, ham anahtar DB'de yok), receipt idempotency'si ve
+farklı gövdeyle çakışması, öğrenim hatırlatması (bir kez, `decision: block`),
+çökme telafisi (`(kapanış kaydı yok)` + son etkinlik), tipsiz eski notun
+filtresiz kalması. **Kural bütünlüğü:** akış boyunca 21 meşru yeni dosya, **0
+değişen, 0 silinen**; `Kurallar.md`, `Core.md`, `Last-Session.md`, `Threads.md`,
+`Journal.md` bayt bayt aynı — sistem kuralı kendi kendine yazmıyor.
+
+İki bilinen boşluk teyit edildi: `context` CLI'da `--types` yok (motor
+destekliyor; ertelenen roadmap işi) ve normal CLI çağrıları vault'a `__pycache__`
+yazıyor (temizlik, işlevsel değil).
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)

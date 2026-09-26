@@ -30,6 +30,34 @@ class ProductInstallationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
         return json.loads(result.stdout)
 
+    def test_every_installed_module_imports_with_only_the_vault_on_sys_path(self):
+        """The installed runtime must be self-contained.
+
+        A private helper that the shipped modules import but the installer never copies
+        stays invisible to unit tests (they run from the source tree, where every module is
+        a sibling) and only breaks inside a real vault: the hook degrades silently, the
+        daily log never opens. This walks the installed scripts and imports each one with
+        nothing but the vault's own directory on the path.
+        """
+        import subprocess
+        import sys as _sys
+        self.installed()
+        scripts = self.vault / '.claude/scripts'
+        names = sorted(path.stem for path in scripts.glob('*.py'))
+        self.assertIn('beyin_v3_sessionlog', names)
+        probe = ('import sys\n'
+                 'sys.path.insert(0, sys.argv[1])\n'
+                 'import importlib\n'
+                 'for name in sys.argv[2:]:\n'
+                 '    importlib.import_module(name)\n'
+                 'print("ok")\n')
+        result = subprocess.run([_sys.executable, '-c', probe, str(scripts), *names],
+                                capture_output=True, text=True, timeout=120,
+                                env=dict(self.env, PYTHONPATH=''))
+        self.assertEqual(result.returncode, 0,
+                         'installed runtime is not self-contained: ' + result.stderr[-800:])
+        self.assertEqual(result.stdout.strip(), 'ok')
+
     def test_plan_manifest_uses_portable_paths_under_windows_path_semantics(self):
         import importlib.util
         from pathlib import PureWindowsPath
