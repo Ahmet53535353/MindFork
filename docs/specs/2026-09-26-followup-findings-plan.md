@@ -16,7 +16,7 @@ aynı yanlış kararı yeniden üretmeye yol açar.
 | 4 | Günlük log varsayılan kapalı ve keşfedilemez | **B-safe**: varsayılan açık + görünür uyarı | bu tur |
 | 5 | Ekonomik profil dönen kullanıcıyı körleştirir | **B**: süreklilik istisnası, aralık kapısı da geçer | bu tur |
 | 6 | Semantic fiş yalnız yeniden sıralıyor | **A-düzeltilmiş**: sözleşme yorumu, kullanıcı metnine dokunma | bu tur |
-| 7 | Bağlam bütçesini büyüyen companion dosyaları yiyor | **A**: su doldurma önceliği | bu tur |
+| 7 | Bağlam bütçesi daraldığında kurallar kırpılıyor (ölçümle düzeltildi) | kod değişikliği **yok**; davranışı kilitleyen test | bu tur |
 | 8 | `dream` merge adayı ada bakıyor | faz-2 iş kalemi | kod yok |
 
 ---
@@ -61,7 +61,7 @@ ve RRF ile kaynaştırıyor; adı (`semantic_searcher`) geri çağırma ima ediy
 Bu yüzden "akıllı kelimesel arama" gibi bir kullanıcı metni değişikliği
 **gerekmiyor**; sözleşme yorumu ve spec notu yeterli.
 
-## Düzeltme 3 — BULGU 7'de tavanı indirmek sorunu çözmüyor
+## Düzeltme 3 — BULGU 7 iki kez ölçüldü ve **ikisi de yanlış çıktı**
 
 "Hijyen tavanı" şudur: `beyin_v3_companion.py:13`
 `LIMITS = {'Last-Session.md': 3000, 'Threads.md': 8000}` — yalnız **el devri**
@@ -77,10 +77,27 @@ FLOORS.get(name, 0)))`. **Taban aynı zamanda tavan.** Bütçe 5000 iken
 `available = int(budget * .83) - fixed` (`:322`), Kurallar en fazla ~1600 karakter
 alır; üç kural + başlıklar bunu aşınca bütçe hiç dolmadan 3. kural gider.
 
-Doğru çözüm (A): su doldurma `:312-315` hâlâ `NAMES` sırasında yürüyor
-(Core, Soul, Kurallar, Last-Session, Threads, Journal, memory-types); **Kurallar
-içeriğince doyana dek** Threads/Journal/memory-types fazla almamalı. Tabanlar
-korunur, 8000'lik tavan olduğu gibi kalır.
+Sonra bu düzeltme de ölçüldü ve **ikinci bir yanlışlık** bulundu: su doldurma
+zaten `NAMES` sırasında yürüyor (Core, Soul, Kurallar, Last-Session, Threads,
+Journal, memory-types) ve turlar halinde dağıtıldığı için **Kurallar, Threads
+daha büyürken kendi uzunluğuna kadar dolar**. Yani bir öncelik yeniden sıralaması
+ölçülebilir hiçbir şeyi düzeltmiyor.
+
+Gerçek ölçüm (3 kural × ~660 karakter, Threads ~6800, `v3_companion_budget_test.py`
+fikstürü):
+
+| bütçe | sonuç |
+| --- | --- |
+| 5000 (normal) | üç kuralın üçü de, devir kartı, kimlik ve Journal **tam**; hiç kırpma |
+| 3000 | devir + kimlik tam; kural dosyasının **ortası** düşüyor, `[truncated: N characters omitted]` işaretiyle |
+| 2000 (ekonomik) | en yeni kural ve devir kartı duruyor; ilk kural da düşüyor, yine işaretli |
+
+Yani bulgu "Threads bütçeyi yiyor" değil, **"bütçe daraldıkça kural dosyası
+sığmıyor"** — ve bu doğru davranış, tek kusuru görünmez olmasıydı (değil). Bu
+yüzden **üretim kodunda değişiklik yapılmadı**; bunun yerine gerçek eşiği
+kilitleyen bir test eklendi (`RulesSurviveLargeThreadIndexTest`): normal bütçede
+hiçbir şey kırpılmaz, eşiğin altında kırpma görünür olur, en yeni kural ve devir
+kartı korunur, konu dizini kuralların önüne geçmez.
 
 ---
 
@@ -98,7 +115,7 @@ korunur, 8000'lik tavan olduğu gibi kalır.
    `interval_minutes=15` olduğu için istisna **aralık kapısını da geçmeli**;
    aksi halde `:370` "kontrol ertelendi" basıp yine bağlam vermez.
 5. BULGU 6 — `beyin_v3.py:820` sözleşme yorumu.
-6. BULGU 7 — kırmızı testler → `companion.py:305-320` öncelik listesi.
+6. BULGU 7 — kod değişikliği yok; kırpma eşiğini ve görünürlüğünü kilitleyen test.
 7. BULGU 8 — kod yok, bu dosyada faz-2 kalemi olarak kalır.
 8. Tam paket + ay sürücüsü yeşil → konu-bazlı commit → push.
 

@@ -818,6 +818,12 @@ class MemoryStore:
             if fts_rank_map:
                 ranked.sort(key=lambda item: fts_rank_map.get(item[1]["id"], 999999))
             if callable(self.semantic_searcher):
+                # Contract: the searcher re-ranks, it does not recall. It receives only the
+                # records lexical search already admitted and returns an ordering of those, so
+                # a semantically similar record with no shared word can never enter the
+                # candidate set. Pure semantic recall needs a provider wired in AND this call
+                # moved ahead of the lexical gate; today the shipped default is None
+                # (docs/specs/2026-09-26-followup-findings-plan.md, phase 2).
                 candidate_records = [record for _, record in ranked]
                 try:
                     semantic_ranked = self.semantic_searcher(query, candidate_records)

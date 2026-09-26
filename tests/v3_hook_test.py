@@ -209,6 +209,10 @@ class HookInstallerTest(unittest.TestCase):
     def test_codex_claude_stdin_contexts_equal(self):
         self.seed()
         payload = dict(self.payload, hook_event_name='SessionStart', prompt='Nebula calibration')
+        # Gunluk log uyarisi kurulum basina BIR kez gider; ilk oturumu kim alirsa
+        # onu alir. Parity ikinci oturumdan itibaren anlamlidir, cunku asil soru
+        # iki istemcinin ayni hafizayi gormesidir.
+        self.invoke(payload, 'codex')
         contexts = []
         for harness in ('codex', 'claude'):
             response = self.invoke(payload, harness)
