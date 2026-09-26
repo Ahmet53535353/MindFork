@@ -124,11 +124,45 @@ opt-in, varsayılan kapalı; transcript/k Model çağrısı yok. TDD: 8/8 hedefl
 hook subprocess dâhil) → tam paket 746/746. Tasarım, reddedilen A/B1 sentezi gerekçesi
 ve PR savunması: `docs/specs/2026-09-26-daily-log-design.md`.
 
+## Altın kurallar ve "MindFork Lite" dış plan değerlendirmesi (2026-09-26)
+
+Dışarıdan gelen "MindFork Lite" birleşik yol haritası (Workbench + `mindfork.py`
+kapısı + satır araması + YAML filtre + `weight` ısı haritası + damıtma akışı)
+denendi ve **toptan reddedildi**: maddelerin çoğu sistemde zaten var ve daha
+gelişmiş/testli sürümde (CLI tek-yazıcı kapısı, FTS5 BM25 + passage strict,
+frontmatter filtreleri, tek odak devir kartı + `daily/log` oturum blokları,
+Altın Kural 3'ün stdlib-only ilkesi). Reddedilen öğeler: sıfırdan paralel sistem
+(746 testlik motoru ikiye böler, "AI rastgele yazıyor" varsayımı V3 mimarisine
+aykırı), substring satır araması (mevcut BM25/passage'ın gerisinde), arama
+sırasında `weight` yazma (read-only sözleşmesini kırar), "tek kapı/multi-harness
+gereksiz" (ürünün kendisi: 6 istemci), `date.now` benzeri modeller dışı.
+
+**Alınan üç kazanım:**
+1. **Isı haritası → AutoDream-lite'a, pasif alıntıyla.** Sorgu günlüğü tablosu
+   **yoktur** (motor yalnız `receipts(payload.refs)` tutar); bu yüzden birincil ısı
+   sinyali pasif alıntı frekansıdır (receipt → `daily/v3` projeksiyonu → not
+   başına alıntı). Yazma yalnız konsolidasyon penceresinde olur; retrieval
+   sıralamasına ağırlık sokulmaz. Tasarım: `docs/specs/2026-09-26-autodream-lite-roadmap.md`
+2. **Altın Kural (yeni, süreç kuralı):** Yeni kalıcı özellik, mevcut mekanizmayla
+   en az bir hafta gerçek kullanım ölçümü yapılmadan eklenmez. İhtiyaç
+   kanıtlanmazsa kod yazılmaz (Lite planının "bir hafta dene + kontrol noktası"
+   disiplininin genelleştirilmiş hâli; kendi hedefi de dahil: ölçüm geçmiyorsa
+   `--types/--strict` bayrakları da yazılmaz).
+3. **Damıtma öncesi kopya → zorunlu ön-image.** Lite "workbench kopyası iki hafta
+   saklansın" önerisi, bizim mimaride maskelenmiş biçimde daha kritik bir riski
+   kapatır: Prune/Merge geri döndürülemez. AutoDream penceresi, etkilenecek her
+   dosyanın ön-image'ını `archive/auto-dream/<tarih>/files/` altına manifest
+   sha256 ile alır, `dream --restore` ile birebir geri alınır (test sha256 kümesi
+   ile assert eder).
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
-2. AutoDream-lite konsolidasyon motoru (Prune/Merge/Refresh/Re-index + boyut disiplini)
+2. AutoDream-lite konsolidasyon motoru (ölçüm → snapshot/Refresh → Merge → onaylı Prune → re-index; ısı ve restore kuralları: `docs/specs/2026-09-26-autodream-lite-roadmap.md`)
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f9a8b5f)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
 6. Günlük log Faz-2: PreCompact kurtarma çizgisi (spec'te ertelenen kemer)
+7. OpenCode kapanış olayı yok (`session.deleted` yalnız silmede) → yetim bloğu
+   "yarıda kaldı" yerine "kapanış alınamadı · son etkinlik HH:MM" diye kapatma
+   (~30 dk; günlük-log spec'i Faz-2)
