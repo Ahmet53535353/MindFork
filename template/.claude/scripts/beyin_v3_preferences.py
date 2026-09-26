@@ -8,9 +8,13 @@ import tempfile
 import time
 
 PROFILES = {
-    'normal': dict(auto_sync=True, interval_minutes=0, context_mode='turn', context_chars=5000, secret_filter=False, daily_log=False),
-    'economical': dict(auto_sync=True, interval_minutes=15, context_mode='session', context_chars=2000, secret_filter=False, daily_log=False),
-    'manual': dict(auto_sync=False, interval_minutes=15, context_mode='off', context_chars=2000, secret_filter=False, daily_log=False),
+    # The daily log is on by default: it is the most visible way the system remembers a
+    # session, and while it defaulted off nobody could discover it existed. Users who
+    # never state a choice get one SessionStart line naming the opt-out, then silence
+    # (docs/specs/2026-09-26-followup-findings-plan.md).
+    'normal': dict(auto_sync=True, interval_minutes=0, context_mode='turn', context_chars=5000, secret_filter=False, daily_log=True),
+    'economical': dict(auto_sync=True, interval_minutes=15, context_mode='session', context_chars=2000, secret_filter=False, daily_log=True),
+    'manual': dict(auto_sync=False, interval_minutes=15, context_mode='off', context_chars=2000, secret_filter=False, daily_log=True),
 }
 
 
@@ -42,6 +46,24 @@ def preferences_path(vault):
 def read(vault):
     path = preferences_path(vault)
     return validate(json.loads(path.read_text(encoding='utf-8')) if path.exists() else {})
+
+
+def daily_log_chosen(vault):
+    """Whether the user ever stated a daily log choice of their own.
+
+    `validate` fills every field from the profile defaults, so once any preference is
+    saved the key is present whether or not this setting was the one they touched. That
+    is the point: silence is kept for people who already answered, one line is shown to
+    people who never did. Unreadable settings are never treated as a fresh install.
+    """
+    try:
+        path = preferences_path(vault)
+        if not path.exists():
+            return False  # never touched: this user is owed the one line
+        stored = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return True       # unreadable or not a regular file: never treat as fresh
+    return isinstance(stored, dict) and 'daily_log' in stored
 
 
 def save(vault, changes, profile=None):

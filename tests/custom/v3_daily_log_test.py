@@ -242,6 +242,37 @@ class DailyLogHookWiringTest(unittest.TestCase):
         output = json.loads(stdout.strip().splitlines()[-1])
         return output.get('hookSpecificOutput', {}).get('additionalContext', '')
 
+    def test_unset_preference_starts_the_log_and_names_the_opt_out(self):
+        # Varsayilan acik: hicbir tercih dosyasi yok. Kullanici hem gunluk logu
+        # baslatir hem de kapatma yolunu ogrenir (bulgunun asil yarisi: kesfedilemezlik).
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists())
+        context = self.context_of(self.invoke('SessionStart', 'wire-default'))
+        self.assertIn('Özet', context)
+        self.assertIn('--daily-log off', context)
+        self.invoke('SessionEnd', 'wire-default')
+
+    def test_notice_is_not_repeated_in_the_next_session(self):
+        # "Bir kez" sozu tutulmali: kullanici hicbir tercih yapmasa bile uyari
+        # her oturumda tekrarlarsa bu bir sikayettir.
+        first = self.context_of(self.invoke('SessionStart', 'wire-notice-1'))
+        self.assertIn('--daily-log off', first)
+        self.assertNotIn('--daily-log off', self.context_of(self.invoke('SessionStart', 'wire-notice-2')))
+        self.assertIn('Özet', self.context_of(self.invoke('SessionStart', 'wire-notice-3')))
+
+    def test_explicit_off_starts_nothing_and_says_nothing(self):
+        self.preferences(False)
+        context = self.context_of(self.invoke('SessionStart', 'wire-optout'))
+        self.assertNotIn('Özet', context)
+        self.assertNotIn('--daily-log off', context)
+        self.assertFalse((self.vault / 'daily/log').exists())
+
+    def test_explicit_on_keeps_the_log_and_stops_nagging(self):
+        # Kullanici tercihini verdi: log acik kalir, uyari bir daha gelmez.
+        self.preferences(True)
+        context = self.context_of(self.invoke('SessionStart', 'wire-chosen'))
+        self.assertIn('Özet', context)
+        self.assertNotIn('--daily-log off', context)
+
     def test_hook_gates_reminder_to_session_start(self):
         self.preferences(False)
         self.assertNotIn('Günlük log', self.context_of(self.invoke('SessionStart', 'wire-off')))
