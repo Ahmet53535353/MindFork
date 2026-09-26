@@ -35,6 +35,23 @@ class InferTypesUnitTest(unittest.TestCase):
         # episodic (dun, oturum, konusmustuk) plus procedural (adim): doubtful, keep all.
         self.assertIsNone(self.module.infer_types('dün oturumda deploy adımlarını konuşmuştuk'))
 
+    def test_ordinary_wording_does_not_trigger_a_type_gate(self):
+        # Canli kullanim testi: "musteri fiyat listesi gizli mi" sorusunda 'listesi'
+        # kokunesi 'kontrol listesi' ile cakisiyor, soru prosedurel saniliyor ve
+        # semantic gercek gizleniyor. Bilesik ve gunluk kelimeler ipucu olmamali.
+        for query in ('müşteri fiyat listesi gizli mi',
+                      'fiyat listesi ne kadar',
+                      'menu listesi hazir mi',
+                      'müşteri listesi ve ciro tahminleri gizli',
+                      'belge listesi',
+                      'liste guncel mi'):
+            self.assertIsNone(self.module.infer_types(query), query)
+
+    def test_genuine_cues_still_gate(self):
+        # Daraltma gercek ipuclarini bozmamali.
+        self.assertEqual(self.module.infer_types('yayına alma adımları nasıl'), ['procedural'])
+        self.assertEqual(self.module.infer_types('mimari karar neydi'), ['semantic'])
+
 
 class InferTypesIntegrationTest(unittest.TestCase):
     def setUp(self):
@@ -85,6 +102,21 @@ class InferTypesIntegrationTest(unittest.TestCase):
         res = self.store.retrieve('dün oturumda konuştuklarımızı hatırla', project='mindfork')
         ids = [r['id'] for r in res['records']]
         self.assertEqual(ids, ['ep-1'])
+
+    def test_inferred_gate_never_hides_a_record_by_returning_nothing(self):
+        # Tek yanlış ipucu sonucu tamamen bosaltmamali: duserken kapısız aramaya don.
+        # Sorgu "kural" ipucuyla prosedurel kapı çıkarıyor, ama tek yanıt semantic bir
+        # kural notu: kapı boş dönerse kapısız aramaya dönülmeli.
+        self.store.ingest(self.make_record(
+            'sem-1', 'Müşteri kuralı 2026-09-05: fiyat listesi gizli tutulur', 'semantic'))
+        self.assertEqual(self.module.infer_types('kural listesini kim yazdı'), ['procedural'])
+        res = self.store.retrieve('kural listesini kim yazdı', project='mindfork')
+        self.assertIn('sem-1', [r['id'] for r in res['records']])
+        # Kapı gerçekten bir sonuç verdiginde daraltmaya devam eder: gevseme yalniz
+        # "hicbirsey donmuyor" durumundadir.
+        self.store.ingest(self.make_record('pro-1', 'Kontrol listesi kuralı: dağıtım adımları', 'procedural'))
+        gated = self.store.retrieve('kural listesini kim yazdı', project='mindfork')
+        self.assertEqual([r['id'] for r in gated['records']], ['pro-1'])
 
     def test_explicit_types_overrides_inference(self):
         self.store.ingest(self.make_record('ep-1', 'oturumda konuştuk planı yarına bıraktık', 'episodic'))

@@ -130,9 +130,12 @@ VALID_MEMORY_TYPES = ("episodic", "semantic", "procedural")
 # Conservative cue vocabulary (user decision): only unmistakable phrasing triggers a
 # type filter. Surface variants cover stem allomorphs the stemmer cannot bridge
 # (kaldik/kalmistik, konusm/konusmustuk); _tokens folds both sides into stems.
+# Cues are whole words that survive as themselves: a cue is matched as a stem, so a
+# common word that merely *contains* the stem ("fiyat listesi" against "kontrol listesi",
+# "belge listesi") would gate ordinary questions into one type and hide the answer.
 EPISODIC_CLUES = _tokens("dün oturum sefer görüşme görüşmüş konuştuk konuşmuştuk konuşma kaldık kalmıştık kalmış önceki geçen günlük hatırla hatırlıyorum")
-PROCEDURAL_CLUES = _tokens("nasıl adım kural akış işlem prosedür kontrol listesi kurulum yayına")
-SEMANTIC_CLUES = _tokens("karar mimari tanım kavram anlam neden fark belge")
+PROCEDURAL_CLUES = _tokens("nasıl adım adımlar kural kurallar akış işlem prosedür kontrol prosedürü checklist kurulum yayına")
+SEMANTIC_CLUES = _tokens("karar mimari tanım kavram anlam neden fark")
 
 
 def infer_types(query):
@@ -729,8 +732,13 @@ class MemoryStore:
         if isinstance(statuses, str):
             statuses = [statuses]
         eligible, stale_count = self._eligible(audience, project)
-        if types_set is not None or type_gate is not None:
-            eligible = [record for record in eligible if record_matches_types(record, types_set, type_gate)]
+        if types_set is None and type_gate is None:
+            gated, ungated = eligible, None
+        else:
+            gated = [record for record in eligible if record_matches_types(record, types_set, type_gate)]
+            # Only an inferred guess may be retried; an explicit types= filter is strict.
+            ungated = eligible if type_gate is not None and types_set is None else None
+        eligible = gated
         superseded = {rid for record in eligible for rid in record.get("supersedes", [])}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
@@ -772,23 +780,36 @@ class MemoryStore:
                     self._count_retrieval_error("fts_query_errors")  # lexical ranking continues
         ranked = []
         vocabularies = {}
-        for record in eligible:
-            if record["id"] in superseded:
-                continue
-            statusless_note = snapshot and "status" not in record and record.get("kind", "note") != "task"
-            if statuses is not None and record.get("status") not in statuses and not statusless_note:
-                continue
-            if strict and str(record.get("source", "")).startswith(self.STRICT_EXCLUDE):
-                continue
-            # Aliases are source metadata, never a shortcut around eligibility gates.
-            aliases = record.get("aliases", [])
-            aliases = aliases if isinstance(aliases, list) else []
-            alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
-            vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
-            vocabularies[record["id"]] = vocabulary
-            score = len(terms & vocabulary)
-            if score or scoped_listing or snapshot:
-                ranked.append((score, record))
+        # An inferred gate is a guess; it may reorder or narrow, but it must never be the
+        # only reason a question comes back empty. Cue stems overlap ordinary Turkish
+        # words ("fiyat listesi" against "kontrol listesi"), so a wrong guess is retried
+        # without the gate. An explicit types= filter is never relaxed.
+        def candidates(pool):
+            found, vocabs = [], {}
+            for record in pool:
+                if record["id"] in superseded:
+                    continue
+                statusless_note = snapshot and "status" not in record and record.get("kind", "note") != "task"
+                if statuses is not None and record.get("status") not in statuses and not statusless_note:
+                    continue
+                if strict and str(record.get("source", "")).startswith(self.STRICT_EXCLUDE):
+                    continue
+                # Aliases are source metadata, never a shortcut around eligibility gates.
+                aliases = record.get("aliases", [])
+                aliases = aliases if isinstance(aliases, list) else []
+                alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
+                vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
+                vocabs[record["id"]] = vocabulary
+                score = len(terms & vocabulary)
+                if score or scoped_listing or snapshot:
+                    found.append((score, record))
+            return found, vocabs
+
+        ranked, vocabularies = candidates(eligible)
+        if not ranked and ungated is not None:
+            fallback, fallback_vocabs = candidates(ungated)
+            if fallback:
+                ranked, vocabularies, type_gate = fallback, fallback_vocabs, None
         if strict and not snapshot:
             ranked = self._strict_rank(ranked, terms, vocabularies)
         else:
