@@ -587,6 +587,7 @@ class HumanMonthE2ETest(unittest.TestCase):
         m.hook('SessionStart', s20)
         m.startup_economical = m.hook('UserPromptSubmit', s20,
                                       prompt='bir haftalık tatilden donduk, neler yapmistik')
+        m.economical_unrelated = m.hook('UserPromptSubmit', s20, prompt='öğlen yemeğinde ne yeselim')
         m.preferences('--profile', 'normal')
         m.startup = m.hook('UserPromptSubmit', s20, prompt='bir haftalık tatilden donduk, neler yapmistik')
         m.note('g20-odeme-tekrar', 'knowledge/concepts/odeme-yontemi-ek.md',
@@ -914,11 +915,23 @@ class HumanMonthE2ETest(unittest.TestCase):
                       [r['source'] for r in store._retrieve('webhook kac kez deniyordu', types=['procedural'],
                                                           limit=5)['records']])
 
-    def test_q14_economical_profile_suppresses_per_turn_context(self):
-        """Ekonomik profilde mesaj basina baglam gelmez; normal profilde gelir."""
+    def test_q14_economical_answers_a_return_but_stays_quiet_otherwise(self):
+        """Ekonomik profil donus cumlesine companion kaynaklarini verir, digerine vermez.
+
+        Onceki hali: donen kullaniciya hicbir sey gelmiyordu; duzeltme yalniz sureklilik
+        kapisindan gecen mesaj icin, aralik kapisi da gecilerek (bu yuzden bayatlik uyarisi).
+        """
         m = self.month
-        self.assertEqual(m.startup_economical, {}, 'ekonomik profilde mesaj basina baglam geldi')
-        self.assertIn('Kurallar.md', json.dumps(m.startup, ensure_ascii=False))
+        text = json.dumps(m.startup_economical, ensure_ascii=False)
+        self.assertIn('Kurallar.md', text, 'ekonomik profilde donus cumlesi baglam almadi')
+        self.assertIn('Last-Session.md', text)
+        self.assertIn('may be stale', text, 'gecikmis otomatik kontrol uyarilmadi')
+        # Ekonomi korunur: donus olmayan bir mesaj companion kaynagi getirmez.
+        self.assertNotIn('Kurallar.md', json.dumps(m.economical_unrelated, ensure_ascii=False))
+        # Normal profilde ayni cumle tam baglamla gelir ve bayatlik uyarisi yoktur.
+        full = json.dumps(m.startup, ensure_ascii=False)
+        self.assertIn('Kurallar.md', full)
+        self.assertNotIn('may be stale', full)
 
 
 def _session(session_id):

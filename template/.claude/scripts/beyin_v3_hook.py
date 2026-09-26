@@ -363,12 +363,25 @@ def main():
         # After enqueue, so reminder bookkeeping can never cost the queued checkpoint.
         # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
         reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event, vault=vault)
-        inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
+        # A returning user is the one case where the economical profile's silence costs the
+        # answer: they ask what we were doing after a break and get nothing back. The
+        # continuity gate is a fixed phrase set, so it fires rarely and only on a real
+        # return; it also clears the interval wait, which would otherwise answer the
+        # question with "automatic check deferred" instead of context.
+        continuity_turn = False
+        if settings['context_mode'] == 'session' and event == 'UserPromptSubmit':
+            try:
+                from beyin_v3_companion import relevant
+                continuity_turn = relevant(payload.get('prompt') or '')
+            except Exception:
+                continuity_turn = False  # a pattern check never costs the hook its job
+        inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session'
+                                                        and (event == 'SessionStart' or continuity_turn))
         if not inject or args.metadata_only:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))
             return
         if event in ("SessionStart", "UserPromptSubmit"):
-            if not due and not disabled:
+            if not due and not disabled and not continuity_turn:
                 print(json.dumps(output_context(args.harness, event, notice + 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
                 return
             try:
@@ -386,6 +399,12 @@ def main():
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
             warning = ''
+            if continuity_turn and not due:
+                # No automatic check ran for this turn, so the companion files are current
+                # Markdown while the indexed memory behind them may not be.
+                warning += ('Automatic check deferred by your interval preference: companion '
+                            'sources are current files, indexed memory may be stale. Use beyin.py '
+                            'sync for fresh memory.\n')
             health = state / "hook-health.json"
             if health.exists():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
