@@ -660,6 +660,52 @@ class MemoryStore:
             eligible.append(record)
         return eligible, stale_count
 
+    def read_meta(self, key):
+        # One derived-state counter, read only. Consolidation windows ask what the last
+        # window recorded without ever writing during a read-only report.
+        with self._connect() as db:
+            row = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def write_meta(self, key, value):
+        if self.read_only:
+            raise ValueError("read-only runtime cannot write")
+        if not isinstance(key, str) or not key or not isinstance(value, str):
+            raise ValueError("invalid metadata key or value")
+        with self._connect() as db:
+            db.execute("INSERT OR REPLACE INTO metadata VALUES (?,?)", (key, value))
+
+    def list_records(self):
+        # Ordered, unfiltered projection for maintenance windows. Eligibility, trust and
+        # visibility rules belong to retrieval; a window needs the raw inventory to judge.
+        with self._connect() as db:
+            return [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
+
+    def receipt_stats(self, since=None):
+        # Agent claims, not verified facts: a count and a per-source citation tally. Since is
+        # an aware datetime; receipts without a parsable created_at never count as new.
+        if since is not None and not isinstance(since, datetime):
+            raise ValueError("since must be an aware datetime")
+        count, citations = 0, {}
+        with self._connect() as db:
+            rows = [json.loads(row[0]) for row in db.execute("SELECT payload FROM receipts")]
+        for receipt in rows:
+            if since is not None:
+                stamp = receipt.get("created_at")
+                try:
+                    moment = datetime.fromisoformat(stamp) if isinstance(stamp, str) else None
+                except ValueError:
+                    moment = None
+                if moment is None or (moment.tzinfo is None) != (since.tzinfo is None):
+                    continue
+                if moment <= since:
+                    continue
+            count += 1
+            for ref in receipt.get("refs") or []:
+                if isinstance(ref, str) and ref:
+                    citations[ref] = citations.get(ref, 0) + 1
+        return {"count": count, "citations": citations}
+
     def _count_retrieval_error(self, key):
         # Retrieval never breaks on a degraded derived index or a failing searcher hook,
         # but the silent fallthrough must at least be countable. A read-only store
