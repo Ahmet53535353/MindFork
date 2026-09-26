@@ -183,7 +183,10 @@ def human_result(result, command, installed_version=None):
         if result.get('excluded_components'):
             lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']) + '.')
         if result.get('pending_exclusions') or result.get('exclusions_pending'):
-            lines.append('Haric tutma degisikligi bekliyor: bir sonraki kurulum ya da guncellemede uygulanir.')
+            lines.append('Haric tutma degisikligi bekliyor (' + ', '.join(result.get('pending_exclusions', [])) +
+                         '): bir sonraki kurulum ya da guncellemede uygulanir.')
+        if result.get('exclusions_error'):
+            lines.append('.beyin-exclusions.json gecersiz; guncelleme duzeltilene kadar durur: ' + result['exclusions_error'])
         hygiene = result.get('companion_hygiene') or {}
         for name in hygiene.get('over_limit', []):
             entry = hygiene['files'][name]

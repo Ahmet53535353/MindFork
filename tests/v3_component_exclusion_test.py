@@ -231,5 +231,60 @@ class ComponentExclusionTest(unittest.TestCase):
         self.assertEqual(exclusions["excluded_components"], ["skills/beyin-guncelle"])
 
 
+    def test_agents_block_exclusion_keeps_unmanaged_import_and_empty_files(self):
+        # A user's own CLAUDE.md import (#84) and an empty AGENTS.md are not V3's to delete.
+        (self.vault / "AGENTS.md").write_bytes(b"")
+        (self.vault / "CLAUDE.md").write_bytes(b"@AGENTS.md\n")
+        result = self.cli("--exclude-component", "agents_block")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.vault / "AGENTS.md").read_bytes(), b"")
+        self.assertEqual((self.vault / "CLAUDE.md").read_bytes(), b"@AGENTS.md\n")
+
+    def test_agents_block_exclusion_with_claude_symlink(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks unavailable")
+        (self.vault / "AGENTS.md").write_bytes(b"# Mine\n")
+        try:
+            os.symlink("AGENTS.md", self.vault / "CLAUDE.md")
+        except OSError:
+            self.skipTest("symlink not permitted")
+        self.assertEqual(self.cli().returncode, 0)
+        result = self.cli("--exclude-component", "agents_block")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.state / "update-journal.json").exists())
+        self.assertTrue((self.vault / "CLAUDE.md").is_symlink())
+        self.assertEqual((self.vault / "AGENTS.md").read_bytes(), b"# Mine\n")
+        uninstall = self.cli("--uninstall")
+        self.assertEqual(uninstall.returncode, 0, uninstall.stderr)
+
+    def test_agents_block_exclusion_restores_crlf_original(self):
+        original = b"# Mine\r\nkeep\r\n"
+        (self.vault / "AGENTS.md").write_bytes(original)
+        self.assertEqual(self.cli().returncode, 0)
+        result = self.cli("--exclude-component", "agents_block")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.vault / "AGENTS.md").read_bytes(), original)
+        self.assertNotIn("AGENTS.md", json.loads(result.stdout)["preserved_excluded"])
+
+    def test_agents_block_exclusion_keeps_paragraphs_around_a_moved_block(self):
+        (self.vault / "AGENTS.md").write_text("# Mine\n", encoding="utf-8")
+        self.assertEqual(self.cli().returncode, 0)
+        path = self.vault / "AGENTS.md"
+        text = path.read_text(encoding="utf-8")
+        block = text[text.index(START):text.index(END) + len(END)]
+        path.write_text("# Mine\nbefore\n\n" + block + "\n\nafter\n", encoding="utf-8")
+        result = self.cli("--exclude-component", "agents_block")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(path.read_text(encoding="utf-8"), "# Mine\nbefore\n\nafter\n")
+
+    def test_doctor_reports_invalid_exclusions_file(self):
+        self.assertEqual(self.cli().returncode, 0)
+        (self.vault / ".beyin-exclusions.json").write_text('{"excluded_components": ["skils"]}', encoding="utf-8")
+        doctor = subprocess.run([sys.executable, str(self.vault / "beyin.py"), "doctor", "--json"], cwd=self.vault,
+                                env=self.env, capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        self.assertIn("skils", json.loads(doctor.stdout)["exclusions_error"])
+        self.assertNotEqual(self.cli().returncode, 0)
+
 if __name__ == "__main__":
     unittest.main()

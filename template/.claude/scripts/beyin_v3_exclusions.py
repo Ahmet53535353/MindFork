@@ -40,6 +40,8 @@ def read_exclusions(vault):
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
+        if set(data) - {'excluded_components'}:
+            raise ValueError('Unsupported exclusions keys ' + ', '.join(sorted(set(data) - {'excluded_components'})))
         items = data.get('excluded_components', [])
     else:
         raise ValueError('Invalid exclusions file format; expected list or dict')

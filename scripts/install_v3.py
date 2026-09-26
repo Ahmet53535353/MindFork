@@ -438,35 +438,41 @@ not knowledge synthesis.
 {END}"""
     removed, preserved_excluded = [], []
     if "agents_block" in user_excluded:
+        def comparable(value): return value.replace("\r\n", "\n").rstrip()
         for name in ("AGENTS.md", "CLAUDE.md"):
             path = vault / name
             if not path.exists():
                 continue
-            text = path.read_text(encoding="utf-8")
-            if START in text:
-                outside = re.sub(r"\n*" + re.escape(START) + r".*?" + re.escape(END) + r"\n*", "", text, flags=re.S)
-            else:
-                outside = text
+            # A CLAUDE.md symlinked to AGENTS.md is cleaned through AGENTS.md. Planning it as a
+            # second file makes the journal see a changed target and wedges update/rollback.
+            if name == "CLAUDE.md" and path.resolve() == (vault / "AGENTS.md").resolve():
+                continue
+            current_bytes = path.read_bytes()
+            text = current_bytes.decode("utf-8")
+            # A block between two user paragraphs leaves one blank line, not glued paragraphs.
+            def unblock(match):
+                if not (text[:match.start()].strip() and text[match.end():].strip()): return ""
+                return "\r\n\r\n" if "\r\n" in match.group(0) else "\n\n"
+            outside = re.sub(r"(?:\r?\n)*" + re.escape(START) + r".*?" + re.escape(END) + r"(?:\r?\n)*", unblock, text, flags=re.S)
+            if outside.strip() and text.endswith("\n") and not outside.endswith("\n"):
+                outside += "\r\n" if text.endswith("\r\n") else "\n"
             item = manifest.get("files", {}).get(name)
             original_bytes = base64.b64decode(item["original"]) if item and item.get("original") is not None else None
-            if original_bytes is not None:
-                original_text = original_bytes.decode("utf-8", errors="replace")
-                if outside.rstrip() == original_text.rstrip() or outside == original_text:
-                    cleaned = original_bytes
-                else:
-                    cleaned = outside.encode("utf-8")
+            if item is None:
+                # Not a file V3 created or changed: never delete it; only strip a stray block.
+                cleaned = outside.encode("utf-8") if START in text else current_bytes
+            elif original_bytes is not None:
+                same = comparable(outside) == comparable(original_bytes.decode("utf-8", errors="replace"))
+                cleaned = original_bytes if same else outside.encode("utf-8")
+            elif not outside.strip() or (name == "CLAUDE.md" and outside.strip() == "@AGENTS.md"):
+                cleaned = None
             else:
-                if not outside.strip():
-                    cleaned = None
-                elif name == "CLAUDE.md" and outside.strip() == "@AGENTS.md":
-                    cleaned = None
-                else:
-                    cleaned = outside.encode("utf-8")
+                cleaned = outside.encode("utf-8")
             if cleaned is None:
                 planned[name] = None
                 removed.append(name)
             else:
-                if path.read_bytes() != cleaned:
+                if current_bytes != cleaned:
                     planned[name] = cleaned
                 if original_bytes is not None and cleaned != original_bytes:
                     preserved_excluded.append(name)

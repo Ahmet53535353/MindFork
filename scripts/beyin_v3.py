@@ -227,7 +227,11 @@ def main(argv=None):
                 result_excluded = exclusions.save_exclusions(vault, current_excluded)
                 exclusion_notice = 'Haric tutma tercihleri kaydedildi; bir sonraki kurulum ya da guncellemede uygulanir.'
             else:
-                result_excluded = exclusions.read_exclusions(vault)
+                # A hand-edited typo must not block unrelated preference changes.
+                try:
+                    result_excluded = exclusions.read_exclusions(vault)
+                except ValueError as exc:
+                    result_excluded, exclusion_notice = [], 'Haric tutma dosyasi gecersiz: ' + str(exc)
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile or (args.exclude_component or args.include_component) else 'current',
                       'preferences': settings, 'excluded_components': result_excluded,
@@ -276,7 +280,12 @@ def main(argv=None):
             result['excluded_components'] = manifest_data.get('excluded_components', [])
             load_sync()
             import beyin_v3_exclusions as exclusions
-            configured_excluded = exclusions.read_exclusions(vault)
+            try:
+                configured_excluded = exclusions.read_exclusions(vault)
+            except ValueError as exc:
+                # doctor reports the broken file instead of failing; update/install stay strict.
+                configured_excluded = result['excluded_components']
+                result['exclusions_error'] = str(exc)
             if set(configured_excluded) != set(result['excluded_components']):
                 result['pending_exclusions'] = sorted(set(configured_excluded) ^ set(result['excluded_components']))
                 result['exclusions_pending'] = True
