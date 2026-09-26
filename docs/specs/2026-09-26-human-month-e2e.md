@@ -119,10 +119,15 @@ sürücüde her iki hâl de ölçülüyor.
 yani sıralayabiliyor ama yeni bir kaydı aday havuzuna **ekleyemiyor**. Saf
 semantik hatırlama bu yüzden bugün mümkün değil; bu, faz-2 için ön koşuldur.
 
-**7. Bağlam bütçesini büyüyen Threads.md yiyor.** Normal profil 5000 karakter;
-Kurallar.md'deki üç kural ve Last-Session sonrasında Threads.md bütçeyi
-dolduruyor. Kırpma işaretli (`clip()` işareti bırakıyor), ama yeni kural
-otomatik bağlama girmeyebiliyor. Sürücüde en az iki kuralın geldiği doğrulanıyor.
+**7. Bağlam bütçesi daraldığında kural dosyası kırpılıyor (sonradan ölçümle düzeltildi).**
+Normal profilde 5000 karakterlik bütçede üç kuralın üçü de, devir kartı ve kimlik
+dosyası **tam** geliyor; konu dizini (`Threads.md`) onları aç bırakmıyor, çünkü su
+doldurma `NAMES` sırasında yürüyor ve kurallar önce dolar. Kırpma yalnızca bütçe
+daraldığında (3000'de orta kural, ekonomik profilin 2000'inde ilk kural) oluyor ve
+her seferinde `[truncated: N characters omitted]` işaretiyle **görünür** kalıyor. Yani
+bulgu "bütçeyi Threads yiyor" değil, "bütçe daraldıkça kural dosyası sığmıyor"; bu
+davranış doğru, eşiği `v3_companion_budget_test.py` kilitliyor. Raporun ilk yazımında
+iddia fazla güçlüydü ve ölçümle düzeltildi.
 
 **8. `dream` merge adayı dosya adına bakar.** Yinelenen notu birleştirip yerine
 bir işaretçi not bırakmak adayı temizlemiyor; dosya gerçekten kaldırılınca
