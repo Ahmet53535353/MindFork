@@ -14,6 +14,31 @@ zamanlayıcı/daemon yok (V3 ürün sınırı: modelsiz, bağımlılıksız, ark
 Kapsam dışı (kararlı): vektör indeksi, gom/graph, model çağrısı, chat içi otomatik
 consolidation, "her aramada öğrenen" geri besleme döngüleri (§3 gerekçesi).
 
+## 0. Çalışma kapıları (gated execution)
+
+`dream` bir "bakım penceresi" komutudur; tekrar tekrar çağrılabilir olduğu için
+Anthropic'in AutoDream kapı modelinin işlevsel karşılığı uygulanır — **üç kapı**:
+
+1. **24 saat kuralı:** son çalışma zamanı `metadata` anahtarında
+   (`dream.last_run`); 24 saat geçmemişse komut "çok erken" deyip çıkar
+   (`--force` yalnız teşhis için, rapora yazar).
+2. **Kanıt kuralı (≥5 receipt):** son çalışmadan beri `receipts` tablosunda ≥5
+   yeni kayıt olmalı. Neden receipt ve oturum değil: oturum sayacı `daily/log`
+   bloğundan gelir, o özellik **opt-in ve varsayılan kapalı**; kapalı vault'ta
+   oturum sayacı yok. `receipts` ise her vault'ta var. (Ölçüm öncesi önerilen
+   (a) varyantı — hook'ta kalıcı oturum sayacı — ihtiyaç doğarsa ayrı iş.)
+3. **Kilit:** `state/dream.lock` üzerinde `_portalock.exclusive`; kilit alınamazsa
+   çıkış kodu ile vazgeçilir (ikinci konsolidasyon yarışmaz).
+
+Kapılar `--dry-run` için de geçerlidir: ölçüm aracı da idisip lin uyurmaz
+(Altın Kural: yeni kalıcı özellik ancak ölçümle; ölçümün kendisi bu komuttur).
+
+Zamanlayıcı yok: paket daemon'laşmaz, ancak komut **idempotent ve kapılı**
+olduğu için isteyen kullanıcı kendi `cron`/systemd timer'ıyla çağırabilir —
+desteklenen senaryo, paketin kendi zamanlayıcısı değil.
+
+
+
 ## 1. Boyut disiplini (ölçülebilir hedefler)
 
 - Pencere girdisi: `knowledge/` + `notes/` ağacı; ölçüt: dosya sayısı ve toplam karakter.
@@ -61,25 +86,36 @@ alıntı sayısı çıkarır, `created/updated` tarihleriyle birleştirir.
 AutoDream bir Python fonksiyonu değil, bir iş akışıdır: modül aday listelerini
 üretir, güvenli (yeniden yazılabilir) dosyalarda çalışır; **anlamlı birleştirme,
 budama gerekçesi ve özet metni ajanın işidir** — V3'te bunun kanalı hazır:
-`daily/log` oturum bloklarının `### Özet` bölümü (Beş başlık: Bağlam / Önemli
+`daily/log` oturum bloklarının `### Özet` bölümü (beş başlık: Bağlam / Önemli
 Konuşmalar / Alınan Kararlar / Öğrenilenler / Yapılacaklar) ve `beyin.py receipt`
 olayları. "Masayı topla" komutu → `read` + ajan özeti + `receipt` + `last-session`
 kartı; `daily/log` özeti zaten kalıcı kayda dönüşmüşse pencere yalnız
 **tekrarları ve kalıntıları** temizler, yeniden özetlemez.
 
+**Muhakeme katmanı oturumdaki ajandır, ayrı bir model çağrısı değil.** Dış kaynak
+(AutoDream) küratörü "fork edilmiş ayrı subagent" olarak tarif eder; bizim
+karşılığımız zaten çalışan şey: vault'ta çalışan ajan (Claude/Codex/OpenCode…)
+raporu okur, kararı ve gerekçeyi yazar, `--apply` onayı insanın. Başsız
+"tam otomatik" bir küratör için `--llm` fazı **2026-09-26'da reddedildi**
+(gerekçe §7).
+
 ## 5. Aşama planı (her aşama TDD + tek geçişte tam paket)
 
 1. **Ölçüm modülü** (salt-okunur): `beyin.py dream --dry-run` → envanter + aday
-   listeleri (Prune/Merge/Refresh) + ısı tablosu; hiçbir şey yazmaz. Testler:
-   deterministik çıktı, boş vault, tek dosya, restore edilebilirlik.
+   listeleri (Prune/Merge/Refresh) + ısı tablosu + **kapı raporu** (son çalışma,
+   yeni receipt sayısı, kilit durumu); hiçbir şey yazmaz. Testler: deterministik
+   çıktı, boş vault, tek dosya, kapı reddi (24 saat / <5 receipt / kilitli),
+   restore edilebilirlik.
 2. **Snapshot + Refresh**: ön-image kopyası, manifest, `--restore`; Refresh yalnız
-   başlık/ayraç normalizasyonu ve frontmatter tazelemesi (idempotent).
+   başlık/ayraç normalizasyonu, frontmatter tazelemesi ve **bağıl→mutlak tarih**
+   normalizasyonu (idempotent) — dış kaynaktan alınan Refresh kuralı.
 3. **Merge**: yalnız alıntısı > 0 olan, birbirine bağlı notlar; her Merge snapshot'ın
    üstüne yazılır ve rapor satırı üretir.
 4. **Prune**: **otomatik silme yok**; yalnız `status: draft` + 90 gün + alıntı 0
    adayları rapora düşer, kullanıcı `--apply` ile onaylar.
 5. **Re-index + doctor**: snapshot'ın ardından dizin yeniden kurulur, `doctor`
-   alanları (boyut, kopya sayısı, restore noktası) genişler.
+   alanları (boyut/taşma, kopya sayısı, restore noktası, son dream + kapı
+   durumu) genişler.
 
 ## 6. Test ve kanıt disiplini
 
@@ -90,8 +126,82 @@ kartı; `daily/log` özeti zaten kalıcı kayda dönüşmüşse pencere yalnız
 - Geri al kanıtı: `dream --restore` sonrası `sha256sum` kümesi pencere öncesiyle
   birebir aynı olmalı (test bunu assert eder).
 
-## 7. Bilinçli ertelenenler
+## 7. Bilinçli ertelenenler / reddedilenler
 
 - Sıcak yol ısı geri beslemesi (write-amplification) — ölçüm gerekçesiyle.
 - Çok kanallı/derin gömme araması (embedding sağlayıcısı gelmeden).
 - Otomatik Prune (onay halkası olmadan silme) ve "öğrenen" otomatik ağırlıklar.
+- **`--llm` küratör fazı (2026-09-26'da reddedildi).** İki gerekçe birlikte:
+  (1) kullanıcının çalıştırabileceği yerel model yok; (2) uzak API'ye vault
+  içeriği göndermek ise "uzak servis çağrısı yok" ilkesini ihlal eder. Yerine
+  kullanılan: oturumdaki ajan zaten bu muhakemenin güçlü tarafı (§4). İhtiyaç
+  doğarsa (sürekli çalışan başsız bakım) yeniden açılabilir.
+- KAIROS benzeri boşta-çalışan daemon: paket sınırı (§0 zamanlayıcı maddesi).
+
+## 8. Dış kaynak: ne alındı, ne alınmadı (2026-09-26)
+
+Dış desen: "Beyond the Session: Memory Engineering for Agent Teams" (Jordan
+Carson, 2026-04-21) ve onun AutoDream/KAIROS anlatımı. **Kaynak uyarısı:**
+AutoDream'in dört fazı ve üç kapısı, Anthropic'in *yayımlanmamış* KAIROS
+daemon'una ilişkin **üçüncü-taraf sızıntı raporlarından gelir; birincil
+doğrulama yok. Bu yüzden kayıt/PR metinlerinde "doğrulanmış ürün davranışı"
+değil, **"ilham alınan dış desen"** olarak geçer.
+
+Alınan ve zaten örtüşenler (konverjans, PR'da kullanılabilir): üç bellek boyutu
+(bizde `VALID_MEMORY_TYPES = ("episodic","semantic","procedural")` ile birebir
+aynı), pre-task hydration / post-task konsolidasyon ayrımı, aday belleğin
+"terfi incelemesi" metaforu (bizim staging→sync + karantina hattımız), hybrid
+BM25+vektör+RRF (Cloudflare'ın 5-kanallı RRF sonucu), boyut disiplini
+(200 satır/25KB tavanı), tarih mutlaklaştırma (Refresh), 3 kapı + kilit.
+
+Alınmayanlar: Redis/NATS koordinasyon katmanı, Temporal, bulut dosya deposu,
+vektör DB bağımlılığı, organizasyon-geneli ikinci bellek katmanı — bunlar
+çok-ajanlı/organizasyon ölçeğinin altyapısı; tek kullanıcılı yerel vault'ta
+Altın Kural 3 (sıfır bağımlılık, modelsiz) ihlali olurdu.
+
+## 9. Bu dönemde yazılacak kural ve doctor sözleşmeleri
+
+Bunlar kod değil, sözleşmedir; aynı iş paketinde teslim edilir (A+F paketi dışında,
+ayrı ve küçük TDD'li adımlar).
+
+### 9.1 Doctor: `oversize` alanı (C)
+
+`doctor` çıktısına tek alan: boyut tavanı aşan dosyalar. Denetim listesi mevcut
+gerçek dosyalarla sınırlıdır (varsayım değil, doğrulanmış yüzey):
+`knowledge/index.md`, `knowledge/log.md`, `knowledge/v3/outcomes.md`,
+`daily/v3/<gün>.md` (projeksiyon), `Last-Session.md`, `Threads.md`, `Journal.md`
+ve tekil notlar (>`12k` karakter → Refresh adayı). `Last-Session`/`Threads`
+için tercih bütçeleri (`last-session-chars`, `threads-chars`) zaten var;
+`oversize` bu bütçelerle aynı mantığı **tek alanda** toplar, yeni ayar
+getirmez. Rapor satırı: dosya, karakter, tavan, sınırı aşan tekil not sayısı.
+
+### 9.2 SKILL kuralı: bağıl tarih yazma (B)
+
+Dış kaynaktaki Refresh kuralının en ucuz ve en günlük-dokunuşlu parçası:
+notlarda **"dün", "geçen hafta", "bir süre önce" yazılmaz; mutlak tarih yazılır**
+(`2026-09-26`). Refresh fazı bu metni deterministik olarak normalleştirir; kural
+ajanın yazarken de doğru yapmasını sağlar. Kural SKILL.md'ye tek cümle olarak
+eklenir (kalıcı özellik değil, davranış kuralı — Altın Kural'ın kapsamı dışında).
+
+### 9.3 SKILL kuralı: iş-akışı tipi öğrenimi (D)
+
+`procedural` tip bugün zaten geçerli ve görev akışında öneriliyor; eksik olan
+**öğrenim yönlendirmesi**: `Öğrenilen:` beyanı bir *iş akışı/kural* tarif ediyorsa
+(`"... şunu şöyle yap"`, "kural", "sıra", "kontrol listesi") `knowledge/concepts/`
+notu `type: semantic` yerine **`type: procedural`** olmalı. Tip tanımının kaynağı
+companion dosyasıdır (`🔮 850-Companion/memory-types.md`); kural o referansı
+atıfla verir, tip listesi `MARKDOWN.md`'deki üçlüyle (`episodic|semantic|
+procedural`) tutarlıdır.
+
+## 10. Uygulama sırası ve Altın Kural ilişkisi
+
+1. **A+F**: kapılar (§0) + `metadata` anahtarları + record'taki dış-doğrulama
+   bölümü.
+2. **C**: doctor `oversize` alanı.
+3. **B+D**: SKILL.md kuralları (kod değişimi yok, test de gerektirmez).
+4. Faz-1 `--dry-run` ölçüm modülü → **≥1 hafta gerçek kullanım ölçümü** →
+   2-5. fazlar kararı (ölçüm geçmezse 2-5 yazılmaz).
+
+Altın Kural'ın kapsamı burada netleşir: kural **sıcak yol (retrieval/hook)
+değişikliklerini** bağlar; kullanıcı çağrılı pencere komutları ve skill kuralları
+ölçümün kendisini üretir, dolayısıyla kapı dışındadır.
