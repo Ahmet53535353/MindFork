@@ -77,6 +77,8 @@ başlatmadan bu öğrenmeyi mevcut konuşma içinde tamamla.
 
 Kullanıcının reddettiği `kind: inference` veya `kind: preference` kaydını silme: kaynak frontmatter'ında `validity: rejected`, `rejected_reason` ve `rejected_at` (ISO tarih ya da zaman damgası) tut. Eski `status: rejected` çıkarım/tercih kayıtları da güncel bağlama girmez. Geçmişi bilinçli incelemek için `python3 beyin.py history KAYIT_ID` kullan; geçmişteki iddiayı geçerli tercih diye uygulama. Aynı iddia `Core.md` gibi daha geniş bir güncel kaynakta da yazılıysa o kaynağı ayrıca düzelt. Geçerli bir çıkarıma dayanarak bir seçeneği elemeden önce kullanıcıya o andaki niyetini ayıran tarafsız bir soru sor; kullanıcı soru sorulmamasını veya açık kapsamı istediyse bu isteğe uy.
 
+Kullanıcı "son günlerde ne yaptık" gibi yakın dönem sorusu sorarsa `python3 beyin.py recap --days 7` çalıştır. Sonuç ajanların yazdığı receipt iddialarıdır, doğrulanmış olgu değildir; gerekiyorsa listelenen kaynağı aç. Özel kaynak bağlantıları gizlenir ve sayılır; gizleneni tahmin etme.
+
 ## Not ve görev yazma
 
 Kullanıcının seçtiği klasörü ve mevcut dosyaları koru. **Yeni görev için `task-create` kullan; görevi `note-create` ile oluşturma.** Geçici UTF-8 JSON dosyası hazırla ve `python3 beyin.py task-create --file TASK_JSON` çalıştır. Windows'ta `py -3 beyin.py task-create --file TASK_JSON` eşdeğerdir.

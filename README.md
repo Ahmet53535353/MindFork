@@ -72,6 +72,12 @@ Bunlar `.agents/skills` altında bulunur; istemciler aynı kaynakları kullanır
 
 Notu yaz, ajana ne istediğini söyle. Kaynaklar oturum açılışı ve konuşmanın uygun noktalarında yeniden indekslenir. İstemciler kapalıyken sürekli tarayan bir servis yoktur. Önemli iş sonuçları kısa, kaynak bağlantılı kayıtlarla tutulur; tüm sohbetin kendiliğinden doğru bilgiye dönüştüğü iddia edilmez.
 
+Son günlerde ne yapıldığını görmek için vault klasöründe `python3 beyin.py recap --days 7`
+çalıştır. Son yedi UTC gününün kaynak bağlantılı iş sonuçlarını en yeniden eskiye listeler;
+model çağırmaz. Bunlar ajanın yazdığı sonuç iddialarıdır, bağımsız doğrulanmış olgular
+değildir. Özel notlara giden bağlantılar gizlenir, silinmiş kaynaklar listelenmez.
+`--days` (1-366) ve `--limit` (1-100) ile aralığı ve uzunluğu değiştirebilirsin.
+
 Bir şey ters giderse ajana **“beyin-doktor ile kontrol et”** de. Terminalden, vault klasöründe:
 
 ```sh

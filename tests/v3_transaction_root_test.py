@@ -162,6 +162,37 @@ class TransactionRootTest(unittest.TestCase):
         self.assertFalse((target / 'update-journal.json').exists(), 'no half-applied transaction left behind')
         self.assertEqual(sorted(p.name for p in self.outside.iterdir()), ['beyin.py'])
 
+    def test_install_pins_the_state_root_as_it_resolves_once_created(self):
+        # #113: the redirect exists only after the directory does, so a pin taken before
+        # creation keeps the pre-redirect spelling and processes outside the redirect
+        # (outside the MSIX package) reach a different directory from the same string.
+        state, target = self.redirected_state()
+        probe = self.base / 'probe'
+        kind = self.link(self.outside, probe)
+        driver = self.base / 'redirect_driver.py'
+        driver.write_text(DRIVER, encoding='utf-8')
+        env = isolated_env(self.base / 'home')
+        result = subprocess.run([sys.executable, str(driver), str(Path(__file__).resolve().parent), str(state),
+                                 str(target), str(INSTALLER), kind,
+                                 '--vault', str(self.vault), '--state', str(state)],
+                                cwd=ROOT, env=env, capture_output=True, timeout=120)
+        if result.returncode == 77:
+            self.skipTest('directory link could not be created by the installer driver')
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+        redirected = str(target.resolve())
+        pin = json.loads((self.vault / '.beyin-runtime.json').read_text(encoding='utf-8'))
+        self.assertEqual(pin['state'], redirected, 'pin must name the directory the redirect leads to')
+        manifest = json.loads((target / 'v3-install.json').read_text(encoding='utf-8'))
+        self.assertTrue(manifest['commands'])
+        for command in manifest['commands']:
+            # Hook commands carry --state too; posix quoting leaves this fixture path bare,
+            # the Windows form is base64-encoded, so only check the plain one.
+            # Claude hook commands spell Windows paths with forward slashes.
+            if '--state' in command:
+                self.assertTrue(redirected in command or Path(redirected).as_posix() in command, command)
+                self.assertNotIn(str(state) + ' ', command)
+                self.assertNotIn(state.as_posix() + ' ', command)
+
 
 if __name__ == '__main__':
     unittest.main()

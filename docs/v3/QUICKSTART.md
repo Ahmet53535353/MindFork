@@ -94,6 +94,7 @@ python3 scripts/beyin_v3.py --vault /absolute/vault context --file query.json --
 python3 scripts/beyin_v3.py --vault /absolute/vault receipt --file receipt.json --harness codex
 python3 scripts/beyin_v3.py --vault /absolute/vault task-update --file patch.json
 python3 scripts/beyin_v3.py --vault /absolute/vault history demo-task
+python3 scripts/beyin_v3.py --vault /absolute/vault recap --days 7 --limit 20
 ```
 
 Retrieval JSON accepts `query`, `project`, `audience`, `statuses`, `limit`, and
@@ -106,6 +107,20 @@ conflict requires reading current state and reconciling the intended change.
 `history RECORD_ID` synchronizes first, like `context`, and returns ordered revision
 snapshots, including the original source synchronization, subsequent updates and a
 final `delete` event for removed sources, so changes can be reviewed from local state.
+
+`recap` is an on-demand activity view over dated receipts. It infers nothing: the
+result lists the most recent agent-authored outcome claims, their receipt source
+paths, and the references submitted with each receipt. The default covers today
+plus the previous six UTC calendar days and returns at most 20 entries; use
+`--days 1..366` and `--limit 1..100` to adjust. Older receipts without `created_at`
+are counted as omitted, never assigned an invented date. A receipt whose own file
+was removed is counted in `missing_source_omitted`; references that no longer exist
+or that point at `visibility: private` or untrusted notes are withheld and counted in
+`refs_withheld`, the same boundary internal `context` applies. Like `context`, the
+command synchronizes local sources first (refreshing the generated `daily/v3/`
+views); it creates no receipt or note and calls no model. The installed `beyin.py
+recap` prints a compact terminal rendering on a terminal, or with `--human`; stored
+control characters are shown as `?`.
 
 By default, `context` refreshes the local index before retrieval. `--no-sync`
 instead opens an already initialized SQLite index in read-only mode and does not

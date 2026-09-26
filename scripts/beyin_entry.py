@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import unicodedata
 sys.dont_write_bytecode = True
 
 
@@ -76,6 +77,17 @@ def ascii_text(value):
     return str(value if value is not None else '?').encode('ascii', 'replace').decode('ascii')
 
 
+# Bidirectional overrides can reorder what a terminal shows (Trojan Source); category Cc covers ESC/BEL.
+_BIDI_CONTROLS = frozenset('\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
+
+
+def plain_text(value):
+    """One terminal line from stored text: newlines fold, control and bidi characters become '?'."""
+    text = str(value if value is not None else '?').replace('\r\n', '\n')
+    return ''.join(' / ' if ch in '\n\r\u2028\u2029\x85' else ' ' if ch == '\t' else
+                   '?' if unicodedata.category(ch) == 'Cc' or ch in _BIDI_CONTROLS else ch for ch in text)
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
@@ -115,6 +127,31 @@ def human_result(result, command, installed_version=None):
             lines.append(result['exclusion_notice'])
         lines.append('Acikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.')
         lines.append('Yerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
+        return '\n'.join(lines)
+    if command == 'recap':
+        lines = ['Kaynakli etkinlik: ' + result['from'] + ' - ' + result['through'] +
+                 ' (UTC; ajan kayitlari, bagimsiz dogrulanmis olgular degil)']
+        if not result['items']:
+            lines.append('Bu aralikta tarihli kayit yok.')
+        for item in result['items']:
+            lines.append('\n' + item['created_at'][:10] + '  ' + plain_text(item['summary']))
+            lines.append('Kaynak: ' + plain_text(item['source']))
+            for ref in item.get('refs', []):
+                lines.append('  - ' + plain_text(ref))
+            withheld = item.get('refs_withheld') or {}
+            if withheld.get('private'):
+                lines.append('  (' + str(withheld['private']) + ' ozel kaynak baglantisi gizlendi)')
+            if withheld.get('missing'):
+                lines.append('  (' + str(withheld['missing']) + ' kaynak artik yok)')
+        if result['truncated']:
+            lines.append('Yalniz en yeni ' + str(result['shown']) + '/' + str(result['total']) +
+                         ' kayit gosterildi; --limit ile artirabilirsin.')
+        if result['undated_omitted']:
+            lines.append(str(result['undated_omitted']) + ' tarihsiz/eski bicimli kayit atlandi.')
+        if result.get('missing_source_omitted'):
+            lines.append(str(result['missing_source_omitted']) + ' kaydin makbuz dosyasi artik yok; atlandi.')
+        if result.get('partial'):
+            lines.append('Uyari: kaynak esitlemesi kismi; ayrinti icin --json kullan.')
         return '\n'.join(lines)
     if command == 'companion-compact':
         lines = []
@@ -237,6 +274,12 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     human = ('--human' in argv or sys.stdout.isatty()) and '--json' not in argv
     argv = [arg for arg in argv if arg not in ('--human', '--json')]
+    if human:
+        # A piped or redirected Windows console uses a legacy code page (cp1252 has no s-cedilla);
+        # an unencodable character must print as '?' instead of failing the whole command.
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, 'reconfigure'):
+                stream.reconfigure(errors='replace')
     command = argv[0] if argv else 'doctor'
     vault = Path(__file__).resolve().parent
     stamp = vault / '.beyin-version'
