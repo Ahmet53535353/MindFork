@@ -1,6 +1,6 @@
 # AutoDream-lite — konsolidasyon yol haritası (roadmap spec)
 
-Tarih: 2026-09-26 · Durum: tasarım kararları alındı, uygulama sırada değil
+Tarih: 2026-09-26 · Durum: faz 1 uygulandı (kapılar + salt-okunur ölçüm + doctor `oversize`), faz 2-5 ölçüm bekliyor
 İlgili kayıt: `docs/specs/2026-09-25-hybrid-rag-implementation-record.md` (Kalan işler #2)
 
 ## Amaç ve sınır
@@ -213,3 +213,32 @@ procedural`) tutarlıdır.
 Altın Kural'ın kapsamı burada netleşir: kural **sıcak yol (retrieval/hook)
 değişikliklerini** bağlar; kullanıcı çağrılı pencere komutları ve skill kuralları
 ölçümün kendisini üretir, dolayısıyla kapı dışındadır.
+
+## 11. Uygulama sonucu (faz 1, 2026-09-26)
+
+Dal: `feat/memory-consolidation`. TDD ve canlı test vault'u ile teslim edildi.
+
+- `beyin_v3_dream.py`: `gate_status`, `inventory`, `candidates`, `report`, `render`.
+  Sabitler: `MIN_HOURS=24`, `MIN_RECEIPTS=5`, `STALE_DAYS=90`, `NOTE_CAP_CHARS=12000`.
+- Motor: dört salt-okunur erişim eklendi — `read_meta`, `write_meta` (read-only store'da
+  reddeder), `list_records`, `receipt_stats(since)`. Retrieval yolu ve hook hiç değişmedi.
+- CLI: `beyin.py dream`; `doctor.oversize` = `{files, notes_over_cap, cap}`.
+- Test: 19 dream + 12 günlük log + 3 doctor = hedefli 91/91; tam paket §10 sırasına göre
+  işin sonunda koşuldu.
+
+**Yol üstünde bulunan ve düzeltilen üç gerçek hata:**
+1. Kilit probu `state/dream.lock` dosyasını **oluşturuyordu**; "hiçbir şey yazmaz" sözü
+   dosya-yaratma seviyesinde yanlıştı. Artık dosya yoksa kilit tutulamaz kabul edilir.
+2. Merge kuralı kayıtların `title` alanını okuyordu; **senkronlanan kayıtlarda `title`
+   yoktur** (başlık gövdede) ve kural gerçekte hiç çalışmıyordu. Zincir: frontmatter
+   title → ilk Markdown başlığı → dosya adı. Canlı test vault'u yakaladı; testler de
+   kurgusal `title=` alanı yerine gerçek gövde kullanıyor.
+3. Companion bütçeleri çıplak dosya adıyla (`Last-Session.md`) geliyor, vault'ta ise
+   `🔮 850-Companion/` altındalar; CLI artık companion dizinini çözüp vault-göreli yol
+   veriyor. Projeksiyonların ikinci koruma listesi `beyin_v3_projections.PROJECTION_GUARD`
+   adıyla tek kaynak yapıldı.
+
+**Uygulama sırasında düzeltilen bir spec çelişkisi:** §0 "kapılar `--dry-run` için de
+geçerlidir" ile "rapor hiçbir şey yazmaz" maddeleri birbirini götürüyordu: filigranı
+tüketen bir rapor, kendisi için ayrıldığı ölçüm haftasını kapatırdı. Kapılar artık
+**mutasyonlu pencereyi** uygular, rapor yalnızca bildirir.

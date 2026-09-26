@@ -186,14 +186,33 @@ ve idempotent `dream` komutu kullanıcının kendi cron/systemd timer'ıyla
 Uygulama sırası: A+F (kapılar + metadata + bu bölüm) → C (doctor `oversize`) →
 B+D (SKILL kuralları) → faz-1 `--dry-run` ölçümü → ≥1 hafta ölçüm → faz 2-5 kararı.
 
+## Konsolidasyon penceresi faz 1 + günlük log Faz-2 (2026-09-26, `feat/memory-consolidation`)
+
+Yeni dal açıldı (dal geçmişi silinmedi; konu-bazlı commit'ler zaten ayrıydı). Teslim:
+`beyin.py dream` (üç kapı + boyut envanteri + pasif alıntı ısısı + Prune/Merge/Refresh
+adayları, **hiçbir şey yazmaz**), motorun dört salt-okunur erişimi, `doctor.oversize`,
+günlük log Faz-2 (kapanış kaydı gelmeyen oturum gerçek kayıtla kapanır), iki SKILL kuralı
+(mutlak tarih; iş-akışı tipi öğrenim `procedural`).
+
+Kanıt: TDD 19 dream + 12 günlük log + 3 doctor (hedefli 91/91), tam paket iş sonunda.
+Canlı test vault'unda üç kapı, kilit yarışı ve `wrote: false` doğrulandı. Yol üstünde üç
+gerçek hata bulundu ve düzeltildi: kilit probu kendi dosyasını oluşturuyordu; merge kuralı
+senkronlanan kayıtlarda **olmayan** `title` alanını okuyordu (canlı testte yakalandı, kural
+`title → ilk başlık → dosya adı` zincirine çevrildi); companion bütçeleri çıplak addı
+geliyordu. Bir spec çelişkisi de düzeltildi: filigranı tüketen rapor kendi ölçüm haftasını
+kapatırdı, artık kapılar mutasyonlu pencereyi uygular, rapor yalnızca bildirir.
+Tasarım: `docs/specs/2026-09-26-autodream-lite-roadmap.md` §11, `...-daily-log-design.md`.
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
-2. AutoDream-lite konsolidasyon motoru (ölçüm → snapshot/Refresh → Merge → onaylı Prune → re-index; ısı ve restore kuralları: `docs/specs/2026-09-26-autodream-lite-roadmap.md`)
+2. AutoDream-lite faz 2-5 (snapshot/Refresh → Merge → onaylı Prune → re-index). Faz 1
+   ölçümü hazır: **≥1 hafta gerçek kullanım ölçümü**, sonra karar (ölçüm geçmezse yazılmaz);
+   kural ve kapsam `docs/specs/2026-09-26-autodream-lite-roadmap.md` §10
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f9a8b5f)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
 6. Günlük log Faz-2: PreCompact kurtarma çizgisi (spec'te ertelenen kemer)
-7. OpenCode kapanış olayı yok (`session.deleted` yalnız silmede) → yetim bloğu
-   "yarıda kaldı" yerine "kapanış alınamadı · son etkinlik HH:MM" diye kapatma
-   (~30 dk; günlük-log spec'i Faz-2)
+7. ~~OpenCode kapanış olayı yok → yetim bloğu kapatma~~ **TAMAMLANDI** (2026-09-26):
+   blok "kapanış kaydı yok" etiketiyle kapanıyor, son etkinlik ve receipt penceresi
+   yazılıyor; canlı opencode akışıyla doğrulandı

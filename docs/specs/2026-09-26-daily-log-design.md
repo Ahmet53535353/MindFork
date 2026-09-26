@@ -64,13 +64,18 @@
    state dosyası varsa (bitiş kaydı olmayan oturum) açık bloğun başlığı
    `## OPEN (yarıda kaldı) · ...` işaretlenir, state temizlenir. V2 bu vakada sessizdi.
 2. **(Faz-2, ertelendi)** PreCompact kurtarma çizgisi — çökme-öncesi yarım blok.
-3. **(Faz-2, canlı E2E bulgusu)** Kapanış olayı hiç gelmeyen istemciler:
+3. **(Faz-2, UYGULANDI 2026-09-26)** Kapanış olayı hiç gelmeyen istemciler:
    `opencode` `SessionEnd`'i yalnız `session.deleted`'e bağlı
    (`beyin_v3_opencode.py`), `antigravity`'de eşleme yok — yani normal kapanışta
    kemer-1 yanlış etiketliyor (`yarıda kaldı`) ve süre/istem/receipt satırları
    dolmuyor. Düzeltme: yetim bloğu `## … (kapanış alınamadı) · harness · son
    etkinlik HH:MM` ile kapatıp o ana kadarki receipt penceresini eklemek
    (blok kapanır, iz kalır, "yarıda kaldı" yalnız gerçek çökme için kalır).
+   **Teslim edildi:** yetim blok `## HH:MM–? · harness · N istem · son etkinlik SS:DD
+   (kapanış kaydı yok)` ile kapanır; son etkinlik penceredeki en son receipt, yoksa
+   başlangıç saati. Etiket nötr çünkü normal kapanış ile çökme elimizde ayırt edilemiyor.
+   Canlı opencode akışıyla doğrulandı. Aynı işte bulunan sızıntı giderildi:
+   `needs_reflection.<key>` hiç silinmiyordu.
 
 ## Kabul testleri (`tests/custom/v3_daily_log_test.py`)
 

@@ -50,6 +50,22 @@ Yönetilen blok dışında `AGENTS.md` ya da `CLAUDE.md` içinde `knowledge/` kl
 
 `python3 beyin.py preferences --daily-log on` her oturumun olgu bloğunu `daily/log/YYYY-MM-DD.md` altına ekler: SessionStart bloğu açar (boş bir `### Özet` bölümüyle), SessionEnd başlık-bitiş saati, istemci, istem sayısı, oturum içi receipt referansları ve reflection işaretiyle kapatır. Özeti makine yazmaz — model çağrılmaz; SessionStart'taki tek satırlık hatırlatmayı gören aktif ajan Özet'i Bağlam / Önemli Konuşmalar / Alınan Kararlar / Öğrenilenler / Yapılacaklar başlıklarıyla doldurur, kalıcı değer yoksa boş bırakır. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez; transcript hiçbir yere gönderilmez. Çökmeyle yarıda kalan oturum bir sonraki açılışta `OPEN (yarıda kaldı)` olarak işaretlenir. Log receipt üretmez, `daily/v3/` indeksiyle ve devir kartıyla oynamaz; passage yolu `daily/` kaynaklarını her zaman dışladığı için tur başı bağlamı şişirmez. Tasarım ve gerekçe: `docs/specs/2026-09-26-daily-log-design.md`.
 
+## Konsolidasyon penceresi (`dream`)
+
+`python3 beyin.py dream` yalnız **raporlar**, hiçbir şey yazmaz: pencere kapıları
+(son çalışmadan ≥24 saat ve ≥5 yeni receipt, ayrıca `state/dream.lock` kilidi
+serbest mi), boyut envanteri, alıntı ısısı (not başına receipt referansı) ve
+aday listeleri (Prune: `status: draft` + 90 gün + alıntı 0; Merge: yalnız
+alıntılı, başlıkları örtüşen notlar; Refresh: 12k karakteri aşan el yazımı
+notlar). Aday silmez; konsolidasyonu oturumdaki ajan ve insan yapar.
+
+Aynı ölçüm `doctor` çıktısında `oversize` alanı olarak da görünür: tüm vault'ta
+tavanı aşan dosyalar, üretilen projeksiyonlar `generated` olarak işaretli. Yeni
+ayar yoktur; `Last-Session`/`Threads` için companion bütçeleri yetkili kalır.
+
+İlk sürüm yalnız ölçümdür: model çağrısı, ağ, snapshot ve rapor dosyası yoktur.
+Tasarım: `docs/specs/2026-09-26-autodream-lite-roadmap.md`.
+
 ## Tur başı bağlam: pasaj düzeyinde strict arama
 
 Her mesajda hook'un eklediği bağlam (`context_mode: turn`) strict aramadan gelir. Bu arama notun tamamını tek bir kelime kümesi olarak puanlamaz; notu Markdown bloklarına böler ve her kaynaktan soruyla en iyi eşleşen bloğu, başlık yoluyla birlikte teslim eder (#83). Cevap uzun bir notun ortasındaysa notun ilk karakterleri değil cevabı taşıyan blok gelir; neredeyse her kelimeyi içeren uzun bir oturum arşivi de her soruda öne çıkamaz. Model çağrısı ve yeni bağımlılık yoktur.
