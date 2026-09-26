@@ -15,6 +15,14 @@ BUILTIN_PATTERNS = (
     re.compile(r"\bgh(?:p|o|u|s|r)_[A-Za-z0-9]{20,255}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,255}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,255}\b"),
+    # Stripe and friends use an underscore, not a hyphen, and a live/test segment, so
+    # plain "sk_" stays untouched: a form field like sk_adi_soyadi is not a secret.
+    re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,255}\b"),
+    re.compile(r"\b(?:xox[baprs]-|xapp-)[A-Za-z0-9-]{10,255}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{30,255}\b"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{30,255}\b"),
+    re.compile(r"\bSG\.[A-Za-z0-9_-]{15,64}\.[A-Za-z0-9_-]{15,64}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
     re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),

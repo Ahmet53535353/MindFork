@@ -69,6 +69,37 @@ class SecretFilterTest(unittest.TestCase):
         clean = 'Temiz bir Turkce ve English sentence; anahtar degeri icermiyor.'
         self.assertEqual(redact(clean, self.state), (clean, 0))
 
+    def test_builtin_patterns_cover_underscore_and_vendor_key_families(self):
+        # Canli kullanim testi: suzgec acikken Stripe anahtari duz metin olarak vault'a
+        # ve yerel veritabanina yaziliyordu. Tireli 'sk-' deseni alt cizgili 'sk_live_'
+        # bicimini yakalamiyor; diger yaygin saglayici anahtarlari da hic kapsam degil.
+        values = [
+            'sk_live_' + '1' * 24,
+            'sk_test_' + '2' * 24,
+            'rk_live_' + '3' * 24,
+            'xox' + 'b-' + '123456789012' + '-1234567890123-' + 'a' * 24,
+            'xap' + 'p-1-A012BCDEFG-' + 'b' * 20,
+            'AIza' + 'C' * 35,
+            'npm_' + 'D' * 36,
+            'SG.' + 'E' * 22 + '.' + 'F' * 43,
+            'eyJhbGciOiJIUzI1NiJ9.' + 'G' * 24 + '.' + 'H' * 24,
+        ]
+        filtered, count = redact('\n'.join(values), self.state)
+        self.assertEqual(count, len(values), filtered)
+        self.assertEqual(filtered.count('[REDACTED]'), len(values))
+        for value in values:
+            self.assertNotIn(value, filtered)
+        # Yanlis pozitif olmamali: normal Turkce metin, alan adi ve benzeri tanimlar.
+        clean = [
+            'sk_adi_soyadi alani kullanici formunda gonderiliyor',
+            'rk_live_sonrasi metin: test icin sk_live yaziyor ama anahtar degil',
+            'xox bileseni yok, API xoauth ile degil',
+            'AIza ile baslamayan normal bir cumle, key degerimiz burada',
+            'npm paketi adi npm_ ile baslamiyor, sadece npm kurulumu',
+        ]
+        for line in clean:
+            self.assertEqual(redact(line, self.state), (line, 0), line)
+
     def test_custom_state_literal_is_redacted_and_never_written_to_health(self):
         save(self.vault, {'secret_filter': True})
         self.state.mkdir(parents=True, exist_ok=True)

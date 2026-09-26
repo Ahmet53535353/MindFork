@@ -1,4 +1,5 @@
 """Companion regression scenarios: installed package, rich context, and user data."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,18 @@ import zipfile
 
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 COMPANION = '🔮 850-Companion'
+SCRIPTS = ROOT / 'template/.claude/scripts'
+
+
+def load(name, filename):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / filename)
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPTS))
+    return module
 
 
 class CompanionTest(unittest.TestCase):
@@ -213,6 +226,43 @@ class CompanionTest(unittest.TestCase):
             self.skipTest('Symlink creation unavailable')
         self.sync()
         self.assertNotIn('EXTERNAL_IDENTITY_CANARY', self.hook())
+
+
+class ContinuityRelevanceTest(unittest.TestCase):
+    """Süreklilik kalıbı: gerçek bir kullanıcının dönüş cümleleri eşleşmeli.
+
+    Canlı kullanım testinde bir haftalık tatilden dönen kullanıcı
+    "bir haftalık tatilden donduk, neler yapmistik" dedi ve otomatik baglam hic
+    gelmedi: Core/Kurallar/Last-Session sunulmadi, cunku kalip yalnizca bazi
+    tam ifadeleri ariyordu. Diakritik ve yakin cumleler de kapsam disiydi.
+    """
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load('companion_relevance', 'beyin_v3_companion.py')
+
+    def test_natural_return_phrasings_are_recognised(self):
+        for query in (
+                'bir haftalık tatilden döndük, neler yapmıştık',
+                'neredeydik, kaldığımız yer neresi',
+                'son durum ne, devam edelim mi',
+                'ne olmuştu o gün',
+                'bi haftalik tatilden donduk neler yapmistik',
+                'where did we leave off',
+                'what did we do last session',
+                'catch me up',
+                'son oturumda ne konuşmuştuk',
+                'beni hatırla', 'tercihlerim ne', 'kişiliğin ne',
+        ):
+            self.assertTrue(self.module.relevant(query), query)
+
+    def test_unrelated_work_prompts_do_not_trigger_companion_context(self):
+        for query in (
+                'bu dosyadaki hatayi duzelt',
+                'testleri calistir ve sonucu yaz',
+                'odeme_yontemi.md dosyasini ac',
+                'sk_adi_soyadi alanini duzelt',
+        ):
+            self.assertFalse(self.module.relevant(query), query)
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 
 NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md', 'memory-types.md')
 FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
@@ -161,8 +162,36 @@ def hygiene_notice(report):
             'afterwards rewrite in place, never append.\n')
 
 
+# A returning user phrases continuity in many ways, and often without diacritics or
+# from a different harness with a different keyboard. Folding first keeps the pattern
+# list ASCII; the phrase set covers what people actually type after a break, not only
+# the textbook wording: "neredeydik", "kaldığımız yer", "son durum ne", "ne olmuştu".
+CONTINUITY_PATTERN = re.compile(
+    r'(son (oturum|konus|gorus)|gecen (sefer|oturum|konus)|ne(ler)? (yap|ol|oldu|olmus|bitt|devam)|'
+    r'nerede (kal|kald|kaldik)|kaldigimiz yer|neredeydik|neredeyiz|son durum|'
+    r'beni (tani|tanit|hatirla)|kisili|tercihlerim|sen kimsin|kim oldugunu|hatirlat bana|'
+    r'last (session|time|week)|previous session|where (did we|we) leave|what did we do|'
+    r'remember me|catch me up|recap|personality|my (preferences|name)|who (am i|are you))')
+
+_DOTLESS_I = str.maketrans({'ı': 'i', 'İ': 'i', 'I': 'i'})
+
+
+def _fold(text):
+    """Lowercase and strip diacritics so the phrase list stays ASCII.
+
+    Turkish dotless ı is a letter of its own and does not decompose, so it is mapped
+    before the combining marks are dropped.
+    """
+    decomposed = unicodedata.normalize('NFKD', text.lower().translate(_DOTLESS_I))
+    return ''.join(character for character in decomposed if not unicodedata.combining(character))
+
+
 def relevant(query):
-    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|nerede kal|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query))
+    """Whether a prompt asks for continuity, so the companion sources must be offered."""
+    if not isinstance(query, str):
+        return False
+    return bool(CONTINUITY_PATTERN.search(_fold(query)))
+
 
 
 def stamp(header):
