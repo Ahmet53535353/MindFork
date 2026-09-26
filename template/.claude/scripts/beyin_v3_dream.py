@@ -12,12 +12,14 @@ Spec: docs/specs/2026-09-26-autodream-lite-roadmap.md
 from __future__ import annotations
 
 import datetime as dt
+from fnmatch import fnmatch
 import json
 import re
 import unicodedata
 from pathlib import Path
 
 import _portalock
+import beyin_v3_projections as projections
 
 MIN_HOURS = 24
 MIN_RECEIPTS = 5
@@ -26,8 +28,15 @@ NOTE_CAP_CHARS = 12000
 NOTE_TREES = ('knowledge', 'notes')
 # Generated and human index files carry the same size discipline as single notes; the
 # budgets are checked here and reported, never enforced by rewriting the file.
-SIZE_CHECKED = ('knowledge/index.md', 'knowledge/log.md', 'knowledge/v3/outcomes.md',
-                'Last-Session.md', 'Threads.md', 'Journal.md')
+SIZE_CHECKED = ('knowledge/index.md', 'knowledge/log.md', 'knowledge/v3/outcomes.md')
+GENERATED_GLOBS = ('daily/v3/*.md',)
+
+
+def is_generated(relative):
+    """One source of truth with the projection writer: views the engine rewrites itself."""
+    return (relative.startswith('knowledge/v3/')
+            or relative in projections.PROJECTION_GUARD
+            or any(fnmatch(relative, pattern) for pattern in GENERATED_GLOBS))
 PRUNE_MARKER = 'draft'
 
 
@@ -88,8 +97,10 @@ def _note_files(vault):
     return files
 
 
-def inventory(vault, limits=None):
-    # limits: optional {relative path: character cap} from the companion hygiene budgets.
+def inventory(vault, limits=None, extra=()):
+    # limits: {vault-relative path: character cap} from the companion hygiene budgets.
+    # extra: further vault-relative paths measured against the shared note cap
+    # (the companion handoff files, whose directory is a local convention).
     caps = dict(limits or {})
     files = _note_files(vault)
     oversize = []
@@ -97,7 +108,8 @@ def inventory(vault, limits=None):
     def entry_for(relative, chars):
         cap = caps.get(relative)
         if chars > NOTE_CAP_CHARS or (cap is not None and chars > cap):
-            return {'path': relative, 'chars': chars, 'cap': cap if cap is not None and cap > NOTE_CAP_CHARS else NOTE_CAP_CHARS}
+            limit = cap if cap is not None and cap > NOTE_CAP_CHARS else NOTE_CAP_CHARS
+            return {'path': relative, 'chars': chars, 'cap': limit, 'generated': is_generated(relative)}
         return None
 
     for path in files:
@@ -105,13 +117,21 @@ def inventory(vault, limits=None):
         found = entry_for(relative, len(path.read_text(encoding='utf-8')))
         if found:
             oversize.append(found)
-    for relative in SIZE_CHECKED:
+    for relative in tuple(SIZE_CHECKED) + tuple(extra):
         path = Path(vault) / relative
         if not path.is_file() or any(entry['path'] == relative for entry in oversize):
             continue
         found = entry_for(relative, len(path.read_text(encoding='utf-8')))
         if found:
             oversize.append(found)
+    for pattern in GENERATED_GLOBS:
+        for path in sorted(Path(vault).glob(pattern)):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(Path(vault)).as_posix()
+            found = entry_for(relative, len(path.read_text(encoding='utf-8')))
+            if found:
+                oversize.append(found)
     oversize.sort(key=lambda entry: entry['path'])
     return {'notes': len(files), 'chars': sum(len(path.read_text(encoding='utf-8')) for path in files),
             'oversize': oversize}
@@ -184,14 +204,17 @@ def candidates(vault, store, citations, oversize, now=None, stale_days=STALE_DAY
                 and citations.get(source, 0) == 0):
             prune.append({'source': source, 'age_days': age})
     prune.sort(key=lambda entry: entry['source'])
-    refresh = [{'path': entry['path'], 'chars': entry['chars']} for entry in oversize]
+    # Refresh rewrites a human source. Generated indexes are reported by size and repaired
+    # by whatever produces them, never by a window.
+    refresh = [{'path': entry['path'], 'chars': entry['chars']} for entry in oversize
+               if not entry['generated']]
     return {'prune': prune, 'merge': cited_pairs, 'refresh': refresh}
 
 
-def report(vault, state, store, now=None, limits=None):
+def report(vault, state, store, now=None, limits=None, extra=()):
     gates = gate_status(vault, state, store, now=now)
     stats = store.receipt_stats()
-    found = inventory(vault, limits=limits)
+    found = inventory(vault, limits=limits, extra=extra)
     return {'phase': 1, 'wrote': False, 'model_calls': False, 'network': False,
             'gates': gates, 'inventory': found, 'heat': stats['citations'],
             'candidates': candidates(vault, store, stats['citations'], found['oversize'], now=now)}

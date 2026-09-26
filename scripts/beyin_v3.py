@@ -36,6 +36,45 @@ def load_engine():
     return module
 
 
+def dream_cap():
+    import beyin_v3_dream
+    return beyin_v3_dream.NOTE_CAP_CHARS
+
+
+def hygiene_scope(state, vault):
+    """Companion budgets as vault-relative paths, plus the handoff files to measure.
+
+    The companion directory is a local convention, so the CLI resolves it and hands the
+    window vault-relative paths. A missing or damaged runtime file yields no budgets, which
+    leaves the shared note cap in charge.
+    """
+    load_sync()
+    import beyin_v3_companion as companion
+    try:
+        configured, _ = companion.read_limits(state)
+    except Exception:  # a damaged budget never hides a window or a doctor report
+        return {}, []
+    try:
+        directory = companion.directory(vault)
+    except Exception:
+        directory = None
+    limits, extra = {}, []
+    for name, cap in configured.items():
+        relative = f'{directory.relative_to(vault).as_posix()}/{name}' if directory else name
+        if cap:
+            limits[relative] = cap
+        extra.append(relative)
+    if directory:
+        extra.append(f'{directory.relative_to(vault).as_posix()}/Journal.md')
+    return limits, extra
+
+
+def dream_inventory(vault, state):
+    import beyin_v3_dream
+    limits, extra = hygiene_scope(state, vault)
+    return beyin_v3_dream.inventory(vault, limits=limits, extra=extra)
+
+
 def load_sync():
     adjacent = Path(__file__).resolve().parent
     directory = adjacent if (adjacent / "beyin_v3_sync.py").exists() else Path(__file__).resolve().parents[1] / "template/.claude/scripts"
@@ -267,6 +306,13 @@ def main(argv=None):
             try:
                 import beyin_v3_companion as companion
                 result['companion_hygiene'] = companion.hygiene(vault, state)
+                # One size field for the whole vault: companion budgets where they exist,
+                # the shared note cap elsewhere. Reported, never rewritten.
+                sizes = dream_inventory(vault, state)
+                result['oversize'] = {'files': sizes['oversize'],
+                                       'notes_over_cap': sum(1 for entry in sizes['oversize']
+                                                             if not entry['generated']),
+                                       'cap': dream_cap()}
             except Exception as exc:  # a size report must never hide the rest of doctor
                 result['companion_hygiene'] = {'status': 'unavailable', 'error': type(exc).__name__}
             try:
@@ -331,12 +377,8 @@ def main(argv=None):
         elif args.command == "dream":
             load_sync()
             import beyin_v3_dream
-            import beyin_v3_companion as companion
-            try:
-                limits = {name: value for name, value in companion.read_limits(state)[0].items() if value}
-            except Exception:  # a missing or invalid hygiene budget never hides the window report
-                limits = {}
-            result = beyin_v3_dream.report(vault, state, store, limits=limits)
+            limits, extra = hygiene_scope(state, vault)
+            result = beyin_v3_dream.report(vault, state, store, limits=limits, extra=extra)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
         elif args.command == "companion-compact":

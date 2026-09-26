@@ -1,4 +1,7 @@
 """Deterministic receipt indexes; never rewrite existing human daily/knowledge."""
+
+# Sources the engine rewrites; never a distillation target and never a refresh candidate.
+PROJECTION_GUARD = ('knowledge/index.md', 'knowledge/log.md')
 from collections import defaultdict
 from datetime import datetime
 import json
@@ -193,7 +196,7 @@ def knowledge_freshness(vault, db, now=None):
             except ValueError:
                 continue
             # Generated views and the V2 compiler seeds are not distillation.
-            if relative.startswith('knowledge/v3/') or relative in ('knowledge/index.md', 'knowledge/log.md'):
+            if relative.startswith('knowledge/v3/') or relative in PROJECTION_GUARD:
                 continue
             try:
                 mtime = path.stat().st_mtime

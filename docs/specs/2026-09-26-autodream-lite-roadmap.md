@@ -28,10 +28,15 @@ Anthropic'in AutoDream kapı modelinin işlevsel karşılığı uygulanır — *
    oturum sayacı yok. `receipts` ise her vault'ta var. (Ölçüm öncesi önerilen
    (a) varyantı — hook'ta kalıcı oturum sayacı — ihtiyaç doğarsa ayrı iş.)
 3. **Kilit:** `state/dream.lock` üzerinde `_portalock.exclusive`; kilit alınamazsa
-   çıkış kodu ile vazgeçilir (ikinci konsolidasyon yarışmaz).
+   pencere vazgeçilir (ikinci konsolidasyon yarışmaz). **Düzeltme (2026-09-26, faz-1
+   uygulaması):** kilit *yazan* bir pencerede zorunludur; **salt-okunur rapor kapıyı
+   yalnızca bildirir ve hiçbir koşulda kendi kilit dosyasını oluşturmaz** (dosya
+   yoksa kilit tutulamaz). Rapor, gerçek bir pencerenin ne zaman açılacağını söyler.
 
-Kapılar `--dry-run` için de geçerlidir: ölçüm aracı da idisip lin uyurmaz
-(Altın Kural: yeni kalıcı özellik ancak ölçümle; ölçümün kendisi bu komuttur).
+Kapıları uygulayan pencere **mutasyonludur** (`--apply`, faz 2+). Rapor (`dream`,
+faz 1) yalnızca kapı durumunu hesaplar: `dream.last_run` filigranını **tüketmez**
+ve hiçbir şey yazmaz — aksi halde bir haftalık ölçüm turunun kendi ölçüm
+pencerelerini kapatması anlamsız olurdu.
 
 Zamanlayıcı yok: paket daemon'laşmaz, ancak komut **idempotent ve kapılı**
 olduğu için isteyen kullanıcı kendi `cron`/systemd timer'ıyla çağırabilir —
@@ -45,6 +50,9 @@ desteklenen senaryo, paketin kendi zamanlayıcısı değil.
 - Eşikler (ilk sürüm, ölçümle ayarlanır): `>400` not veya `>150k` karakter → uyarı;
   tek dosya `>12k` karakter → Refresh adayı; 90 gündür hiç referans verilmemiş ve
   `status: draft` → Prune adayı (**yalnız aday listesi, silme otomatik değil**).
+- `status: draft` **insanın koyduğu açık Prune işareti**dir; bu özellikle tanımlanan
+  yeni sözcüktür (notlarda `status` serbest bir alandır, görev statüleriyle karışmaz).
+  O işaret olmadan hiçbir şey Prune adayı bile olmaz.
 - Pencere çıktısı raporu: `daily/v3/` içine değil, `archive/auto-dream/<tarih>/report.md`
   (telemetri + geri alabilirlik).
 
