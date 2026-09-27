@@ -121,6 +121,26 @@ class InstallLegacyExemptionTest(unittest.TestCase):
                 self.assertEqual(path.read_bytes(),
                                  (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_bytes())
 
+    def test_windows_edition_doctor_skill_stays_exempt_at_both_roots(self):
+        # From v3.0.2 on install.ps1 writes scripts/skill.beyin-doktor.windows.md to .claude
+        # and then copies .claude\skills\* to .agents\skills: those bytes sit at both roots.
+        windows = (RELEASED / 'windows-doctor.md').read_bytes()
+        paths = [self.seed(root + '/skills/beyin-doktor/SKILL.md', windows) for root in ROOTS]
+        self.installer.install(self.vault, self.state)
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(path.read_bytes(),
+                                 (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_bytes())
+
+    def test_shipped_windows_doctor_bytes_are_exempt(self):
+        # install.ps1 still ships; editing the Windows doctor without pinning its new
+        # digest would strand every Windows vault installed after that edit.
+        current = self.installer.digest((ROOT / 'scripts/skill.beyin-doktor.windows.md').read_bytes())
+        hashes = self.installer.default_skill_hashes()
+        for root in ROOTS:
+            with self.subTest(root=root):
+                self.assertIn(current, hashes[root + '/skills/beyin-doktor/SKILL.md'])
+
     def test_unknown_skill_content_is_still_an_unmanaged_conflict(self):
         for root in ROOTS:
             for name in SKILLS:
