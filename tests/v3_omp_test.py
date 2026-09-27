@@ -189,6 +189,29 @@ class OMPHarnessTest(unittest.TestCase):
         self.assertEqual(result['first'], None, 'A missing interpreter degrades to no context, never an error')
         self.assertEqual(result['second'], None)
 
+    def test_doctor_reports_stale_global_hook_copy(self):
+        # The installer never updates or removes a global copy; a user-managed copy can fall
+        # behind after an engine update. Doctor must report the digest mismatch informationally.
+        global_dir = Path.home() / '.omp/agent/hooks/pre'
+        global_dir.mkdir(parents=True, exist_ok=True)
+        global_copy = global_dir / 'beyin-v3.ts'
+        global_copy.write_text('// stale copy of an older adapter\n', encoding='utf-8')
+        self.addCleanup(lambda: (global_copy.unlink(missing_ok=True), global_dir.rmdir()))
+        doctor = json.loads(self.cli('doctor').stdout)
+        self.assertTrue(doctor['omp_global_hook']['stale'])
+        self.assertIn('not updated by install/rollback', doctor['omp_global_hook']['note'])
+
+    @unittest.skipUnless(BUN, 'bun is required to execute the OMP hook')
+    def test_doctor_treats_global_symlink_as_absent(self):
+        # A user-managed symlink to the vault hook is always fresh by construction: doctor
+        # must not report it as a stale file, because its target follows engine updates.
+        global_dir = Path.home() / '.omp/agent/hooks/pre'
+        global_dir.mkdir(parents=True, exist_ok=True)
+        global_link = global_dir / 'beyin-v3.ts'
+        global_link.symlink_to(self.hook_file)
+        self.addCleanup(lambda: (global_link.unlink(missing_ok=True), global_dir.rmdir()))
+        doctor = json.loads(self.cli('doctor').stdout)
+        self.assertNotIn('omp_global_hook', doctor)
 
 if __name__ == '__main__':
     unittest.main()
