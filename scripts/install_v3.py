@@ -105,11 +105,13 @@ def default_skill_hashes():
     """Exempt only the starter-skill bytes released tags actually left at each managed path."""
     hashes = {root + "/skills/" + name + "/SKILL.md": list(RELEASED_SKILL_HASHES[name])
               for root in SKILL_ROOTS for name in STARTER_SKILLS}
-    doctor = hashes[".claude/skills/beyin-doktor/SKILL.md"]
-    doctor += [OLDER_STOCK_DOCTOR_HASH, STOCK_DOCTOR_HASH]
+    # V2's Windows installer (scripts/install.ps1) copied .claude\skills\* into .agents\skills
+    # instead of linking it, so the stock doctor bytes were left at both roots there.
+    for root in SKILL_ROOTS:
+        hashes[root + "/skills/beyin-doktor/SKILL.md"] += [OLDER_STOCK_DOCTOR_HASH, STOCK_DOCTOR_HASH]
     source = ROOT / "template/.claude/skills/beyin-doktor/SKILL.md"
     if source.exists():
-        doctor.append(digest(source.read_bytes()))
+        hashes[".claude/skills/beyin-doktor/SKILL.md"].append(digest(source.read_bytes()))
     return {name: sorted(set(values)) for name, values in hashes.items()}
 
 

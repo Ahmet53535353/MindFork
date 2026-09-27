@@ -110,6 +110,17 @@ class InstallLegacyExemptionTest(unittest.TestCase):
         self.assertEqual(path.read_bytes(),
                          (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_bytes())
 
+    def test_windows_v2_copied_stock_doctor_skill_stays_exempt_at_both_roots(self):
+        # V2's scripts/install.ps1 copied .claude\skills\* into .agents\skills instead of
+        # linking it, so a Windows V2 vault holds the stock doctor bytes at both roots.
+        stock = (RELEASED / 'stock-claude-doctor.md').read_bytes()
+        paths = [self.seed(root + '/skills/beyin-doktor/SKILL.md', stock) for root in ROOTS]
+        self.installer.install(self.vault, self.state)
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(path.read_bytes(),
+                                 (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_bytes())
+
     def test_unknown_skill_content_is_still_an_unmanaged_conflict(self):
         for root in ROOTS:
             for name in SKILLS:
