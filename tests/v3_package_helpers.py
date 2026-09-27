@@ -12,6 +12,12 @@ INSTALLER = ROOT / 'scripts/install_v3.py'
 BUILDER = ROOT / 'scripts/build_v3_release.py'
 
 
+def windows_runtime_env():
+    """Variables Windows needs even in a cleared test environment. Without SYSTEMROOT,
+    ssl.SSLContext() fails on Python 3.14 (OpenSSL 3.5): '[SSL] unknown error (0xa080024)'."""
+    return {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR') if key in os.environ}
+
+
 def isolated_env(home):
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
@@ -19,9 +25,7 @@ def isolated_env(home):
            'LOCALAPPDATA': str(home / 'localappdata'), 'TEMP': str(home), 'TMP': str(home),
            'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
            'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8', 'BEYIN_V3_NO_SPAWN': '1'}
-    for key in ('SYSTEMROOT', 'WINDIR'):
-        if key in os.environ:
-            env[key] = os.environ[key]
+    env.update(windows_runtime_env())
     return env
 
 
