@@ -265,6 +265,19 @@ def human_result(result, command, installed_version=None):
             more = references['dead_count'] - min(3, len(references['dead']))
             lines.append('Talimat ve skill dosyalarinda kirik baglanti (bilgi): ' + shown +
                          (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
+        boundary_report = result.get('boundary') or {}
+        for finding in boundary_report.get('findings') or []:
+            if finding.startswith('kasa_excluded:'):
+                lines.append('Kasa sinifi klasor taramalarin disinda (bilgi): ' + ascii_text(finding.split(': ', 1)[1]) +
+                             '; tam garanti icin kaynaklarina visibility: private ekle.')
+            else:
+                lines.append('Kok siniri: ' + ascii_text(finding))
+        closed = result.get('closed_tasks') or {}
+        if closed.get('closed_count'):
+            shown = ', '.join(entry['source'] + ' (' + str(entry['days_old']) + ' gun)' for entry in closed.get('closed')[:3])
+            more = closed['closed_count'] - min(3, len(closed.get('closed') or []))
+            lines.append('Kapali durumda sedintede duran gorev (bilgi, tasima senin kararin): ' + shown +
+                         (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
         lines += state_location_lines(result.get('state_location'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
