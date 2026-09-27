@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.5.0:** Aynı vault'ta paralel oturumlar ve birden çok makine destekleniyor (oturum başına devir kartı, [çoklu makine rehberi](docs/v3/MULTI-MACHINE.md)), `recap` son işleri kaynaklarıyla listeliyor, istemediğin skill ve adaptörleri kapatabiliyorsun ve Windows MSIX ortamında state yolu doğru sabitleniyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.5.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.5.1:** Güncelleyici depo adı değişikliğine hazırlandı; herkesin 3.5.1'e geçmesi önerilir ([notlar](docs/v3/releases/3.5.1.md)). V3.5.0 ile aynı vault'ta paralel oturumlar ve birden çok makine destekleniyor (oturum başına devir kartı, [çoklu makine rehberi](docs/v3/MULTI-MACHINE.md)), `recap` son işleri kaynaklarıyla listeliyor, istemediğin skill ve adaptörleri kapatabiliyorsun ve Windows MSIX ortamında state yolu doğru sabitleniyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.5.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
