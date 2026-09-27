@@ -445,6 +445,47 @@ class CompactionPlanTest(unittest.TestCase):
             self.assertIn(moved, result['archive'])
             self.assertNotIn(moved, result['live'])
 
+    def test_dated_lines_inside_the_newest_card_never_split_it(self):
+        # #118: an older date quoted inside a card is card content, not an older entry, so
+        # the newest card keeps its next step and the older card moves whole.
+        newest_head = '## 2026-09-27 10:00 · ev · 955bfafa\nEN_YENİ_KART: PR hazırlandı.\n'
+        next_step = '- Sıradaki: gözden geçirme.\n\n'
+        older = ('## 2026-09-26 14:05 · ofis · 3f9a1c2b\nESKİ_KART: ' + FILLER * 3 + '\n'
+                 '- 2026-09-25 ESKİ_KARTIN_MADDESİ\n### Ayrıntı\n2026-09-24: ESKİ_ALT\n')
+        for inner in ('- 2026-09-20 kararı hâlâ geçerli.\n', '- Karar (2026-09-20) geçerli.\n',
+                      '\n2026-09-20 kararı geçerli.\n', '### 2026-09-20 notları\nnot\n',
+                      '- 2026-10-01 teslim tarihi.\n'):
+            with self.subTest(inner=inner):
+                newest = newest_head + inner + next_step
+                result = self.plan('# Son oturum\n\n' + newest + older, 'Last-Session.md', 450)
+                self.assertIn(newest, result['live'])
+                self.assertIn(older, result['archive'])
+                self.assertEqual(result['moved_entries'], 1, 'each card moves whole, as one entry')
+                for moved in ('ESKİ_KART', 'ESKİ_KARTIN_MADDESİ', 'ESKİ_ALT'):
+                    self.assertNotIn(moved, result['live'])
+                self.assertLessEqual(len(result['live']), 450)
+
+    def test_a_card_ends_at_a_heading_of_its_own_level(self):
+        text = ('# Son oturum\n\n## 2026-09-27 10:00 · ev\nYENİ\n\n## 2026-09-26 09:00 · ofis\nORTA ' + FILLER * 2 +
+                '\n\n## Notlar\nNOT_KALIR\n2026-09-01: NOTLARDAKİ_ESKİ ' + FILLER * 2 + '\n')
+        result = self.plan(text, 'Last-Session.md', 200)
+        self.assertEqual(result['moved_entries'], 2)
+        self.assertIn('## 2026-09-27 10:00 · ev\nYENİ\n', result['live'])
+        self.assertIn('## Notlar\nNOT_KALIR\n', result['live'])
+        for moved in ('ORTA', 'NOTLARDAKİ_ESKİ'):
+            self.assertIn(moved, result['archive'])
+            self.assertNotIn(moved, result['live'])
+
+    def test_dated_update_headings_keep_their_dated_items_in_threads(self):
+        text = ('# Threads\n## Active Threads\n### Thread: A\n#### 2026-09-24 güncelleme\nA_YENİ\n'
+                '- 2026-09-01 A_YENİNİN_MADDESİ\n#### 2026-09-10 güncelleme\nA_ESKİ ' + FILLER * 3 + '\n'
+                '- 2026-09-02 A_ESKİNİN_MADDESİ\n')
+        result = self.plan(text, 'Threads.md', 250)
+        self.assertEqual(result['moved_entries'], 1)
+        self.assertIn('#### 2026-09-24 güncelleme\nA_YENİ\n- 2026-09-01 A_YENİNİN_MADDESİ\n', result['live'])
+        self.assertIn('### Thread: A\n#### 2026-09-10 güncelleme\nA_ESKİ ' + FILLER * 3 + '\n- 2026-09-02 A_ESKİNİN_MADDESİ\n',
+                      result['archive'])
+
     def test_dated_lines_directly_under_active_threads_never_move(self):
         text = ('# Threads\n2026-09-02: BAŞLIK_ALTI\n## Active Threads\n' +
                 ''.join(f'- 2026-09-{day:02d} KONU_{day} ' + FILLER + '\n' for day in range(1, 20)) +
