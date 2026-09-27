@@ -482,6 +482,34 @@ def main(argv=None):
                 result['validity'] = {'ignored_rejection_count': 0, 'ignored_rejections': [], 'truncated': False,
                                       'error': (type(exc).__name__ + ': ' + str(exc))[:240]}
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            # Information only: a leftover global OMP hook copy predates the vault-owned plan
+            # (OMP.md says the installer never updates or removes it). After an engine update the
+            # copy can be older than the installed vault hook, so a session outside the vault can
+            # keep running an outdated adapter without any health signal. Report a digest mismatch;
+            # never mutate or delete the user file. Symlinks (user-linked to the vault hook) are
+            # always fresh by construction and reported as absent.
+            try:
+                adjacent_scripts = Path(__file__).resolve().parent
+                template_scripts = adjacent_scripts if (adjacent_scripts / 'beyin_v3_omp.py').exists() else Path(__file__).resolve().parents[1] / 'template/.claude/scripts'
+                omp_planner = template_scripts / 'beyin_v3_omp.py'
+                if omp_planner.exists():
+                    spec = importlib.util.spec_from_file_location('beyin_doctor_omp', omp_planner)
+                    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+                    generated = next(iter(module.plan_plugin(vault, state).values()))
+                    global_copy = Path.home() / '.omp/agent/hooks/pre/beyin-v3.ts'
+                    if global_copy.exists() and not global_copy.is_symlink():
+                        current_digest = hashlib.sha256(global_copy.read_bytes()).hexdigest()
+                        generated_digest = hashlib.sha256(generated).hexdigest()
+                        if current_digest != generated_digest:
+                            result['omp_global_hook'] = {
+                                'path': str(global_copy),
+                                'stale': True,
+                                'note': 'global copy differs from the installed vault hook; it is not updated by install/rollback, and OMP.md advises against keeping one',
+                            }
+                        else:
+                            result['omp_global_hook'] = {'path': str(global_copy), 'stale': False}
+            except Exception as exc:  # a stale-copy report must never hide the rest of doctor
+                result['omp_global_hook'] = {'status': 'unavailable', 'error': type(exc).__name__}
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
