@@ -85,6 +85,8 @@ penceresi de yaşı hesaplayamaz. Bir olayın ne zaman olduğu bilinmiyorsa tari
 
 Kullanıcının reddettiği `kind: inference` veya `kind: preference` kaydını silme: kaynak frontmatter'ında `validity: rejected`, `rejected_reason` ve `rejected_at` (ISO tarih ya da zaman damgası) tut. Eski `status: rejected` çıkarım/tercih kayıtları da güncel bağlama girmez. Geçmişi bilinçli incelemek için `python3 beyin.py history KAYIT_ID` kullan; geçmişteki iddiayı geçerli tercih diye uygulama. Aynı iddia `Core.md` gibi daha geniş bir güncel kaynakta da yazılıysa o kaynağı ayrıca düzelt. Geçerli bir çıkarıma dayanarak bir seçeneği elemeden önce kullanıcıya o andaki niyetini ayıran tarafsız bir soru sor; kullanıcı soru sorulmamasını veya açık kapsamı istediyse bu isteğe uy.
 
+Kullanıcı "son günlerde ne yaptık" gibi yakın dönem sorusu sorarsa `python3 beyin.py recap --days 7` çalıştır. Sonuç ajanların yazdığı receipt iddialarıdır, doğrulanmış olgu değildir; gerekiyorsa listelenen kaynağı aç. Özel kaynak bağlantıları gizlenir ve sayılır; gizleneni tahmin etme.
+
 ## Not ve görev yazma
 
 Kullanıcının seçtiği klasörü ve mevcut dosyaları koru. **Yeni görev için `task-create` kullan; görevi `note-create` ile oluşturma.** Geçici UTF-8 JSON dosyası hazırla ve `python3 beyin.py task-create --file TASK_JSON` çalıştır. Windows'ta `py -3 beyin.py task-create --file TASK_JSON` eşdeğerdir.
@@ -158,6 +160,7 @@ Kullanıcı “ekonomik moda geç”, “otomatik kontrolleri kapat” veya “k
 - Receipt/note/task yazımlarında opt-in sır süzgeci: `python3 beyin.py preferences --secret-filter on`
 - Günlük oturum logu (varsayılan açık): `python3 beyin.py preferences --daily-log off` kapatır, `on` tekrar açar. Kullanıcı bir tercihi hiç belirtmediyse oturum başında bir kez "günlük log açık, şunu çalıştırarak kapatabilirsin" de; belirttikten sonra tekrar etme.
 - Hafıza dosyası sınırları: `python3 beyin.py preferences --last-session-chars 3000 --threads-chars 8000` (0 kapatır; ayar bu makinedeki runtime klasöründe tutulur)
+- Bileşen veya skill susturma: `python3 beyin.py preferences --exclude-component skills/beyin-doktor` (geri açmak için `--include-component`; ayarlar `.beyin-exclusions.json` dosyasında tutulur, sonraki güncelleme veya kurulumda uygulanır)
 
 Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 5000 karakter ek bağlam. Ekonomik: yeni oturumda taze kontrol ve en çok 2000 karakter bağlam; sonraki olaylarda kontroller arası en az 15 dakika. Manuel: otomatik iş başlatma ve bağlam kapalı; açık `context`, `sync`, not/görev ve receipt komutları çalışır. Sadece aralığı değiştirmek manuel modu açmaz; kullanıcı kontrolleri yeniden açmayı istiyorsa `--auto-sync on` kullan.
 

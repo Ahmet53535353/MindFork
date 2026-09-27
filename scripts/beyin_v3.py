@@ -150,6 +150,9 @@ def parser():
     sub.add_parser("sync", help="Reconcile Markdown sources into local state")
     sub.add_parser("skill-sync", help="Reconcile project-local shared skills")
     sub.add_parser("doctor", help="Read local hook health and pending metadata counts")
+    recap = sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
+    recap.add_argument("--days", type=int, default=7, help="Calendar days in UTC, including today (1..366)")
+    recap.add_argument("--limit", type=int, default=20, help="Maximum recent receipts to return (1..100)")
     settings = sub.add_parser("preferences", help="Control automatic local checks and injected context")
     settings.add_argument("--profile", choices=("normal", "economical", "manual"))
     settings.add_argument("--auto-sync", choices=("on", "off"))
@@ -161,6 +164,10 @@ def parser():
     settings.add_argument("--update-notifications", choices=("on", "off"))
     settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
     settings.add_argument("--threads-chars", type=int, help="Hygiene limit for Threads.md; 0 turns it off")
+    settings.add_argument("--exclude-component", action="append", default=[], metavar="COMPONENT",
+                          help="Disable/exclude a managed component or skill (repeatable)")
+    settings.add_argument("--include-component", action="append", default=[], metavar="COMPONENT",
+                          help="Re-enable a previously excluded component (repeatable)")
     compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
     compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
@@ -232,7 +239,7 @@ def main(argv=None):
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
         engine = load_engine() if args.command != "jev" else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
-        sync = load_sync()(vault, state) if args.command in ("sync", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "recap", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -254,9 +261,29 @@ def main(argv=None):
                 changes['secret_filter'] = args.secret_filter == 'on'
             if args.daily_log is not None:
                 changes['daily_log'] = args.daily_log == 'on'
+            import beyin_v3_exclusions as exclusions
+            exclusion_notice = None
+            if args.exclude_component or args.include_component:
+                exclude_args = [name.replace('\\', '/') for name in args.exclude_component]
+                include_args = [name.replace('\\', '/') for name in args.include_component]
+                exclusions.validate_exclusions(exclude_args + include_args)
+                current_excluded = set(exclusions.read_exclusions(vault))
+                current_excluded.update(exclude_args)
+                current_excluded.difference_update(include_args)
+                result_excluded = exclusions.save_exclusions(vault, current_excluded)
+                exclusion_notice = 'Haric tutma tercihleri kaydedildi; bir sonraki kurulum ya da guncellemede uygulanir.'
+            else:
+                # A hand-edited typo must not block unrelated preference changes.
+                try:
+                    result_excluded = exclusions.read_exclusions(vault)
+                except ValueError as exc:
+                    result_excluded, exclusion_notice = [], 'Haric tutma dosyasi gecersiz: ' + str(exc)
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
-            result = {'status': 'saved' if changes or args.profile else 'current', 'preferences': settings,
+            result = {'status': 'saved' if changes or args.profile or (args.exclude_component or args.include_component) else 'current',
+                      'preferences': settings, 'excluded_components': result_excluded,
                       'model_calls': False, 'timer_installed': False}
+            if exclusion_notice:
+                result['exclusion_notice'] = exclusion_notice
             # Machine-local like update notifications: rollback-safe, outside the vault schema.
             result['companion_limits'] = companion.save_limits(state, limits) if limits else companion.read_limits(state)[0]
             if limits:
@@ -294,8 +321,20 @@ def main(argv=None):
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
             manifest = state / 'v3-install.json'
-            result['kept_legacy_runners'] = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', []) if manifest.exists() else []
+            manifest_data = json.loads(manifest.read_text(encoding='utf-8')) if manifest.exists() else {}
+            result['kept_legacy_runners'] = manifest_data.get('kept_legacy', [])
+            result['excluded_components'] = manifest_data.get('excluded_components', [])
             load_sync()
+            import beyin_v3_exclusions as exclusions
+            try:
+                configured_excluded = exclusions.read_exclusions(vault)
+            except ValueError as exc:
+                # doctor reports the broken file instead of failing; update/install stay strict.
+                configured_excluded = result['excluded_components']
+                result['exclusions_error'] = str(exc)
+            if set(configured_excluded) != set(result['excluded_components']):
+                result['pending_exclusions'] = sorted(set(configured_excluded) ^ set(result['excluded_components']))
+                result['exclusions_pending'] = True
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)
             import beyin_v3_releases as releases
@@ -390,6 +429,20 @@ def main(argv=None):
                 result['sync'] = {'status': load_sync()(vault, state).sync().get('status')}
         elif args.command == "sync":
             result = sync.sync()
+        elif args.command == "recap":
+            if not 1 <= args.days <= 366 or not 1 <= args.limit <= 100:
+                raise ValueError('recap days must be 1..366 and limit must be 1..100')
+            refreshed = sync.sync()
+            if refreshed.get('status') == 'conflict':
+                raise RuntimeError('Recap blocked: source sync conflict. Run sync to inspect sources.')
+            from beyin_v3_projections import recent_receipts
+            with store._connect() as db:
+                result = recent_receipts(db, days=args.days, limit=args.limit, vault=vault)
+            if refreshed.get('status') == 'degraded':
+                warnings = refreshed.get('warnings', [])
+                result['partial'] = True
+                result['source_sync'] = {'status': 'degraded', 'warnings': warnings[:20],
+                                         'warning_count': len(warnings), 'truncated': len(warnings) > 20}
         elif args.command == "ingest":
             payload = read_json(args.file)
             result = [store.ingest(record) for record in payload] if isinstance(payload, list) else store.ingest(payload)
