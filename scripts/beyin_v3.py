@@ -54,27 +54,44 @@ def _sibling_state_roots(pinned: Path) -> list:
     if not base:
         return []
     local, key = Path(*base), parts[index + 1]
-    found = []
+    candidates = [local / "beyin-v3" / key]
     try:
-        candidates = [local / "beyin-v3" / key]
-        candidates += sorted(local.glob("Packages/*/LocalCache/Local/beyin-v3/" + key))
-        for candidate in candidates:
-            if (candidate / "v3-install.json").is_file() and str(candidate) not in found:
-                found.append(str(candidate))
+        packages = local / "Packages"
+        if packages.is_dir():
+            # Literal path per package, not a glob: a key is never read as a pattern.
+            candidates += [entry / "LocalCache" / "Local" / "beyin-v3" / key
+                           for entry in sorted(packages.iterdir())]
     except OSError:
         return []
+    found, identities = [], []
+    for candidate in candidates:
+        try:
+            if not (candidate / "v3-install.json").is_file():
+                continue
+            # Inside the package the plain spelling is redirected into the container, so
+            # both spellings reach one directory there. Count directories, not strings.
+            identity = os.path.normcase(str(candidate.resolve()))
+            if identity in identities or any(os.path.samefile(candidate, other) for other in found):
+                continue
+        except (OSError, ValueError, RuntimeError):
+            continue
+        found.append(str(candidate))
+        identities.append(identity)
     return found
 
 
-def state_location(vault: Path, state: Path) -> dict:
+def state_location(vault: Path, state: Path, windows=None) -> dict:
     """Compare the pinned state root with the one this process actually reads.
 
     Windows redirects %LOCALAPPDATA% for an MSIX-packaged client into
     Packages/<id>/LocalCache/Local. A pin inside that container is one string and
     two directories for processes in and out of the package, so each side can end
     up holding half the memory. Information only: it writes nothing, makes no
-    model call and does not raise the doctor status.
+    model call and does not raise the doctor status. A pin that resolves elsewhere
+    is only warned about on Windows: a POSIX symlink resolves the same for every
+    process, so a relocated state behind one is not a split.
     """
+    windows = sys.platform == "win32" if windows is None else windows
     report = {"effective_state": str(state),
               "installed_at_effective_state": (state / "v3-install.json").is_file(),
               "pin_status": "absent", "pinned_state": None, "pinned_resolves_here_to": None,
@@ -84,7 +101,8 @@ def state_location(vault: Path, state: Path) -> dict:
     pinned = None
     if config.is_file():
         try:
-            value = json.loads(config.read_text(encoding="utf-8")).get("state")
+            data = json.loads(config.read_text(encoding="utf-8"))
+            value = data.get("state") if isinstance(data, dict) else None
         except (ValueError, OSError):
             value = None
         pinned = value if isinstance(value, str) and value.strip() else None
@@ -93,7 +111,7 @@ def state_location(vault: Path, state: Path) -> dict:
         return report
     try:
         resolved = Path(pinned).expanduser().resolve()
-    except OSError:
+    except (OSError, ValueError, RuntimeError):
         resolved = Path(pinned)
     same = os.path.normcase(str(resolved)) == os.path.normcase(pinned)
     report.update({"pinned_state": pinned, "pinned_resolves_here_to": str(resolved),
@@ -107,11 +125,11 @@ def state_location(vault: Path, state: Path) -> dict:
             "identity and goes away when the package is reset or reinstalled under another "
             "identity. Moving the state to a plain local directory is the durable fix; "
             "see docs/v3/UPDATE.md.")
-    if report["pin_resolves_elsewhere"]:
+    if report["pin_resolves_elsewhere"] and windows:
         report["warnings"].append(
             "pin_resolves_elsewhere: this process resolves the pinned path to " + str(resolved) +
-            ". A process on the other side of that redirect reads the same string and reaches "
-            "a different directory, so the state is split.")
+            ". A process on the other side of an MSIX redirect reads the same string and may "
+            "reach a different directory; run doctor inside and outside the package and compare.")
     if not report["installed_at_pinned_state"]:
         report["warnings"].append(
             "pinned_state_empty: no v3-install.json under the pinned state root as this process "
@@ -361,7 +379,10 @@ def main(argv=None):
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
             # Information only; a split or container-bound state root never raises the status.
-            result['state_location'] = state_location(vault, state)
+            try:
+                result['state_location'] = state_location(vault, state)
+            except Exception as exc:  # a location report must never hide the rest of doctor
+                result['state_location'] = {'status': 'unavailable', 'error': type(exc).__name__, 'warnings': []}
             manifest = state / 'v3-install.json'
             result['kept_legacy_runners'] = json.loads(manifest.read_text(encoding='utf-8')).get('kept_legacy', []) if manifest.exists() else []
             load_sync()

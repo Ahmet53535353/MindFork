@@ -90,7 +90,7 @@ varsayılanı bırakıp state'i başka bir yere almak gerekir:
 Taşıma desteklenen bir işlemdir: `install_v3.py --state` yeni yolu sabitler. Veritabanı
 **vault kök yoluna** bağlıdır, state yoluna değil; bu yüzden aynı vault için state'i taşımak
 veritabanını geçersizleştirmez. Vault'u taşımak ayrı bir konudur ve orada yerel state
-Markdown'dan yeniden kurulur — [QUICKSTART](QUICKSTART.md).
+Markdown'dan yeniden kurulur; ayrıntı için [QUICKSTART](QUICKSTART.md).
 
 ### Adımlar
 
@@ -122,10 +122,11 @@ Markdown'dan yeniden kurulur — [QUICKSTART](QUICKSTART.md).
    Plan temizse aynı komutu `--plan` olmadan çalıştır. Kurucu dizini oluşturduktan
    **sonra** yeniden çözümleyip kanonik yolu sabitler.
 
-7. **İki taraftan doğrula.** `doctor`'ı hem ajan kabuğundan (paket içi) hem de normal
-   bir PowerShell penceresinden (paket dışı) çalıştır; aynı sonucu vermeli.
-   `doctor` çıktısındaki `state_location` alanı `warnings` listesini boş,
-   `sibling_state_roots` listesini de tek girdili (ya da boş) göstermeli.
+7. **İki taraftan doğrula.** `py -3 beyin.py doctor --json` komutunu hem ajan kabuğundan
+   (paket içi) hem de normal bir PowerShell penceresinden (paket dışı) çalıştır; aynı
+   sonucu vermeli. `state_location` alanı `warnings` listesini boş, `sibling_state_roots`
+   listesini de tek girdili (ya da boş) göstermeli. `--json` olmadan çalışan insan okunur
+   çıktıda her uyarı `State konumu (bilgi):` ile başlayan bir satırdır; hiç olmamalı.
 
 8. **Eski dizini ancak bundan sonra sil.** Doğrulama geçene kadar dur.
 
@@ -139,22 +140,30 @@ yarıyı okuduğunun sürecin paket içinde olup olmamasına bağlı olmasıdır
 
 `doctor` bunu `state_location` altında raporlar:
 
-- `sibling_state_roots` — aynı vault anahtarı için kurulu bulunan bütün state kökleri.
-  Birden fazlaysa `state_split` uyarısı verilir.
-- `pinned_in_package_container` — sabitlenmiş yol `Packages\...\LocalCache` içinden geçiyor.
-- `pin_resolves_elsewhere` — bu süreç sabitlenmiş dizeyi başka bir dizine çözümlüyor.
-- `pinned_state_empty` — sabitlenmiş kökte kurulum bulunamadı.
+- `sibling_state_roots`: aynı vault anahtarı için kurulu bulunan bütün state kökleri,
+  dizin kimliğine göre bir kez sayılır. Birden fazlaysa `state_split` uyarısı verilir.
+  Paket içinde düz yazım da kapsayıcıya yönlendirildiği için gerçek bir bölünme en
+  güvenilir biçimde **paket dışından** görünür.
+- `pinned_in_package_container`: sabitlenmiş yol `Packages\...\LocalCache` içinden geçiyor.
+- `pin_resolves_elsewhere`: bu süreç sabitlenmiş dizeyi başka bir dizine çözümlüyor. Alan
+  her platformda doldurulur, uyarı yalnız Windows'ta verilir; macOS ve Linux'ta bir
+  symlink her süreç için aynı yere gider, bölünme doğurmaz.
+- `pinned_state_empty`: sabitlenmiş kökte kurulum bulunamadı.
+- `effective_state_differs`: bu çalışma sabitlenmiş kök yerine başka bir state okuyor
+  (örneğin kaynak CLI farklı bir `--state` ile çağrıldı).
 
 Bunlar bilgi amaçlıdır; `doctor` durumunu yükseltmezler. Bölünme görürsen hangi yarının
-güncel olduğuna karar ver (`memory.sqlite3` tarihleri ve `receipts` sayısı yardımcı olur),
-onu taşı, diğerini sil.
+güncel olduğuna karar ver (`memory.sqlite3` tarihleri ve makbuz sayısı yardımcı olur),
+onu yukarıdaki adımlarla taşı; diğerini ancak adım 7 doğrulaması geçtikten sonra sil.
 
 ### Yönlendirme öncesi yolla sabitlenmiş eski kurulumlar
 
-V3.4.0 öncesi bir MSIX kurulumunda sabitlenmiş yol yönlendirme uygulanmadan yazılmış
-olabilir. Bu kendiliğinden düzelmez. Düzeltmek için kurucuyu **paket içinden** (ajan
-kabuğundan) mevcut `--state` değeriyle yeniden çalıştır; sabitleme yönlendirilmiş
-kanonik yola döner. Taşımak istemiyorsan adım 5 ve 6 yine geçerlidir.
+3.4.0 ve öncesiyle (#114 düzeltmesinden önce) yapılmış bir MSIX kurulumunda sabitlenmiş
+yol yönlendirme uygulanmadan yazılmış olabilir. Bu kendiliğinden düzelmez. Düzeltmek için
+#114'ü içeren kurucuyu **paket içinden** (ajan kabuğundan) mevcut `--state` değeriyle
+yeniden çalıştır; sabitleme yönlendirilmiş kanonik yola döner. Bu durumda kopyalama
+gerekmez, ama adım 5'teki kural geçerlidir: bekleyen bir `update-journal.json` varsa önce
+`beyin.py recover` çalıştır, sonra adım 6'daki gibi önce `--plan` ile incele.
 
 ## `invalid legacy skill hashes` (#73)
 
