@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import unicodedata
 sys.dont_write_bytecode = True
 
 
@@ -76,6 +77,17 @@ def ascii_text(value):
     return str(value if value is not None else '?').encode('ascii', 'replace').decode('ascii')
 
 
+# Bidirectional overrides can reorder what a terminal shows (Trojan Source); category Cc covers ESC/BEL.
+_BIDI_CONTROLS = frozenset('\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
+
+
+def plain_text(value):
+    """One terminal line from stored text: newlines fold, control and bidi characters become '?'."""
+    text = str(value if value is not None else '?').replace('\r\n', '\n')
+    return ''.join(' / ' if ch in '\n\r\u2028\u2029\x85' else ' ' if ch == '\t' else
+                   '?' if unicodedata.category(ch) == 'Cc' or ch in _BIDI_CONTROLS else ch for ch in text)
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
@@ -101,16 +113,46 @@ def human_result(result, command, installed_version=None):
         return '\n'.join(lines + jev_lines(result))
     if command == 'preferences':
         prefs = result['preferences']
-        return ('Otomatik kontrol: ' + ('acik' if prefs['auto_sync'] else 'kapali') +
-                '\nKontrol araligi: ' + str(prefs['interval_minutes']) + ' dakika (0 = her olay)' +
-                '\nOtomatik baglam: ' + prefs['context_mode'] +
-                '\nBaglam ust siniri: ' + str(prefs['context_chars']) + ' karakter' +
-                '\nSir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali') +
-                '\nSurum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali') +
-                ''.join('\nHafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali')
-                        for name, value in (result.get('companion_limits') or {}).items()) +
-                '\nAcikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.' +
-                '\nYerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
+        lines = ['Otomatik kontrol: ' + ('acik' if prefs['auto_sync'] else 'kapali'),
+                 'Kontrol araligi: ' + str(prefs['interval_minutes']) + ' dakika (0 = her olay)',
+                 'Otomatik baglam: ' + prefs['context_mode'],
+                 'Baglam ust siniri: ' + str(prefs['context_chars']) + ' karakter',
+                 'Sir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali'),
+                 'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali')]
+        for name, value in (result.get('companion_limits') or {}).items():
+            lines.append('Hafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali'))
+        if result.get('excluded_components'):
+            lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']))
+        if result.get('exclusion_notice'):
+            lines.append(result['exclusion_notice'])
+        lines.append('Acikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.')
+        lines.append('Yerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
+        return '\n'.join(lines)
+    if command == 'recap':
+        lines = ['Kaynakli etkinlik: ' + result['from'] + ' - ' + result['through'] +
+                 ' (UTC; ajan kayitlari, bagimsiz dogrulanmis olgular degil)']
+        if not result['items']:
+            lines.append('Bu aralikta tarihli kayit yok.')
+        for item in result['items']:
+            lines.append('\n' + item['created_at'][:10] + '  ' + plain_text(item['summary']))
+            lines.append('Kaynak: ' + plain_text(item['source']))
+            for ref in item.get('refs', []):
+                lines.append('  - ' + plain_text(ref))
+            withheld = item.get('refs_withheld') or {}
+            if withheld.get('private'):
+                lines.append('  (' + str(withheld['private']) + ' ozel kaynak baglantisi gizlendi)')
+            if withheld.get('missing'):
+                lines.append('  (' + str(withheld['missing']) + ' kaynak artik yok)')
+        if result['truncated']:
+            lines.append('Yalniz en yeni ' + str(result['shown']) + '/' + str(result['total']) +
+                         ' kayit gosterildi; --limit ile artirabilirsin.')
+        if result['undated_omitted']:
+            lines.append(str(result['undated_omitted']) + ' tarihsiz/eski bicimli kayit atlandi.')
+        if result.get('missing_source_omitted'):
+            lines.append(str(result['missing_source_omitted']) + ' kaydin makbuz dosyasi artik yok; atlandi.')
+        if result.get('partial'):
+            lines.append('Uyari: kaynak esitlemesi kismi; ayrinti icin --json kullan.')
+        return '\n'.join(lines)
     if command == 'companion-compact':
         lines = []
         for name, entry in result.get('files', {}).items():
@@ -175,6 +217,13 @@ def human_result(result, command, installed_version=None):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):
             lines.append('Skill klasorundeki yonetilmeyen girdiler (bilgi): ' + ', '.join(result['skill_unmanaged']) + '.')
+        if result.get('excluded_components'):
+            lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']) + '.')
+        if result.get('pending_exclusions') or result.get('exclusions_pending'):
+            lines.append('Haric tutma degisikligi bekliyor (' + ', '.join(result.get('pending_exclusions', [])) +
+                         '): bir sonraki kurulum ya da guncellemede uygulanir.')
+        if result.get('exclusions_error'):
+            lines.append('.beyin-exclusions.json gecersiz; guncelleme duzeltilene kadar durur: ' + result['exclusions_error'])
         hygiene = result.get('companion_hygiene') or {}
         for name in hygiene.get('over_limit', []):
             entry = hygiene['files'][name]
@@ -195,6 +244,10 @@ def human_result(result, command, installed_version=None):
         return '\n'.join(update_lines(result) + ['Yalniz surum bilgisi kontrol edildi; paket kurulumu denenmedi.'])
     if status == 'updated':
         message = 'Beyin guncellendi: ' + str(result.get('from_version', installed_version or '?')) + ' -> ' + str(result['version'])
+        if result.get('removed'):
+            message += '\nHaric tutulan bilesenler kaldirildi: ' + ', '.join(result['removed']) + '.'
+        if result.get('preserved_excluded'):
+            message += '\nHaric tutulan ancak degistirilmis dosyalar korundu: ' + ', '.join(result['preserved_excluded']) + '.'
     elif status == 'available':
         message = 'Yeni surum var: ' + str(result.get('current_version', '?')) + ' -> ' + str(result['version']) + '\nGuncellemek icin: python beyin.py update'
     elif status == 'noop':
@@ -221,6 +274,12 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     human = ('--human' in argv or sys.stdout.isatty()) and '--json' not in argv
     argv = [arg for arg in argv if arg not in ('--human', '--json')]
+    if human:
+        # A piped or redirected Windows console uses a legacy code page (cp1252 has no s-cedilla);
+        # an unencodable character must print as '?' instead of failing the whole command.
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, 'reconfigure'):
+                stream.reconfigure(errors='replace')
     command = argv[0] if argv else 'doctor'
     vault = Path(__file__).resolve().parent
     stamp = vault / '.beyin-version'
