@@ -208,6 +208,10 @@ class DreamTest(unittest.TestCase):
         self.assertEqual(refresh, {'knowledge/huge.md'})
 
     def test_merge_pairs_titles_that_differ_only_in_shape(self):
+        # Kayitlar dosyasiz tohumlanirsa aday olmaz: birlestirme iki dosya ister.
+        self.write_source('knowledge/stripe-webhook.md', '# Stripe Webhook\n')
+        self.write_source('knowledge/stripe_webhook_race.md', '# stripe_webhook: race\n')
+        self.write_source('knowledge/billing.md', '# Billing\n')
         self.seed(records=[self.note('knowledge/stripe-webhook.md', text='# Stripe Webhook\n'),
                            self.note('knowledge/stripe_webhook_race.md', text='# stripe_webhook: race\n'),
                            self.note('knowledge/billing.md', text='# Billing\n')],
@@ -220,11 +224,15 @@ class DreamTest(unittest.TestCase):
                          ['knowledge/stripe-webhook.md', 'knowledge/stripe_webhook_race.md'])
 
     def test_merge_never_pairs_uncited_notes(self):
+        self.write_source('knowledge/stripe-webhook.md', '# Stripe Webhook\n')
+        self.write_source('knowledge/stripe_webhook_race.md', '# stripe_webhook: race\n')
         self.seed(records=[self.note('knowledge/stripe-webhook.md', text='# Stripe Webhook\n'),
                            self.note('knowledge/stripe_webhook_race.md', text='# stripe_webhook: race\n')])
         self.assertEqual(self.report()['candidates']['merge'], [])
 
     def test_merge_falls_back_to_the_source_stem_without_a_heading(self):
+        self.write_source('knowledge/stripe-webhook.md', 'duz metin, baslik yok\n')
+        self.write_source('knowledge/stripe_webhook.md.copy', 'duz metin\n')
         self.seed(records=[self.note('knowledge/stripe-webhook.md', text='duz metin, baslik yok\n'),
                            self.note('knowledge/stripe_webhook.md.copy', text='duz metin\n')],
                   receipts=[self.receipt('r1', ['knowledge/stripe-webhook.md']),

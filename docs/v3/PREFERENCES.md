@@ -90,6 +90,35 @@ Yazmayan: gövdedeki "dün", "geçen hafta" gibi bağıl tarihler. Bunlar
 `prose_dates` olarak **raporlanır** ve metne dokunulmaz — insan cümlesi ajanın
 işidir. Kelime sınırı ile taranır: "dünya", "dünleyici" eşleşmez.
 
+### Merge önerileri ve dismiss
+
+Pencere, birleştirilebilir not **çiftlerini** önerir: başlıkları iç içe geçen ya da
+gövdeleri belirgin örtüşen (en az 3 ortak sözcük ve küçük kümenin en az yarısı) ve
+**ikisi de alıntılanmış** notlar. Aday gerekçesini `matched: title|body` ile bildirir.
+Gövde karşılaştırması arama ile aynı gövdelemeyi kullanır, çünkü aramanın bulamadığı
+bir aday bakım penceresine görünmemelidir.
+
+Bir aday **iki tür kararla kapanır**, ikisi de vault'ta saklanır
+(`archive/auto-dream/dismissed.json`):
+
+- **Kendiliğinden:** notlardan biri diğerinin yolunu anıyorsa ve hedefin
+  karakterinin en fazla %40'ı kadarsa o not artık bir **işaretçidir**; birleştirme
+  yapılmış demektir ve çift bir daha önerilmez. (Kısalık şartı şu: gerçek bir not
+  komşusunu uzun bir cümlede anabilir.)
+- **Sizin kararınızla:** `python3 beyin.py dream --dismiss <yol-a> <yol-b>` o çifti,
+  `dream --dismiss <yol>` ise o notu içeren tüm çiftleri susturur. Karar vault'ta
+  tutulur, reinstall'da kaybolmaz.
+
+`dream --apply` merge önerisinde **gövdeleri değiştirmez**: çiftleri snapshot'lar ve
+`archive/auto-dream/<tarih>/merge-plan.md` yazar (hangi notun kalacağı, ortak
+sözcükler, ajana talimat). Birleşen metni oturumdaki ajan yazar — hangi başlığın
+geçerli olduğu ve iki metnin nasıl birleşeceği muhakeme ister. Dosya başlıkları
+farklı ya da gövde ilişkisizse çift önerilmez; bir not asla bir **görevle**
+eşleştirilmez.
+
+Kullanılamayan bir dismiss dosyası pencereyi durdurmaz: adaylar susturulmaz ve
+`dismiss_notice` ile bildirilir.
+
 Model çağrısı ve ağ yoktur (her iki bayrak da çıktıda `false`). Tasarım:
 `docs/specs/2026-09-26-autodream-lite-roadmap.md`; faz-2 uygulama planı ve
 gerekçesi `docs/specs/2026-09-26-autodream-phase2-snapshot-refresh-plan.md`.

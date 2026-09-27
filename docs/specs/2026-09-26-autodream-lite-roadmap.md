@@ -1,6 +1,6 @@
 # AutoDream-lite — konsolidasyon yol haritası (roadmap spec)
 
-Tarih: 2026-09-26 · Durum: faz 1-2 uygulandı (kapılar, salt-okunur ölçüm, doctor `oversize`, snapshot/Refresh/`--restore`), faz 3-5 bekliyor
+Tarih: 2026-09-26 · Durum: faz 1-3 uygulandı (kapılar, ölçüm, snapshot/Refresh/`--restore`, merge adayı + dismiss + ajan planı), faz 4-5 bekliyor
 İlgili kayıt: `docs/specs/2026-09-25-hybrid-rag-implementation-record.md` (Kalan işler #2)
 
 ## Amaç ve sınır
@@ -122,7 +122,10 @@ raporu okur, kararı ve gerekçeyi yazar, `--apply` onayı insanın. Başsız
    kapsamı 2026-09-26'da daraltıldı ve kesinleştirildi (bkz. §5.1).
 3. **Merge**: yalnız alıntısı > 0 olan, birbirine bağlı notlar; her Merge snapshot'ın
    üstüne yazılır ve rapor satırı üretir.
-   **Ön koşul (2026-09-26, bir aylık insan kullanımı E2E'sinden):** `_merge_pairs`
+   **Ön koşul KAPANDI (2026-09-26, faz 3):** gövde görüşü, işaretçi tespiri ve
+   kalıcı dismiss eklendi; ay sürücüsü q16 gerçek kurulumda doğruluyor. Ayrıntı:
+   `docs/specs/2026-09-26-autodream-phase3-merge-plan.md`. Kapanan bulgu:
+   `_merge_pairs`
    (`dream.py:172-193`) yalnız **başlık token'larına** bakar ve "aday çözüldü"
    durumunu tutmaz; kullanıcı notu birleştirip yerine işaretçi bıraksa aday kaybolmaz
    (yalnız dosya gerçekten silinince kaybolur). Mutasyon başlamadan önce kalıcı

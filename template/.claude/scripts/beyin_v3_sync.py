@@ -175,7 +175,10 @@ def render(metadata, body):
 
 
 EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md', 'config.md', 'settings.md', 'instructions.md', 'codex.md', 'setup.md', 'install.md'}
-EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
+# 'archive' holds a consolidation window's pre-images: a recovery kit, not memory.
+# Indexing it would make every snapshot a note — and each pre-image a merge candidate
+# for the very note it was copied from.
+EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__', 'archive'}
 COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
 
 

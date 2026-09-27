@@ -222,6 +222,9 @@ def parser():
                        help="Put a window's pre-images back from its snapshot and rebuild the index")
     dream.add_argument("--force", action="store_true",
                        help="Open the window despite the 24 hour and receipt gates; never bypasses the lock")
+    dream.add_argument("--dismiss", nargs="+", metavar="SOURCE",
+                       help="Stop proposing a merge: two sources dismiss that pair, one source "
+                            "dismisses every pair it is in. The decision is stored in the vault.")
     return root
 
 
@@ -423,7 +426,16 @@ def main(argv=None):
         elif args.command == "dream":
             SyncEngine = load_sync()          # also puts the runtime modules on the path
             import beyin_v3_dream
-            if args.restore:
+            if args.dismiss:
+                # A decision, not a window: no gates, no lock, no snapshot. It has to work
+                # exactly when a window cannot run.
+                if args.apply or args.force or args.restore:
+                    raise ValueError("dream --dismiss takes no --apply/--force/--restore")
+                state, notice = beyin_v3_dream.dismiss(vault, args.dismiss)
+                result = {'dismissed': state, 'model_calls': False, 'network': False}
+                if notice:
+                    result['notice'] = notice
+            elif args.restore:
                 # A restore is a repair path, not a window: it takes no gates and no lock,
                 # because the thing it repairs is exactly the state a failed window left.
                 if args.apply or args.force:
