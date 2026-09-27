@@ -90,4 +90,23 @@ iki tarafın özelliği de özellik olduğu için ikisi korunur.
 
 ## Uygulama sonucu
 
-_(merge sonrası doldurulur)_
+- Kuru deneme doğru çıktı: **tek** içerik çakışması, altı dosya kendiliğinden
+  birleşti. Merge commit `a680338` (ebeveynler `5ff3ca5` + `db1f23d`).
+- Çakışma iki blokla çözüldü ve **çalıştırılarak** kanıtlandı: aynı komutta
+  exclusion yazıldı/geri alındı, `daily_log` bağımsız kapatılıp açıldı, geçersiz
+  bileşen adı upstream'in doğrulamasıyla düzgün reddedildi, exclusion
+  `.beyin-exclusions.json`'a yazıldı (tercih şemasında değil — 3.4.0'a rollback
+  güvenliği için ayrı dosya).
+- Paketleme denetimi: `RUNTIME_MODULES()` glob'u sayesinde yeni
+  `beyin_v3_exclusions.py` manifest'e otomatik girdi (29 modül); updater
+  allowlist'i de kapsıyor. `5f68006`'daki tek kaynaklı liste bu dalgayı bedaya
+  karşıladı.
+- `projections.py`'de iki tarafın değişikliği bağımsız bölgelerde bir arada;
+  SKILL.md ve PREFERENCES.md birleşiminde iki tarafın ekledikleri de duruyor ve
+  günlük logun yeni varsayılanıyla çelişen ifade kalmadı.
+- **Tam paket 837/837 yeşil** (skipped=1): 806 bizim + 31 upstream'in yeni
+  testleri. Bir aylık insan kullanımı sürücüsü 14/14 dahil. Playbook'un işaret
+  ettiği "büyüyen paket ilk koşuda bilinmeyen kırık üretebilir" riski
+  gerçekleşmedi.
+- Push edildi (`5ff3ca5..a680338`). Fork `main` zaten `db1f23d`'de, yani upstream
+  ile senkron; hızla ilerletme adımı zaten yapılmış durumdaydı.

@@ -232,6 +232,33 @@ değişen, 0 silinen**; `Kurallar.md`, `Core.md`, `Last-Session.md`, `Threads.md
 destekliyor; ertelenen roadmap işi) ve normal CLI çağrıları vault'a `__pycache__`
 yazıyor (temizlik, işlevsel değil).
 
+## Upstream birleştirme 3 (2026-09-26, `a680338`): bir çakışma, ikisi de
+
+`upstream/main` `f9a8b5f` → `db1f23d` (14 commit, 16 dosya): bilesen/skill haric
+tutma (#108), kaynakli yakin donem ozeti / recap (#111), state koku cozumleme-
+sabitleme (#113/#114). Kuru deneme (`merge-tree`) **tek** icerik cakismasi
+gosterdi; 6 cift-dokunuslu dosya kendiliginden birlesti.
+
+Cakisma `scripts/beyin_v3.py` `preferences` alt komutundaydi: iki taraf da ayni
+bloga bagimsiz ozellik eklemisti (biz `--daily-log`, upstream
+`--exclude/--include-component`). **Ikisi de korundu** — cakismanin disindaki
+`result['excluded_components'] = result_excluded` satiri upstream blogu zorunlu
+kiliyordu; "upstream kazanir" burada yanlis olurdu. Kanit: ayni komutta exclusion
+yazildi/geri alindi, `daily_log` bagimsiz kapandi/acildi, exclusion
+`.beyin-exclusions.json`'a yazildi (tercih semasinda degil).
+
+**Paketleme denetimi (asil kazanim):** `RUNTIME_MODULES()` glob
+(`beyin_v3*.py`) kullandigi icin upstream'in yeni `beyin_v3_exclusions.py`
+modulu manifest'e **otomatik** girdi (29 modul), `beyin_v3_update.py` allowlist
+regex'i de onu kapsiyor. 5f68006'daki tek kaynakli liste bu dalgayi bedava
+karsiladi; o olmasaydi yeni modul yalniz gercek vault'ta import hatasi verirdi.
+`projections.py`'de bizim `PROJECTION_GUARD` ile upstream'in
+`_hidden_ref_sources` bagimsiz bolgelerde bir arada duruyor.
+
+**837/837 yesil** (skipped=1): 806 bizim + 31 upstream'in yeni testleri, ilk
+kosuda sifir kirik — onceki spec'lerde yazili "buyuyen paket ilk kosuda bilinmeyen
+kirik uretebilir" riski gerceklesmedi.
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
@@ -239,7 +266,7 @@ yazıyor (temizlik, işlevsel değil).
    ölçümü hazır: **≥1 hafta gerçek kullanım ölçümü**, sonra karar (ölçüm geçmezse yazılmaz);
    kural ve kapsam `docs/specs/2026-09-26-autodream-lite-roadmap.md` §10
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
-4. PR ile main'e birleştirme (fork main zaten upstream ile senkron: f9a8b5f)
+4. PR ile main'e birleştirme (fork main upstream ile senkron: `db1f23d`; dal `feat/memory-consolidation` = `a680338`)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
 6. Günlük log Faz-2: PreCompact kurtarma çizgisi (spec'te ertelenen kemer)
 7. ~~OpenCode kapanış olayı yok → yetim bloğu kapatma~~ **TAMAMLANDI** (2026-09-26):
