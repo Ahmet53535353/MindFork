@@ -7,15 +7,37 @@ import sqlite3
 import tempfile
 import time
 
+# Opt-in hygiene hook warnings (#130 decision: default OFF, sessiz çekirdek).
+# Hook warnings are silent unless the user turns them on here; max_words only
+# takes effect together with word_cap_warning.
+HYGIENE_DEFAULTS = {'word_cap_warning': False, 'max_words': 500,
+                    'folder_questions': False, 'promotion': False}
+
 PROFILES = {
-    'normal': dict(auto_sync=True, interval_minutes=0, context_mode='turn', context_chars=5000, secret_filter=False),
-    'economical': dict(auto_sync=True, interval_minutes=15, context_mode='session', context_chars=2000, secret_filter=False),
-    'manual': dict(auto_sync=False, interval_minutes=15, context_mode='off', context_chars=2000, secret_filter=False),
+    'normal': dict(auto_sync=True, interval_minutes=0, context_mode='turn', context_chars=5000, secret_filter=False,
+                   hygiene=dict(HYGIENE_DEFAULTS)),
+    'economical': dict(auto_sync=True, interval_minutes=15, context_mode='session', context_chars=2000,
+                       secret_filter=False, hygiene=dict(HYGIENE_DEFAULTS)),
+    'manual': dict(auto_sync=False, interval_minutes=15, context_mode='off', context_chars=2000, secret_filter=False,
+                   hygiene=dict(HYGIENE_DEFAULTS)),
 }
 
 
+def _validate_hygiene(value):
+    if not isinstance(value, dict) or set(value) - set(HYGIENE_DEFAULTS):
+        raise ValueError('Unsupported hygiene preferences; keys are '
+                         + ', '.join(sorted(HYGIENE_DEFAULTS)))
+    result = dict(HYGIENE_DEFAULTS, **value)
+    for key in ('word_cap_warning', 'folder_questions', 'promotion'):
+        if type(result[key]) is not bool:
+            raise ValueError(f'hygiene.{key} must be boolean')
+    if type(result['max_words']) is not int or not 10 <= result['max_words'] <= 100000:
+        raise ValueError('hygiene.max_words must be an integer between 10 and 100000')
+    return result
+
+
 def validate(value):
-    if not isinstance(value, dict) or set(value) - set(PROFILES['normal']):
+    if not isinstance(value, dict) or set(value) - (set(PROFILES['normal']) | {'hygiene'}):
         raise ValueError('Unsupported preferences; use beyin.py preferences')
     result = dict(PROFILES['normal'], **value)
     if type(result['auto_sync']) is not bool:
@@ -27,6 +49,7 @@ def validate(value):
             raise ValueError(f'{key} must be an integer between {low} and {high}')
     if result['context_mode'] not in ('turn', 'session', 'off'):
         raise ValueError('context_mode must be turn, session or off')
+    result['hygiene'] = _validate_hygiene(value.get('hygiene') or {})
     return result
 
 
@@ -46,8 +69,11 @@ def save(vault, changes, profile=None):
     # Validate the existing file too: malformed user settings must not be overwritten.
     current = read(vault)
     # The secret filter is an independent safety choice; changing performance
-    # profiles must not silently enable or disable it.
+    # profiles must not silently enable or disable it. Hygiene opt-ins follow
+    # the same rule.
     base = dict(PROFILES[profile], secret_filter=current['secret_filter']) if profile else current
+    if profile:
+        base['hygiene'] = current.get('hygiene', dict(HYGIENE_DEFAULTS))
     result = validate(dict(base, **changes))
     path = preferences_path(vault)
     fd, temporary = tempfile.mkstemp(prefix='.beyin-preferences-', dir=path.parent)

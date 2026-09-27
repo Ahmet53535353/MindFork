@@ -332,6 +332,16 @@ def main():
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
         settings = read(vault)
+        if event == 'SessionStart' and not args.metadata_only and settings.get('hygiene', {}).get('folder_questions'):
+            # Opt-in soru sirasi (#130): hook path only, shallow mtime scan.
+            try:
+                from beyin_v3_hygiene import folder_questions
+                questions = folder_questions(vault, state)
+                if questions:
+                    # ASCII Turkish; a question is data for the agent, never exact user knowledge.
+                    notice += 'Soru sirasi (bilgi): ' + ' | '.join(questions)
+            except Exception:
+                pass  # never cost the session itself
         if not settings['auto_sync']:
             print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
@@ -424,7 +434,27 @@ def main():
             output = output_context(args.harness, event, (notice + text)[:settings['context_chars']])
             print(json.dumps(output))
         else:
-            print(json.dumps(reminder) if reminder else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}"))
+            # Opt-in PostToolUse hygiene (#130): touch log feeds the terfi report;
+            # the cap warning is harness-gated (claude/codex only) inside the module.
+            cap_text = ''
+            try:
+                from beyin_v3_hygiene import touch_log, hook_cap_warning
+                hygiene = settings.get('hygiene') or {}
+                if hygiene.get('promotion'):
+                    touch_log(state, vault, payload)
+                if hygiene.get('word_cap_warning'):
+                    cap_text = hook_cap_warning(vault, payload, cap=hygiene.get('max_words') or 500,
+                                                harness=args.harness, state=state)
+            except Exception:
+                cap_text = ''  # never cost the turn itself
+            if isinstance(reminder, dict):
+                if cap_text and isinstance(reminder.get('reason'), str):
+                    reminder['reason'] += '\n' + cap_text
+                print(json.dumps(reminder))
+            elif cap_text:
+                print(json.dumps(output_context(args.harness, event, cap_text)))
+            else:
+                print(json.dumps(reminder) if reminder else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}"))
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if not args.metadata_only and locals().get("event") in ("SessionStart", "UserPromptSubmit"):

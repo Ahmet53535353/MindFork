@@ -278,6 +278,20 @@ def human_result(result, command, installed_version=None):
             more = closed['closed_count'] - min(3, len(closed.get('closed') or []))
             lines.append('Kapali durumda sedintede duran gorev (bilgi, tasima senin kararin): ' + shown +
                          (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
+        cap = result.get('word_cap') or {}
+        if cap.get('over_count'):
+            shown = ', '.join(entry['file'] + ' (' + str(entry['words']) + ' kelime)' for entry in cap.get('over', [])[:3])
+            more = cap['over_count'] - min(3, len(cap.get('over') or []))
+            lines.append('Kelime tavani (' + str(cap['cap']) + ') asan not (bilgi): ' + shown +
+                         (' ve ' + str(more) + ' tane daha' if more > 0 else '') +
+                         '. Hook uyarisi icin hygiene.word_cap_warning tercihini ac.')
+        promo = result.get('promotion') or {}
+        if promo.get('hot'):
+            lines.append('Sicak klasorler (son ' + str(promo.get('window_days', 30)) + ' gun dokunma): ' +
+                         ', '.join(entry['folder'] + ' (' + str(entry['touches']) + ')' for entry in promo['hot'][:3]))
+        if promo.get('cold'):
+            lines.append('Soguk klasorler (terfi karari senin): ' +
+                         ', '.join(entry['folder'] + ' (' + str(entry['days_quiet']) + ' gun)' for entry in promo['cold'][:3]))
         lines += state_location_lines(result.get('state_location'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')

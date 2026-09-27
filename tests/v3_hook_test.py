@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
@@ -576,6 +577,71 @@ class HookInstallerTest(unittest.TestCase):
         self.install(uninstall=True)
         for name, raw in originals.items():
             self.assertEqual((self.vault / name).read_bytes(), raw)
+
+    # --- Opt-in hygiene (#130): defaults silent, preferences gate, harness gate ---
+
+    def enable(self, **hygiene):
+        (self.vault / '.beyin-preferences.json').write_text(
+            json.dumps({'hygiene': hygiene}), encoding='utf-8')
+
+    def test_hygiene_defaults_are_completely_silent(self):
+        self.seed()
+        big = self.vault / 'notes/uzun.md'
+        big.write_text('kelime ' * 600, encoding='utf-8')
+        payload = {'hook_event_name': 'PostToolUse', 'session_id': 'hygiene-default',
+                   'tool_input': {'file_path': str(big)}}
+        self.assertEqual(self.invoke(payload, 'claude'), {})
+        start = self.invoke(dict(self.payload, hook_event_name='SessionStart'), 'claude')
+        self.assertNotIn('Soru sirasi', json.dumps(start))
+        self.assertFalse((self.state / 'soruldu').exists())
+        self.assertFalse((self.state / 'touch-log.tsv').exists())
+
+    def test_word_cap_opt_in_warns_claude_and_codex_not_antigravity(self):
+        self.seed()
+        big = self.vault / 'notes/uzun.md'
+        big.write_text('kelime ' * 600, encoding='utf-8')
+        self.enable(word_cap_warning=True)
+        payload = {'hook_event_name': 'PostToolUse', 'session_id': 'hygiene-cap',
+                   'tool_input': {'file_path': str(big)}}
+        for harness in ('claude', 'codex'):
+            response = self.invoke(dict(payload, session_id='hygiene-cap-' + harness), harness)
+            self.assertIn('Bolum SINYALI', response['hookSpecificOutput']['additionalContext'])
+        antigravity = self.invoke(dict(payload, session_id='hygiene-cap-antigravity'), 'antigravity')
+        self.assertEqual(antigravity, {'decision': 'stop'})
+
+    def test_custom_max_words_is_honoured(self):
+        self.seed()
+        note = self.vault / 'notes/kirpik.md'
+        note.write_text('kelime ' * 60, encoding='utf-8')
+        self.enable(word_cap_warning=True, max_words=50)
+        payload = {'hook_event_name': 'PostToolUse', 'session_id': 'hygiene-cap-custom',
+                   'tool_input': {'file_path': str(note)}}
+        response = self.invoke(payload, 'claude')
+        self.assertIn('10 kelime tavan uzerinde', response['hookSpecificOutput']['additionalContext'])
+
+    def test_folder_questions_opt_in_asks_once_per_cooldown(self):
+        self.seed()
+        (self.vault / 'Beden').mkdir()
+        then = time.time() - 60 * 86400
+        os.utime(self.vault / 'Beden', (then, then))
+        self.enable(folder_questions=True)
+        first = self.invoke(dict(self.payload, hook_event_name='SessionStart'), 'claude')
+        context = first['hookSpecificOutput']['additionalContext']
+        self.assertIn('Soru sirasi', context)
+        self.assertIn('Beden', context)
+        stamps = list((self.state / 'soruldu').glob('*.stamp'))
+        self.assertEqual([stamp.stem for stamp in stamps], ['Beden'])
+        second = self.invoke(dict(self.payload, hook_event_name='SessionStart'), 'claude')
+        self.assertNotIn('Soru sirasi', json.dumps(second))
+
+    def test_promotion_opt_in_touch_log_records_once(self):
+        self.seed()
+        self.enable(promotion=True)
+        payload = {'hook_event_name': 'PostToolUse', 'session_id': 'hygiene-promo',
+                   'tool_input': {'file_path': str(self.vault / 'notes/task.md')}}
+        self.invoke(payload, 'claude')
+        self.assertTrue((self.state / 'touch-log.tsv').exists())
+        self.assertIn('notes/task.md', (self.state / 'touch-log.tsv').read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':
