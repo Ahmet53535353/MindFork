@@ -16,7 +16,7 @@ makineye özeldir ve eşitlenmez; her makine onu vault'taki Markdown'dan kendisi
 | `🔮 850-Companion/Arşiv/` | evet | `companion-compact` metni canlı dosyadan çıkarıp arşive taşır ve yerine tek bir işaret satırı bırakır. Arşiv tek makinede kalırsa öbür makine içi boş bir işaret görür. Arşivdeki `visibility: private` otomatik bağlama girmez demektir, git dışı demek değildir. |
 | `receipts/` | evet | Receipt dosyası yazıldıktan sonra değişmez ve adı `event_id` özetidir (`beyin_v3_sync.py` `receipt()`). Öbür makine yeni receipt'i bir sonraki `sync`'te kendi veritabanına alır (`_scan_receipts()`). |
 | `daily/v3/`, `knowledge/v3/` | hayır | Bu görünümler yerel veritabanındaki receipt'lerden üretilir (`beyin_v3_projections.py` `project_receipts()`). Receipt'ler eşitlendiyse iki makinede aynı çıkar. Git'e alınırlarsa öbür makineden gelen dosya elle düzenlenmiş sayılır (`manual receipt view edit preserved`) ve o görünüm artık güncellenmez. |
-| `AGENTS.md`, `CLAUDE.md` | evet | Kullanıcının kendi talimatları da bu dosyalardadır. Beyin bloğu iki makinede aynıdır; aşağıdaki geçici nota bak. |
+| `AGENTS.md`, `CLAUDE.md` | evet (şimdilik hayır) | Kullanıcının kendi talimatları da bu dosyalardadır. Beyin bloğu şu an bu makinenin mutlak yolunu taşıdığı için yol kaldırılana kadar git dışında tutulur; aşağıdaki geçici nota bak. |
 | Kurulum dosyaları | hayır | Bir kısmı bu makinenin yollarını taşır (`.beyin-runtime.json`, hook dosyaları, Hermes ve OMP eklentileri); geri kalanı bu makinede kurulu sürüme aittir. Güncellemeyi önce yapan makinenin dosyaları git'le öbürüne geçerse o makinenin kurulum kaydıyla uyuşmaz; yeniden kurulum `Reinstall conflict: managed file changed` hatasıyla durur. |
 
 ## Önerilen `.gitignore`
