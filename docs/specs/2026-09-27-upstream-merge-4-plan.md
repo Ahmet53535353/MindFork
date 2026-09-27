@@ -113,3 +113,56 @@ bizim günlük log ayrımımız eklenir ve "taşı" kuralı **kart modeline uyar
   notuna yaz. Varsa `## Previous`/`## Önceki` bölümüne ve arşiv bağlantısına dokunma; eski kartları
   yalnız `companion-compact` taşır. Varsayılan sınır 3.000 karakter.
 ```
+
+## Sonuç (2026-09-27)
+
+- **Birleştirme:** `83d131d`, 21 dosya, +1595/−36. Tahmin edilen 5 değil, **1** metinsel
+  çakışma; 8 dosya kendiliğinden birleşti.
+- **Çakışma çözümü:** `SKILL.md` `Last-Session.md` maddesi. Upstream'in kart sözleşmesi
+  kazandı, günlük log ayrımı ve "kendi eski kartını önce günlük loga taşı" kuralı ona
+  uyarlanarak korundu. Hook'taki günlük log kuralı (143. satır) sağlam.
+- **Kırmızı → yeşil:** `tests/v3_companion_multicard_test.py` 7 test, 14 alt test.
+  Port öncesi **6 kırmızı / 6 yeşil**; kırmızılık doğru nedenle: kart kuyruğu kesiliyordu
+  (`TAIL_DORT not found`, orta bir kart `[truncated: read source]` ile yarıda kesilmişti).
+  Port sonrası **7/7**.
+- **Uygulanan kural:** `beyin_v3_companion.clip_cards()` — kartlar `^## ` başlıklarında
+  bölünür, yeni kart en üstten başlanarak **bütün olarak** alınır, sığmayan kart
+  `[truncated: N older handoff cards not shown; read source]` ile sayılır, tek kart bile
+  sığmıyorsa `ends()` ile **baş+son** kırpılır. `handoff_cards()` alt başlıkları (### ve
+  derin) kartın içinde bırakır — upstream'in arşiv ayrıştırıcısıyla aynı ilke.
+- **Bir uygulama kararı:** işaretçi "gösterilmeyen" kartları sayar, **kırpılan** en yeni kartı
+  saymaz; kırpılan kart zaten `ends()` işaretçisiyle neyin atlandığını söyler. İlk denemede
+  5/4 sayı çatışması çıktı, sözleşme "older ... not shown" ifadesine göre düzeltildi.
+- **İnsan kullanımı:** `tests/custom/v3_human_use_month_test.py` sürücüsü eski tek-kart
+  modelini uyguluyordu (`re.split(r'\n## ', head)[0]` — başka oturumların kartını silerdi).
+  Kart modeline taşındı: `## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla
+  en üste kendi kartını yazar, eskiyi korur. Yeni **q17** ayda iki kartın biriktiğini ve
+  bağlamın en yeniyi taşıdığını kanıtlar. **17/17** (16 soru + q17).
+- **Tam paket:** **920 passed, 1 skipped, 2286 subtests** — 0 kırmızı. (M3 sonrası 875 idi;
+  artış upstream'in yeni testleri + 7 çok-kart testi + q17.)
+
+### Süreçte bulunan iki kendi hatanız
+
+1. **Hunk çakışması sezgisi yanıltıcıydı.** Taban satırlarına bakarak 5 çakışma tahmin
+   edildi; merge-tree 1 dedi. Sonraki dalgalarda kuru deneme sonucu esas alınacak.
+2. **Yeni testin regex'i kendi kurgusunu reddediyordu.** q17 etiket için `\S+` arıyordu,
+   sürücü ise iki kelimelik etiket (`ay sonu`) yazıyordu; ürün doğruydu, test yanlıştı.
+   Gözlem ayrıca canlı dosyadan değil simülasyon anında kaydedilen metinden okunuyor
+   (sürücünün `m.snap_month_end` / `m.startup` sözleşmesiyle aynı).
+
+## Upstream'e önerilen tek konulu PR (yapılmadı)
+
+`beyin_v3_companion.py`'de kart bütünlüğü bağlam yolunda uygulanmıyor. Upstream'in kendi
+gerekçesi PR'yi destekliyor: kart `beyin_v3_compact.py`'de birim tanımlı ("a card moves or
+stays whole", #118), aynı ilke `FLOORS` + `clip` yolunda yok. PR kapsamı: `clip_cards()`,
+`handoff_cards()` ve `tests/v3_companion_multicard_test.py`; kanıt ekonomik profilde
+(2000 karakter) kartın kuyruğunun, yani "sonraki somut adım" satırının kesildiği.
+
+## Kalan iş (bu dalga değil)
+
+- `tests/v3_human_use_month_test.py` sürücüsünde `s1[:8]` ve `s30[:8]` aynı sekiz karakteri
+  veriyor (`zeynep-g`): SKILL.md'nin istediği ayrım gerçek oturumlarda çalışıyor, sürücünün
+  sahte kimlikleri kısa. Yanlış okuma riski düşük ama q17 buna karşı uyarmıyor.
+- `LIMITS['Last-Session.md'] = 3000` artık **kart dosyasının tamamı** için geçerli: paralel
+  oturumlar birikince hijyen uyarısı çıkar ve `companion-compact` eski kartları arşivler.
+  Bu upstream'in tasarımı, bizim ek ölçüm değil.
