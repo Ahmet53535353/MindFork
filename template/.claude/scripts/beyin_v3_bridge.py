@@ -36,15 +36,15 @@ def origin(payload, harness):
 
 
 def read_project_context(state):
-    """Read machine-local project-context setting (default False). Rollback-safe outside vault."""
+    """Machine-local opt-in (default off); outside the vault so rollback never sees a new preference key."""
     path = Path(state) / 'project-context.json'
     if not path.is_file() or path.is_symlink():
         return False
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
-        return bool(data.get('enabled', False))
     except (ValueError, OSError):
         return False
+    return isinstance(data, dict) and data.get('enabled') is True
 
 
 def save_project_context(state, enabled):
@@ -55,100 +55,138 @@ def save_project_context(state, enabled):
     return bool(enabled)
 
 
-def project_context(vault, state, project_id, project_name, budget=1200, today_iso=None):
-    """Build scoped project context (latest receipt summary + due tasks).
+def _visible(record):
+    """The default internal audience gate shared with retrieval (_eligible)."""
+    return (record.get('visibility', 'internal') in ('public', 'internal') and record.get('trust') != 'untrusted' and
+            record.get('trusted') is not False and record.get('status') != 'untrusted' and record.get('kind') != 'untrusted')
 
-    - Latest receipt for this project_id (max 600 chars).
-    - Due tasks where due_at <= today, status active/waiting, visibility != private,
-      and task.project matching project_name (casefold).
-    - Other projects: count only, no titles.
-    - Whole block capped at budget (default 1200 chars), cleanly omitting entries
-      before the budget is exceeded without half-cut records.
+
+def _fresh(vault, record):
+    """Indexed source still exists inside the vault and matches the indexed hash."""
+    try:
+        target = (vault / record['source']).resolve()
+        return (target.is_relative_to(vault) and target.is_file() and
+                hashlib.sha256(target.read_bytes()).hexdigest() == record.get('source_sha256'))
+    except (KeyError, TypeError, ValueError, OSError):
+        return False
+
+
+def _one_line(value, limit):
+    text = ' '.join(str(value or '').split())
+    if len(text) <= limit:
+        return text
+    if limit < 20:
+        return ''
+    cut = text[:limit - 3]
+    return (cut.rsplit(' ', 1)[0] if ' ' in cut else cut) + '...'
+
+
+def project_context(vault, state, project_id, project_name, budget=1200, today_iso=None):
+    """Scoped, read-only project block for an opted-in external SessionStart.
+
+    - Latest receipt of this project_id (receipt_checkpoints session match); skipped when its
+      source file is gone or it or any ref is private/untrusted (same gate as recap refs).
+    - Due tasks (due_at <= local today, active/waiting) of this project, after the retrieval
+      visibility/trust, supersession and source-freshness gates; sorted by due date, title.
+    - Other due tasks: count only, never titles.
+    - Whole lines only, within budget; no model call, no write.
     """
     if budget < 80 or not project_id:
         return ''
-    from datetime import datetime, timezone
-    from beyin_v3_sync import SyncEngine
-    if today_iso is None:
-        today_iso = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-    engine = SyncEngine(vault, state)
-    with engine.store._connect() as db:
+    import sqlite3
+    from datetime import date
+    from beyin_v3_projections import _hidden_ref_sources
+    vault = Path(vault).resolve()
+    today = str(today_iso or date.today().isoformat())[:10]
+    database = Path(state) / 'memory.sqlite3'
+    if database.is_symlink() or not database.is_file():
+        return ''
+    # Short read-only timeout: a busy worker must not push SessionStart past the host limit.
+    db = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)
+    try:
+        db.execute('PRAGMA query_only=ON')
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        latest_summary = None
-        if 'receipt_checkpoints' in tables and 'receipts' in tables:
-            matching_sessions = {row[0] for row in db.execute(
-                'SELECT session FROM receipt_checkpoints WHERE project_id=?', (project_id,)
-            )}
-            if matching_sessions:
-                candidates = []
-                for (payload_str,) in db.execute('SELECT payload FROM receipts'):
+        summary = ''
+        if {'receipt_checkpoints', 'receipts'} <= tables:
+            sessions = {row[0] for row in db.execute('SELECT session FROM receipt_checkpoints WHERE project_id=?', (project_id,))}
+            candidates = []
+            if sessions:
+                for (payload,) in db.execute('SELECT payload FROM receipts'):
                     try:
-                        receipt = json.loads(payload_str)
-                        if receipt.get('session') in matching_sessions and receipt.get('visibility') != 'private':
-                            created_at = receipt.get('created_at')
-                            summary = receipt.get('summary')
-                            if created_at and summary:
-                                candidates.append((created_at, summary))
-                    except Exception:
+                        event = json.loads(payload)
+                    except ValueError:
                         continue
-                if candidates:
-                    candidates.sort(key=lambda item: item[0], reverse=True)
-                    latest_summary = candidates[0][1][:600].strip()
-
-        current_tasks = []
-        other_due_count = 0
-        norm_current_project = project_name.strip().casefold() if project_name else ''
-
-        if 'records' in tables:
-            for (payload_str,) in db.execute('SELECT payload FROM records'):
-                try:
-                    rec = json.loads(payload_str)
-                    if rec.get('kind') != 'task':
-                        continue
-                    if rec.get('visibility') == 'private':
-                        continue
-                    if rec.get('status') not in ('active', 'waiting'):
-                        continue
-                    due_at = rec.get('due_at')
-                    if not due_at or str(due_at)[:10] > str(today_iso)[:10]:
-                        continue
-                    task_proj = (rec.get('project') or '').strip().casefold()
-                    if task_proj and norm_current_project and task_proj == norm_current_project:
-                        title = (rec.get('title') or '').strip()
-                        next_act = (rec.get('next_action') or '').strip()
-                        if title:
-                            current_tasks.append((title, next_act))
-                    else:
-                        other_due_count += 1
-                except Exception:
+                    if (isinstance(event, dict) and event.get('session') in sessions and isinstance(event.get('event_id'), str) and
+                            isinstance(event.get('summary'), str) and isinstance(event.get('created_at'), str)):
+                        candidates.append((event['created_at'], event['event_id'], event))
+            for _, ident, event in sorted(candidates, key=lambda item: item[:2], reverse=True):
+                source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
+                refs = [ref for ref in event.get('refs') or [] if isinstance(ref, str)] if isinstance(event.get('refs'), list) else []
+                if not (vault / source).is_file() or _hidden_ref_sources(db, [source, *refs]):
                     continue
-
-    if not latest_summary and not current_tasks and other_due_count == 0:
+                summary = _one_line(event['summary'], 600)
+                break
+        current, other_due = [], 0
+        wanted = (project_name or '').strip().casefold()
+        if 'records' in tables:
+            records = []
+            for (payload,) in db.execute('SELECT payload FROM records ORDER BY id'):
+                try:
+                    record = json.loads(payload)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and _visible(record):
+                    records.append(record)
+            superseded = {rid for record in records for rid in (record.get('supersedes') or []) if isinstance(rid, str)}
+            for record in records:
+                if record.get('kind') != 'task' or record.get('status') not in ('active', 'waiting') or record.get('id') in superseded:
+                    continue
+                try:
+                    due = date.fromisoformat(str(record.get('due_at') or '')[:10]).isoformat()
+                except ValueError:
+                    continue
+                if due > today or not _fresh(vault, record):
+                    continue
+                if wanted and str(record.get('project') or '').strip().casefold() == wanted:
+                    title = _one_line(record.get('title'), 160)
+                    if title:
+                        current.append((due, title, _one_line(record.get('next_action'), 200)))
+                else:
+                    other_due += 1
+    finally:
+        db.close()
+    if not summary and not current and not other_due:
         return ''
-
-    lines = [f'Project context ({project_name}):']
-    if latest_summary:
-        lines.append(f'Son kayit: {latest_summary}')
-    if current_tasks:
-        lines.append('Tarihi gelen gorevler:')
-        for title, next_act in current_tasks:
-            task_line = f'- {title}: {next_act}' if next_act else f'- {title}'
-            lines.append(task_line)
-    if other_due_count > 0:
-        lines.append(f'(baska projelerde {other_due_count} tarihi gelmis gorev)')
-
-    assembled = []
-    current_len = 0
-    for line in lines:
-        added_len = len(line) + (1 if assembled else 0)
-        if current_len + added_len > budget:
-            break
-        assembled.append(line)
-        current_len += added_len
-
-    if len(assembled) <= 1:
+    header = f'Project context ({project_name}):'
+    tail = f'(bu proje disinda {other_due} tarihi gelmis gorev)' if other_due else ''
+    room = budget - len(header) - (len(tail) + 1 if tail else 0)
+    body = []
+    if summary:
+        # With due tasks present, continuity gets at most half of the room so tasks are not crowded out.
+        clipped = _one_line(summary, min(600, room // 2 if current else room) - len('Son kayit: ') - 1)
+        if clipped:
+            body.append('Son kayit: ' + clipped)
+            room -= len(body[-1]) + 1
+    if current:
+        heading, note_room = 'Tarihi gelen gorevler:', len('(+999 tarihi gelen gorev sigmadi)') + 1
+        room -= len(heading) + 1 + note_room  # heading and a possible omission note are reserved
+        task_lines = []
+        for due, title, action in sorted(current):
+            line = f'- {title}: {action}' if action else f'- {title}'
+            if len(line) + 1 <= room:
+                task_lines.append(line)
+                room -= len(line) + 1
+        omitted = len(current) - len(task_lines)
+        if task_lines:
+            body.extend([heading, *task_lines])
+        if omitted:
+            body.append(f'(+{omitted} tarihi gelen gorev sigmadi)' if not task_lines else f'(+{omitted} gorev sigmadi)')
+    if tail:
+        body.append(tail)
+    if not body:
         return ''
-    return '\n'.join(assembled)
+    text = '\n'.join([header, *body])
+    return text if len(text) <= budget else ''
 
 
 def eligible(cwd, vault, roots):
@@ -256,11 +294,14 @@ def main(argv=None):
                 'Read vault sources before claiming facts. Do not infer completion from checkpoints. '
                 'Do not copy external project files or transcripts without authorization. No-memory requests take precedence.')
         if read_project_context(state):
-            proj_info = origin(payload, args.harness)
-            rem_budget = min(1200, max(0, args.context_chars - len(text) - 2))
-            extra = project_context(vault, state, proj_info.get('project_id', ''), proj_info.get('project', ''), budget=rem_budget)
-            if extra:
-                text = text + '\n\n' + extra
+            try:
+                proj_info = origin(payload, args.harness)
+                rem_budget = min(1200, max(0, args.context_chars - len(text) - 2))
+                extra = project_context(vault, state, proj_info.get('project_id', ''), proj_info.get('project', ''), budget=rem_budget)
+                if extra:
+                    text = text + '\n\n' + extra
+            except Exception:
+                pass  # The optional block never costs the startup instructions.
         # Do not cut a command, path or JSON token in half for a small budget.
         print(json.dumps(output_context(args.harness, event, text)) if len(text) <= args.context_chars else '{}')
         return 0

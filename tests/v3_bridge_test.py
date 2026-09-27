@@ -250,7 +250,7 @@ class BridgeTest(unittest.TestCase):
         engine.sync()
         text = self.invoke()['hookSpecificOutput']['additionalContext']
         self.assertIn('- Visible Local Task: Fix it', text)
-        self.assertIn('(baska projelerde 2 tarihi gelmis gorev)', text)
+        self.assertIn('(bu proje disinda 2 tarihi gelmis gorev)', text)
         self.assertNotIn('SECRET_TITLE_ONE', text)
         self.assertNotIn('SECRET_TITLE_TWO', text)
         self.assertNotIn('Secret action', text)
@@ -263,13 +263,67 @@ class BridgeTest(unittest.TestCase):
         gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints']
         session = gaps[0]['session']
         engine = SyncEngine(self.vault, self.state)
-        with engine.store._connect() as db:
-            db.execute("INSERT INTO receipts VALUES (?, ?)", ('rec-priv', json.dumps({'event_id': 'rec-priv', 'session': session, 'summary': 'PRIVATE_RECEIPT_CANARY', 'visibility': 'private', 'created_at': '2026-09-01T00:00:00Z'})))
+        engine.note_create('notes/public.md', 'Outcome', {'id': 'public-out', 'project': self.project.name})
+        engine.note_create('notes/secret.md', 'Private outcome', {'id': 'secret-out', 'project': self.project.name, 'visibility': 'private'})
+        engine.receipt('rec-old', 'OLDER_PUBLIC_RECEIPT', ['notes/public.md'], 'codex', session=session)
+        engine.receipt('rec-priv', 'PRIVATE_RECEIPT_CANARY', ['notes/secret.md'], 'codex', session=session)
         engine.task_create('tasks/priv_task.md', 'Private task', {'id': 'priv-task', 'title': 'PRIVATE_TASK_CANARY', 'next_action': 'Secret', 'status': 'active', 'due_at': '2026-09-01', 'project': self.project.name, 'owner': 'user', 'visibility': 'private'})
+        engine.task_create('tasks/other_priv.md', 'Other private', {'id': 'other-priv', 'title': 'Other', 'status': 'active', 'due_at': '2026-09-01', 'project': 'Elsewhere', 'owner': 'user', 'visibility': 'private'})
         engine.sync()
         text = self.invoke(dict(self.payload, event_id='read-priv'))['hookSpecificOutput']['additionalContext']
         self.assertNotIn('PRIVATE_RECEIPT_CANARY', text)
         self.assertNotIn('PRIVATE_TASK_CANARY', text)
+        self.assertNotIn('bu proje disinda', text)
+        # A receipt that cites a private source is skipped, not the whole block.
+        self.assertIn('Son kayit: OLDER_PUBLIC_RECEIPT', text)
+
+    def test_stale_superseded_and_untrusted_tasks_stay_out(self):
+        bridge.save_project_context(self.state, True)
+        engine = SyncEngine(self.vault, self.state)
+        base = {'status': 'active', 'due_at': '2026-09-01', 'project': self.project.name, 'owner': 'user'}
+        engine.task_create('tasks/stale.md', 'Body', dict(base, id='stale', title='STALE_TASK'))
+        engine.task_create('tasks/old.md', 'Body', dict(base, id='old', title='OLD_TASK'))
+        engine.task_create('tasks/new.md', 'Body', dict(base, id='new', title='NEW_TASK'))
+        engine.note_create('notes/decision.md', 'Old task replaced', {'id': 'decision', 'project': self.project.name, 'supersedes': ['old']})
+        engine.task_create('tasks/web.md', 'Body', dict(base, id='web', title='UNTRUSTED_TASK'))
+        engine.sync()
+        with engine.store._connect() as db:
+            row = json.loads(db.execute("SELECT payload FROM records WHERE id='web'").fetchone()[0])
+            db.execute("UPDATE records SET payload=? WHERE id='web'", (json.dumps(dict(row, trust='untrusted')),))
+        with (self.vault / 'tasks/stale.md').open('a', encoding='utf-8') as handle:
+            handle.write('edited after indexing\n')
+        text = self.invoke()['hookSpecificOutput']['additionalContext']
+        self.assertIn('- NEW_TASK', text)
+        for canary in ('STALE_TASK', 'OLD_TASK', 'UNTRUSTED_TASK'):
+            self.assertNotIn(canary, text)
+
+    def test_project_context_failure_keeps_the_startup_instructions(self):
+        bridge.save_project_context(self.state, True)
+        baseline = self.invoke(dict(self.payload, event_id='before'))['hookSpecificOutput']['additionalContext']
+        (self.state / 'memory.sqlite3').write_bytes(b'not a database')
+        text = self.invoke(dict(self.payload, event_id='broken'))['hookSpecificOutput']['additionalContext']
+        self.assertIn('receipt --harness codex', text)
+        self.assertNotIn('Project context', text)
+        self.assertEqual(text, baseline)
+        (self.state / 'project-context.json').write_text('[true]', encoding='utf-8')
+        self.assertFalse(bridge.read_project_context(self.state))
+
+    def test_default_budget_keeps_due_tasks_next_to_a_long_receipt(self):
+        bridge.save_project_context(self.state, True)
+        self.invoke(dict(self.payload, event_id='start-long'))
+        self.invoke(dict(self.payload, hook_event_name='Stop', event_id='stop-long'))
+        hook.drain_queue(self.vault, self.state)
+        session = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints'][0]['session']
+        engine = SyncEngine(self.vault, self.state)
+        engine.note_create('notes/long.md', 'Outcome', {'id': 'long-out', 'project': self.project.name})
+        engine.receipt('rec-long', 'LONG_SUMMARY ' + 'word ' * 200, ['notes/long.md'], 'codex', session=session)
+        engine.task_create('tasks/due.md', 'Body', {'id': 'due', 'title': 'DUE_NEXT_TO_LONG', 'status': 'active', 'due_at': '2026-09-01', 'project': self.project.name, 'owner': 'user'})
+        engine.sync()
+        text = self.invoke(dict(self.payload, event_id='read-long'))['hookSpecificOutput']['additionalContext']
+        self.assertLessEqual(len(text), 1500)
+        self.assertIn('Son kayit: LONG_SUMMARY', text)
+        self.assertIn('...', text)
+        self.assertIn('- DUE_NEXT_TO_LONG', text)
 
     def test_budget_cap_drops_entries_cleanly_without_partial_cut(self):
         engine = SyncEngine(self.vault, self.state)

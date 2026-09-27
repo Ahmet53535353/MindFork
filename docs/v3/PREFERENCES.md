@@ -26,16 +26,6 @@ anlatılır.
 
 Ek sabit sır değerleri vault dışındaki runtime klasöründe `secret-patterns.txt` dosyasına, satır başına bir değer olarak yazılabilir. Dosya regex çalıştırmaz; yorum satırları `#` ile başlar. Eşleşen metinler veya değerler sağlık kaydına yazılmaz, yalnız toplam eşleşme sayısı `doctor` sonucunda gösterilir. Bu önlem kazara kalıcı yazımı azaltır; tam bir DLP veya önceden yazılmış notları temizleme aracı değildir.
 
-## Projeyi tanıyan oturum başı
-
-`python3 beyin.py preferences --project-context on` komutu harici projelerde çalışan global bridge'in SessionStart anında çalışılan projeyi tanımasını sağlar. Varsayılan kapalıdır. Açıldığında:
-- Projenin (`project_id`) en son yazılmış makbuz özeti (en fazla 600 karakter) eklenir.
-- O projeye ait tarihi gelmiş (`due_at` bugüne eşit veya geçmiş) aktif ve bekleyen görevlerin başlığı ve sonraki adımı listelenir.
-- Başka projelerin tarihi gelmiş görevleri için başlık verilmez, yalnız toplam sayı bildirilir (`(başka projelerde N tarihi gelmiş görev)`).
-- `visibility: private` olan makbuz ve görevler bu bağlama asla girmez.
-- Tüm blok en fazla 1.200 karakterle sınırlıdır ve bütçe sınırında kayıtları yarım kesmeden temizce tamamlar.
-- Ayar vault içindeki şemayı değiştirmemek ve rollback uyumunu korumak için runtime klasöründeki `project-context.json` dosyasında saklanır. Kapatmak için `--project-context off` kullanılır.
-
 Süre en son otomatik başlatmaya göre yerel SQLite kaydıyla, istemciler arasında atomik olarak sınırlandırılır. Bir sonraki olay gelmedikçe kontrol çalışmaz. Yeni oturumda daima taze kontrol; kaydedilmiş worker hatasında yeniden deneme. Bu düşük seviyeli kontrol model çağırmaz. Otomatik bağlam kapalı olsa bile açık not/görev/receipt ve context komutları çalışır. Kapatmadan önce başlatılmış bir işlem tamamlanabilir; önceden bekleyen metadata saklanır. Açık `--drain-queue` bakım komutu bu kuyruğu işler.
 
 Aralığa takılmış bir kontrolde turn bağlamı istenirse eski kayıtları güncel diye sunmak yerine kısa tazeleme uyarısı verilir. Ekonomik modda sonraki mesajlarda tekrar bağlam eklenmez; beyin skill'i bilgi gerektiğinde kaynakları doğrudan tazeler.
@@ -43,6 +33,18 @@ Aralığa takılmış bir kontrolde turn bağlamı istenirse eski kayıtları g�
 Özel V2 cron/LaunchAgent/Task Scheduler işleri veya kullanıcının ayrı kurduğu 15 dakikalık ücretli ajan otomasyonları bu tercihlerle kapatılmaz. Önce ilgili işi tespit edip ayrı yönetmek gerekir. V3 kendiliğinden Luna/Sonnet çalıştırmaz.
 
 Bu değişiklik yerel adaydır; yayımlanmış v3.0.0 paketine otomatik olarak eklenmez. Yeni paket yayımlanmadan kullanıcılara mevcut sürüm özelliği diye duyurulmamalıdır.
+
+## Projeyi tanıyan oturum başı
+
+`python3 beyin.py preferences --project-context on` komutu, [global köprünün](GLOBAL-BRIDGE.md) vault dışındaki bir projede açılan oturumun başına o projeye ait kısa bir blok eklemesini sağlar. Varsayılan kapalıdır; kapalıyken köprünün çıktısı değişmez. Vault içindeki oturumlar etkilenmez. Açıldığında:
+
+- Aynı `project_id`'ye (klasör yolunun hash'i) bağlı en yeni receipt özeti tek satır olarak eklenir, en fazla 600 karakter. Receipt'in kaynak dosyası silinmişse ya da receipt veya `refs` içindeki bir kaynak `private` ya da güvenilmez ise o receipt atlanır ve bir öncekine bakılır.
+- O projenin tarihi gelmiş görevleri (`due_at` yerel tarihe göre bugün ya da geçmiş, durum `active` veya `waiting`) başlık ve sonraki adımla listelenir. Görev projeye `project` alanı klasör adıyla eşleşerek (büyük/küçük harf duyarsız) bağlanır; aynı adlı iki klasör aynı görevleri görür.
+- Görevler normal bağlamla aynı kapılardan geçer: `private` ve güvenilmez kayıt, supersede edilmiş görev ve indekslendikten sonra değişmiş kaynak girmez.
+- Başka projelerin ya da projesiz görevlerin başlığı verilmez, yalnız sayı yazılır: `(bu proje disinda N tarihi gelmis gorev)`.
+- Blok köprünün `--context-chars` bütçesinden geriye kalanla ve en fazla 1.200 karakterle sınırlıdır. Görev varsa receipt özeti bu alanın yarısını aşmaz. Satırlar bütün olarak eklenir; sığmayan görevler `(+N gorev sigmadi)` ile sayılır.
+- Blok salt okunur SQLite okumasıyla kurulur; model çağrısı ve yazma yoktur. Okuma başarısız olursa yalnız bu blok düşer, köprünün başlangıç talimatı aynen verilir.
+- Ayar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `project-context.json` dosyasında tutulur; makineye özeldir ve rollback güvenlidir. Kapatmak için `--project-context off`.
 
 ## Stop'ta receipt hatırlatması
 
