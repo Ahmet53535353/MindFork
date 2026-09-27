@@ -214,7 +214,14 @@ def parser():
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
     history.add_argument("record_id")
-    sub.add_parser("dream", help="Report consolidation window gates, size inventory, citation heat and candidates; writes nothing")
+    dream = sub.add_parser("dream", help="Report consolidation window gates, size inventory, citation heat and candidates; writes nothing")
+    dream.add_argument("--apply", action="store_true",
+                       help="Open the window: enforce the gates, snapshot every file it touches, "
+                            "apply Refresh, then record the window. Restorable with --restore.")
+    dream.add_argument("--restore", metavar="YYYY-MM-DD",
+                       help="Put a window's pre-images back from its snapshot and rebuild the index")
+    dream.add_argument("--force", action="store_true",
+                       help="Open the window despite the 24 hour and receipt gates; never bypasses the lock")
     return root
 
 
@@ -414,10 +421,24 @@ def main(argv=None):
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "dream":
-            load_sync()
+            SyncEngine = load_sync()          # also puts the runtime modules on the path
             import beyin_v3_dream
-            limits, extra = hygiene_scope(state, vault)
-            result = beyin_v3_dream.report(vault, state, store, limits=limits, extra=extra)
+            if args.restore:
+                # A restore is a repair path, not a window: it takes no gates and no lock,
+                # because the thing it repairs is exactly the state a failed window left.
+                if args.apply or args.force:
+                    raise ValueError("dream --restore takes no --apply/--force")
+                result = beyin_v3_dream.restore(vault, args.restore)
+                SyncEngine(vault, state).sync()      # the index must match the restored notes
+            else:
+                limits, extra = hygiene_scope(state, vault)
+                if args.apply or args.force:
+                    result = beyin_v3_dream.window(vault, state, store, limits=limits,
+                                                   extra=extra, force=args.force)
+                    if result['wrote']:
+                        SyncEngine(vault, state).sync()   # re-index what the window changed
+                else:
+                    result = beyin_v3_dream.report(vault, state, store, limits=limits, extra=extra)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
         elif args.command == "companion-compact":

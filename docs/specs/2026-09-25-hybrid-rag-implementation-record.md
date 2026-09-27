@@ -259,12 +259,49 @@ karsiladi; o olmasaydi yeni modul yalniz gercek vault'ta import hatasi verirdi.
 kosuda sifir kirik — onceki spec'lerde yazili "buyuyen paket ilk kosuda bilinmeyen
 kirik uretebilir" riski gerceklesmedi.
 
+## AutoDream faz 2: snapshot + Refresh + geri al (2026-09-26)
+
+Faz-1'in "≥1 hafta gerçek kullanım ölçümü" şartını 30 sanal günlük ay sürücüsü
+doldurdu (kapılar gerçekten reddetti, üç aday türü de rapora düştü, elle uygulama
+yalnız beklenen dosyayı değiştirdi). Kalan eksik mutasyonun geri alınabilirliğiydi.
+
+`dream --apply` artık kapıları **uygular**, kilidi alır, dokunduğu her dosyanın
+ön-image'ını `archive/auto-dream/<tarih>/files/` altına kopyalar, `manifest.json`
+(sha256) yazar, Refresh'i uygular, `report.md` üretir, dizini yeniden kurar ve
+**yalnız gerçekten bir şey yazdıysa** filigranı ilerletir. `dream --restore
+<tarih>` hash'i doğrulayıp geri yükler; tutmuyorsa reddeder, sessiz bozma yoktur.
+`--force` zaman/receipt kapılarını atlar, kilidi asla.
+
+**Refresh kapsamı bilinçli daraltıldı** (§5.1): kod yalnız makineye ait alanları
+yazar (başlık/ayraç, çözülebilen frontmatter tarihi), gövdedeki bağıl tarihleri
+`prose_dates` olarak **raporlar** ve metne dokunmaz. İki gerekçe: "dün"ün hangi
+güne çözüleceği belirsizdi, ve insan cümlesini kodun yazması ajanın yetkisini
+bayatlatırdı. Yan fayda: SKILL'deki "mutlak tarih yaz" kuralı artık ölçülebilir
+bir ihlal listesine dönüştü.
+
+Yol üstünde **dört gerçek hata** bulundu ve düzeltildi: kilit ters bildiriliyordu
+(her `--apply` kendi kilidini "başkası almış" sanıyordu), frontmatter değişikliği
+raporlanıyordu ama yazılmıyordu ve kapatıcı `---` satır sonunu yutuyordu,
+`prose_dates` katlanmış metni dösteriyordu, `updated` tazelemesi gövdesi
+değişmeyen notları aramada öne atacaktı. Hepsi kendi kırmızı testleriyle yakalandı.
+Ayrıca üç test fixture'ı aday tavanının altında kaldığı için biri "idempotans"
+testi **trivially** geçiyordu; bunu yakalayan `assert_refresh_candidate()`
+yardımcısı eklendi.
+
+**Geri al kanıtı iki yerde ölçüldü:** 21 yeni senaryo ve gerçek kurulumda (ay
+sürücüsü q15: apply → restore → vault bayt bayt aynı). Tam paket **859/859** yeşil.
+
+Yarıda kalan: faz 3 Merge, BULGU 8'i ön koşul olarak bekliyor (başlık tabanlı aday
+eşleşmesi + kalıcı "çözüldü" durumu yok).
+
 ## Kalan işler
 
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
-2. AutoDream-lite faz 2-5 (snapshot/Refresh → Merge → onaylı Prune → re-index). Faz 1
-   ölçümü hazır: **≥1 hafta gerçek kullanım ölçümü**, sonra karar (ölçüm geçmezse yazılmaz);
-   kural ve kapsam `docs/specs/2026-09-26-autodream-lite-roadmap.md` §10
+2. AutoDream-lite faz 3-5 (Merge → onaylı Prune → re-index). Faz 1 (ölçüm) ve faz 2
+   (snapshot/Refresh/`--restore`) **TAMAMLANDI** (2026-09-26): ölçüm şartı 30 sanal
+   günlük ay sürücüsüyle karşılandı, geri al kanıtı hem 21 senaryoda hem gerçek
+   kurulumda ölçüldü. Kalan iş faz 3 Merge ve BULGU 8 ön koşulu; kural ve kapsam
+   `docs/specs/2026-09-26-autodream-lite-roadmap.md` §10 + §5.1
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main upstream ile senkron: `db1f23d`; dal `feat/memory-consolidation` = `a680338`)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
