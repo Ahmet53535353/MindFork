@@ -25,12 +25,14 @@ Anlamlı bir iş parçası bittiğinde, final yanıtından önce kısa bir süre
 Bu kontrol her cevapta tekrarlanmaz. Codex gibi her mesajı ayrı görev sayan istemcilerde
 de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerinde düzeltir:
 
-- Last-Session.md: tek bir devir kartıdır, oturum günlüğü değildir. Üstteki kartı baştan
-  yeniden yaz: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak
-  bağlantıları ve belirsizlikler. Eski kartı alta ekleme; ayrıntısı receipt, `daily/` ve
-  knowledge notlarında yaşar, gerekirse oraya tek bağlantı ver. Varsa `## Previous`/`## Önceki`
-  bölümüne ve arşiv bağlantısına dokunma; eski metni yalnız `companion-compact` taşır.
-  Varsayılan sınır 3.000 karakter.
+- Last-Session.md: oturum başına bir devir kartıdır, oturum günlüğü değildir. Oturum kartını en üste
+  `## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla aç (etiket serbest metin, son
+  parça Receipt session kimliğinin ilk 8 karakteri); aynı oturumdaki güncellemelerde yalnız kendi
+  kartını baştan yeniden yaz, başka oturumların kartlarını ezme, dosyanın tamamını yeniden yazma.
+  Kartta: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak bağlantıları
+  ve belirsizlikler. Ayrıntısı receipt, `daily/` ve knowledge notlarında yaşar, gerekirse oraya tek
+  bağlantı ver. Varsa `## Previous`/`## Önceki` bölümüne ve arşiv bağlantısına dokunma; eski kartları
+  yalnız `companion-compact` taşır. Varsayılan sınır 3.000 karakter.
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
   güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
   al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.
