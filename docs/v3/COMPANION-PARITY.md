@@ -91,7 +91,10 @@ Düzeltme dört parçadır:
   `## Previous`/`## Önceki` (Last-Session) veya `## Closed`/`## Kapanan`/`## Kapalı`
   (Threads) bölümünün gövdesini, sonra dosya sınıra inene kadar en eski tarihli kayıtları
   taşır. Tarihli kayıt, ilk karakterlerinde ISO tarih bulunan bir başlık, paragraf veya
-  liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Devir kartının
+  liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Tarihli bir
+  başlık bir kart açar: aynı ya da daha üst seviyedeki bir sonraki başlığa kadar içindeki
+  tarihli satırlar ve alt başlıklar o kartındır; kart bölünmeden ya kalır ya da bütün
+  halde taşınır (#118). Devir kartının
   ve her konu başlığının en yeni kaydı yerinde kalır. Threads'te `## Active`/`## Aktif`/`## Açık`
   bölümünün doğrudan altındaki tarihli satırlar bir konunun kendisi olabileceği için taşınmaz.
   Taşınan satırlar kelimesi kelimesine ve sırasıyla companion klasöründeki
