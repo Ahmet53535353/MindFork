@@ -294,14 +294,63 @@ sürücüsü q15: apply → restore → vault bayt bayt aynı). Tam paket **859/
 Yarıda kalan: faz 3 Merge, BULGU 8'i ön koşul olarak bekliyor (başlık tabanlı aday
 eşleşmesi + kalıcı "çözüldü" durumu yok).
 
+## AutoDream faz 3: BULGU 8 kapandı + ajan planı (2026-09-26)
+
+Faz-3, bir aylık insan kullanımı E2E'sinin bulduğu **BULGU 8'i** kapattı: bir aday
+çözülmüş sayılmıyordu, çünkü eşleşme yalnız başlığa bakıyordu ve "çözüldü" durumu
+hiçbir yerde tutulmuyordu. Birleştirip aynı başlığı taşıyan bir işaretçi bırakmak
+adayı temizlemiyordu.
+
+- **Aday eşleşmesi** başlık alt-kümesi **veya** gövde örtüşmesi (gövde token'ları
+  retrieval ile aynı gövdeleyiciden; en az 3 ortak token ve küçük kümenin %50'si).
+  Aday `matched: title|body` ile gerekçesini bildirir.
+- **İşaretçi tespiri:** kısa not hedefin vault-göreli yolunu anıyorsa aday düşer.
+  Yanlış susturmayı önleyen koşul: not hedefin karakterinin ≤%40'ı olmalı.
+- **Kalıcı dismiss:** `archive/auto-dream/dismissed.json` (vault içi — içerik kararı,
+  reinstall'da kaybolmamalı) + `dream --dismiss`. Bozuk dosya pencereyi **durdurmaz**,
+  uyarıyla geçilir.
+- **`--apply` gövdeyi yazmaz:** çiftleri snapshot'lar ve `merge-plan.md` yazar
+  (hangi not hayatta kalacak, ortak sözcükler, ajana talimat). Birleşen metin
+  ajanın işi (§4).
+
+**Yol üstünde dört gerçek hata:** (1) `archive/` indeksleniyordu, yani her ön-image
+bir not oluyor ve kaynak not **kendi kopyasıyla** eşleşiyordu — yalnız CLI yolunda
+görünürdü, `EXCLUDED_DIRS`'a `'archive'` eklendi; (2) diskte **olmayan** notun
+kaydı kaldığında hayalet aday üretiliyordu; (3) gövde kuralı bir **notu bir görevle**
+eşleştiriyordu (aynı `kind` şartı); (4) aynı kaynağın iki kaydı kendini aday
+gösterebiliyordu.
+
+Test tarafında da üç sessiz hata: `pairs()` sıra duyarsızdı ve "işaretçi önerilmiyor"
+testini **trivially** yeşile çeviriyordu; birleştirilmiş not fixture'ı gerçekçi
+olmayan kadar kısaydı (kural yanlış değildi, çerçeve yanlıştı); faz-1'in iki merge
+testi kayıtları **dosyasız** tohumluyordu.
+
+**Ay sürücüsü q16** gerçek kurulumda kanıt: iki ödeme notu aday çıkıyor, ajan
+birleştirip işaretçi bırakıyor, aday düşüyor. Tam paket **875/875** yeşil.
+
+### Yeni bulgu (faz-3'ün kararı değil, ölçüldü ve kayda geçti)
+
+**Bir işaretçi not, birleştirilmiş notu aramada geçersiz kılabiliyor.** Konsolidasyon
+"yinelenen notu sil" yerine "işaretçi bırak" biçiminde denendi (kaynak bağlantıları
+çözülü kalır diye daha iyi bir uygulama) ve `odeme icin ne karar vermistik` sorusunda
+arama **85 karakterlik işaretçiyi** 378 karakterlik gerçek notun önüne geçirdi:
+kısa notun az kelimesi yüksek ağırlık alıyor. Bu retrieval sözleşmesine yeni bir madde
+demek (işaretçi işareti + kapı), faz-3'ün kapsamı değil. Sürücü bu yüzden orijinal
+davranışında tutuldu. **Sıradaki iş kalemi.**
+
 ## Kalan işler
 
+0. **İşaretçi notun retrieval'daki yeri** (2026-09-26, faz-3 ölçümü): birleştirme
+   sonrası bırakılan işaretçi not, kısa olduğu için birleşik notu aramada geçersiz
+   kılabiliyor. Karar gereken: işaretçi için frontmatter işareti (örn. hedef yol) ve
+   retrieval kapısı mı, yoksa merge pratiği "sil" mi kalmalı. Ölçüm ve iki seçenek
+   `docs/specs/2026-09-26-autodream-phase3-merge-plan.md` sonuç bölümünde.
+
 1. Gerçek embedding sağlayıcısı (semantic_searcher şu an kanca; Ollama/API opsiyonel)
-2. AutoDream-lite faz 3-5 (Merge → onaylı Prune → re-index). Faz 1 (ölçüm) ve faz 2
-   (snapshot/Refresh/`--restore`) **TAMAMLANDI** (2026-09-26): ölçüm şartı 30 sanal
-   günlük ay sürücüsüyle karşılandı, geri al kanıtı hem 21 senaryoda hem gerçek
-   kurulumda ölçüldü. Kalan iş faz 3 Merge ve BULGU 8 ön koşulu; kural ve kapsam
-   `docs/specs/2026-09-26-autodream-lite-roadmap.md` §10 + §5.1
+2. AutoDream-lite faz 4-5 (onaylı Prune → re-index). Faz 1 (ölçüm), faz 2
+   (snapshot/Refresh/`--restore`) ve faz 3 (merge adayı + dismiss + ajan planı)
+   **TAMAMLANDI** (2026-09-26); BULGU 8 gerçek kurulumda (q16) doğrulandı. Kural ve
+   kapsam `docs/specs/2026-09-26-autodream-lite-roadmap.md` §10 + §5.1 + §5.3
 3. Strict passage yoluna tip kapısı devri (#83 sonrası bilinen port boşluğu) — **TAMAMLANDI** (2026-09-25): kapılar arama anında `allowed` id kümesiyle uygulanıyor, index/df/FLOOR kalibrasyonu korunuyor; tasarım + sonuç `docs/specs/2026-09-25-passage-type-gate-design.md`
 4. PR ile main'e birleştirme (fork main upstream ile senkron: `db1f23d`; dal `feat/memory-consolidation` = `a680338`)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)

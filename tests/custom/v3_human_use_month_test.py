@@ -364,8 +364,9 @@ class Month:
             'korunacak, aylik rapor panelden alinacak.\n')
         main_note.write_text(re.sub(r'"updated_at": "[^"]+"', f'"updated_at": "{vday(29)}"', main_text),
                              encoding='utf-8')
-        # Yinelenen not kaldirilir: icerigi birlestirilmis notta duruyor. Bir isaretci
-        # (pointer) notu bırakmak adayi temizlemez, cunku aday dosya adina bakar.
+        # Yinelenen not kaldirilir: icerigi birlestirilmis notta duruyor. Isaretci
+        # notu birakmak da mumkun, ama o zaman aramada isaretci gercek notu gecerse
+        # bunu olcup olmadigini ayrica olcuyoruz (q16 ve asagidaki bulgu notu).
         extra.unlink()
         ozet = self.vault / 'notes/ozet-notu.md'
         text = ozet.read_text(encoding='utf-8')
@@ -961,6 +962,51 @@ class HumanMonthE2ETest(unittest.TestCase):
         self.month.set_dream_last_run(None)
         note.write_text(original_text, encoding='utf-8')
         shutil.rmtree(self.month.vault / 'archive', ignore_errors=True)
+        self.month.cli('sync')
+
+    def test_q16_merged_pair_stops_being_proposed_once_resolved(self):
+        """BULGU 8 gerçek kurulumda kapanıyor: işaretçi bırakılınca aday kaybolmalı.
+
+        Ay sürücüsü iki ödeme notunu zaten üretiyor (odeme-yontemi.md ve
+        odeme-yontemi-ek.md). Önce aday olarak görünmeleri, sonra ajanın
+        birleştirip **aynı başlığı taşıyan bir işaretçi** bırakması ve adayın
+        düşmesi ölçülür. Önceki kodda işaretçi kalıcı olarak öneriliyordu.
+        """
+        m = self.month
+        first = 'knowledge/concepts/odeme-yontemi.md'
+        second = 'knowledge/concepts/odeme-yontemi-ek.md'
+        self.addCleanup(self._undo_q16, first, second)
+
+        # Ay sonunda ikinci not elle birleştirilip silinmişti; adayı yeniden üretmek
+        # için aynı hatayı yeni bir notla tekrarlıyoruz.
+        m.note('g16-odeme-tekrar', second,
+               'Ödeme Yöntemi (ek)\n\nStripe Checkout kullanılacak, webhook idempotency anahtarı ile '
+               'korunacak. Panelden aylık rapor alınacak. Sürdürme notu: retry politikası webhook '
+               'notunda.', 29)
+        m.cli('sync')
+        before = m.cli('dream')['candidates']['merge']
+        self.assertIn(second, json.dumps(before, ensure_ascii=False),
+                      f'birleştirilmiş çift aday olmadı: {before}')
+
+        # Ajan birleştirir: hedef not kendi gerçek içeriğini korur ve yinelenen metni
+        # içine alır, diğer not tek cümlelik bir işaretçiye çevrilir.
+        main = m.vault / first
+        main.write_text(main.read_text(encoding='utf-8').rstrip() + (
+            '\n\n2026-09-25 birleştirme: ödeme tekrar notu bu nota alındı; Stripe Checkout ve '
+            'idempotency ayrıntısı yukarıda güncel.\n'), encoding='utf-8')
+        (m.vault / second).write_text(
+            f'# Ödeme Yöntemi (ek)\n\nBirleştirildi, güncel not: {first}\n', encoding='utf-8')
+        m.cli('sync')
+
+        after = m.cli('dream')['candidates']['merge']
+        self.assertEqual(after, [], f'işaretçi bırakıldıktan sonra çift hâlâ öneriliyor: {after}')
+        # Ajan işini gerçekten yaptı: not duruyor ve metin korundu.
+        self.assertIn('idempotency', (m.vault / first).read_text(encoding='utf-8'))
+
+    def _undo_q16(self, first, second):
+        """Bu test diğer soruların gördüğü ay durumunu değiştirmemeli."""
+        second_path = self.month.vault / second
+        second_path.unlink(missing_ok=True)
         self.month.cli('sync')
 
     def test_q13_current_search_limits_are_pinned(self):

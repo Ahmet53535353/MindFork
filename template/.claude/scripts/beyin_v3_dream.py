@@ -23,11 +23,26 @@ from pathlib import Path
 
 import _portalock
 import beyin_v3_projections as projections
+from beyin_v3 import _tokens as _stems
 
 MIN_HOURS = 24
 MIN_RECEIPTS = 5
 STALE_DAYS = 90
 NOTE_CAP_CHARS = 12000
+# Merge candidate thresholds. The body rule exists because a title-only test missed
+# the same claim written twice under different headings, and because the reverse error
+# (silencing two real notes) is the worse one: the thresholds stay conservative.
+BODY_TOKENS_CHARS = 600
+MIN_BODY_SHARED = 3
+MIN_BODY_RATIO = 0.5
+# A merged-away note that names its replacement is a pointer, not a second claim. It
+# also has to be small next to the note it points at, or a real note that merely
+# mentions its neighbour would silence a pair.
+STUB_MAX_RATIO = 0.4
+# A dismissed pair is a human decision about content, so it lives in the vault (state/
+# is machine-local and would not survive a reinstall) and outside the note trees.
+DISMISSED_PATH = 'archive/auto-dream/dismissed.json'
+MERGE_PLAN = 'merge-plan.md'
 NOTE_TREES = ('knowledge', 'notes')
 # Generated and human index files carry the same size discipline as single notes; the
 # budgets are checked here and reported, never enforced by rewriting the file.
@@ -172,34 +187,178 @@ def _title(record):
     return source.rsplit('/', 1)[-1][:-3] if source.endswith('.md') else source
 
 
-def _merge_pairs(records, citations):
-    # Only cited notes, and only headings that share at least two words with one contained in
-    # the other. The window proposes; a human or the session agent decides.
+def _body_tokens(record):
+    """Stems of the headings plus the opening of the body, stemmed like retrieval.
+
+    The engine's stemmer is used on purpose: a candidate that cannot be found by
+    search should not be invisible to a maintenance window either, and the other
+    direction is worse — a window that proposes a pair retrieval would never match.
+    """
+    text = str(record.get('text') or '')
+    headings = [line for line in text.splitlines() if line.lstrip().startswith('#')]
+    body = [line for line in text.splitlines() if line not in headings]
+    return _stems(' '.join(headings) + ' ' + ' '.join(body)[:BODY_TOKENS_CHARS])
+
+
+def _overlap(first, second):
+    """(matched, shared) for two token sets, using the conservative body threshold."""
+    shared = first & second
+    if len(shared) < MIN_BODY_SHARED:
+        return False, shared
+    smaller = min(len(first), len(second))
+    return (smaller and len(shared) / smaller >= MIN_BODY_RATIO), shared
+
+
+def _kind(record):
+    """A record's kind, defaulting like the store does: a note without one."""
+    return record.get('kind') or 'note'
+
+
+def _points_at(record, source):
+    """Whether a note names another note's vault-relative path: a pointer, not a claim."""
+    path = str(source or '')
+    if not path:
+        return False
+    return path in str(record.get('text') or '')
+
+
+def _is_pointer(short, long):
+    """A merged-away note left behind as a pointer stub.
+
+    Both halves matter. Naming the other note is not enough: a real note may mention
+    its neighbour in a long sentence. So the stub must also be small next to its
+    target, which is what a pointer actually looks like.
+    """
+    body = str(short.get('text') or '')
+    target = str(long.get('text') or '')
+    if not body or not target:
+        return False
+    return len(body) <= STUB_MAX_RATIO * len(target) and _points_at(short, long.get('source'))
+
+
+def _pair_key(pair):
+    return tuple(sorted(str(source) for source in pair))
+
+
+def _dismissed_keys(state):
+    keys = {_pair_key(pair) for pair in (state or {}).get('pairs', [])}
+    for note in (state or {}).get('notes', []):
+        keys.add((str(note),))
+    return keys
+
+
+def _merge_pairs(records, citations, dismissed=None, vault=None):
+    # Only cited notes, and only pairs whose titles nest or whose bodies genuinely
+    # overlap. The window proposes; a human or the session agent decides.
+    #
+    # A pair is skipped when it is already resolved: either the user dismissed it, or
+    # one note is a pointer stub to the other. Without that check a merged note that
+    # kept its old heading is proposed forever, and the user's approval lands on the
+    # wrong note.
+    ignored = _dismissed_keys(dismissed)
+    # A merge needs both files. A record whose source is gone is a claim nobody can act
+    # on, and a pair built from one is a proposal the agent cannot carry out.
+    def present(record):
+        source = str(record.get('source') or '')
+        return bool(source) and (vault is None or (Path(vault) / source).is_file())
     eligible = [record for record in records
-                if citations.get(str(record.get('source') or ''), 0) > 0 and _tokens(_title(record))]
+                if citations.get(str(record.get('source') or ''), 0) > 0
+                and present(record) and _tokens(_title(record))]
     pairs, used = [], set()
     for first_index, first in enumerate(eligible):
         if first['source'] in used:
             continue
         first_tokens = _tokens(_title(first))
+        first_body = _body_tokens(first)
         for second in eligible[first_index + 1:]:
             if second['source'] in used:
                 continue
             second_tokens = _tokens(_title(second))
+            body_matched = False
             if len(first_tokens) < 2 or len(second_tokens) < 2:
+                # A title too thin to nest can still be the same claim in other words.
+                body_matched, _ = _overlap(first_body, _body_tokens(second))
+                if not body_matched:
+                    continue
+                shared = sorted(_overlap(first_body, _body_tokens(second))[1])
+                matched_on = 'body'
+            else:
+                nested = first_tokens <= second_tokens or second_tokens <= first_tokens
+                body_matched, body_shared = _overlap(first_body, _body_tokens(second))
+                if not (nested or body_matched):
+                    continue
+                shared = sorted((first_tokens & second_tokens) if nested else body_shared)
+                matched_on = 'title' if nested else 'body'
+            if first['source'] == second['source']:
+                # Two records for one source (a re-index, a moved note) are the same
+                # note, not a merge. A self-pair is a proposal nobody can act on.
                 continue
-            if first_tokens <= second_tokens or second_tokens <= first_tokens:
-                used.update((first['source'], second['source']))
-                pairs.append({'sources': sorted((first['source'], second['source'])),
-                              'shared': sorted(first_tokens & second_tokens)})
-                break
+            if _kind(first) != _kind(second):
+                # A note is not a task, and a body-level overlap finds that similarity
+                # everywhere it exists. Merging across kinds is not a proposal anyone
+                # can carry out, so the body rule never crosses the line.
+                continue
+            if (_pair_key((first['source'], second['source'])) in ignored
+                    or (first['source'],) in ignored or (second['source'],) in ignored):
+                continue
+            if _is_pointer(first, second) or _is_pointer(second, first):
+                continue
+            used.update((first['source'], second['source']))
+            pairs.append({'sources': sorted((first['source'], second['source'])),
+                          'shared': shared, 'matched': matched_on})
+            break
     return sorted(pairs, key=lambda pair: pair['sources'])
 
 
-def candidates(vault, store, citations, oversize, now=None, stale_days=STALE_DAYS):
+def dismissed(vault):
+    """(state, notice) for the dismissal list. A broken file never stops a window.
+
+    A user-edited file must not make consolidation unavailable, so an unusable list
+    degrades to "nothing dismissed" plus one visible line, the same shape upstream
+    uses for an invalid exclusions file.
+    """
+    empty = {'schema': 1, 'pairs': [], 'notes': []}
+    path = Path(vault) / DISMISSED_PATH
+    if not path.is_file():
+        return empty, None
+    try:
+        stored = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        return empty, ('dismiss listesi okunamadi, hicbir aday susturulmadi: ' + str(exc)
+                       + f'; duzelt: {DISMISSED_PATH}')
+    if not isinstance(stored, dict) or stored.get('schema') != 1:
+        return empty, f'dismiss listesi desteklenmiyor, hicbir aday susturulmadi: {DISMISSED_PATH}'
+    if not isinstance(stored.get('pairs'), list) or not isinstance(stored.get('notes', []), list):
+        return empty, f'dismiss listesi bozuk, hicbir aday susturulmadi: {DISMISSED_PATH}'
+    return {'schema': 1, 'pairs': stored['pairs'], 'notes': stored.get('notes', [])}, None
+
+
+def dismiss(vault, sources, now=None):
+    """Record a human decision: these two notes are not a merge, or this note is not.
+
+    A pair keeps its own entry and a single note silences every pair it is in, because
+    both are real answers: "not these two together" and "stop asking about this note".
+    """
+    cleaned = [str(source) for source in (sources or []) if isinstance(source, str) and source]
+    if not cleaned:
+        raise ValueError('dismiss needs at least one vault-relative source')
+    state, notice = dismissed(vault)
+    if len(cleaned) == 1:
+        if cleaned[0] not in state['notes']:
+            state['notes'].append(cleaned[0])
+    else:
+        key = sorted(cleaned)
+        if key not in state['pairs']:
+            state['pairs'].append(key)
+    path = Path(vault) / DISMISSED_PATH
+    _atomic_write(path, (json.dumps(state, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+    return state, notice
+
+
+def candidates(vault, store, citations, oversize, now=None, stale_days=STALE_DAYS, dismissed=None):
     moment = _now(now)
     records = store.list_records()
-    prune, cited_pairs = [], _merge_pairs(records, citations)
+    prune, cited_pairs = [], _merge_pairs(records, citations, dismissed=dismissed, vault=vault)
     for record in records:
         source = str(record.get('source') or '')
         age = _age_days(record, vault, moment)
@@ -218,9 +377,16 @@ def report(vault, state, store, now=None, limits=None, extra=()):
     gates = gate_status(vault, state, store, now=now)
     stats = store.receipt_stats()
     found = inventory(vault, limits=limits, extra=extra)
-    return {'phase': 1, 'wrote': False, 'model_calls': False, 'network': False,
-            'gates': gates, 'inventory': found, 'heat': stats['citations'],
-            'candidates': candidates(vault, store, stats['citations'], found['oversize'], now=now)}
+    # A read-only report must respect the same decisions a window does, or a dismissed
+    # pair keeps reappearing in every report the user reads.
+    dismissed_state, dismiss_notice = dismissed(vault)
+    result = {'phase': 1, 'wrote': False, 'model_calls': False, 'network': False,
+              'gates': gates, 'inventory': found, 'heat': stats['citations'],
+              'candidates': candidates(vault, store, stats['citations'], found['oversize'],
+                                       now=now, dismissed=dismissed_state)}
+    if dismiss_notice:
+        result['dismiss_notice'] = dismiss_notice
+    return result
 
 
 def render(result):
@@ -484,6 +650,54 @@ def _acquire(state):
         handle.close()
 
 
+def _merge_target(vault, citations, sources):
+    """Which note of a pair survives the merge: the more cited one, else the longer.
+
+    Deterministic on purpose. A window that picked per run would give the agent a
+    different target every week for the same pair.
+    """
+    path = Path(vault)
+    return max(sources, key=lambda source: (citations.get(source, 0),
+                                            _body_chars(path / source), source))
+
+
+def _body_chars(path):
+    try:
+        return len(Path(path).read_text(encoding='utf-8'))
+    except OSError:
+        return 0
+
+
+def _write_merge_plan(vault, day, pairs, citations):
+    """The merge proposal, written for the agent rather than instead of it.
+
+    §4: the merged text is a human sentence. So the window records which pair is
+    unresolved, which note survives, and what to do — it never rewrites a body. The
+    source notes are in the snapshot, so an unwanted merge is restorable like any
+    other window change.
+    """
+    lines = [f'# Merge planı {day}', '',
+             'Bu bir **öneridir**: kod not gövdelerini değiştirmedi. Birleşen metni '
+             'oturumdaki ajan yazar.', '']
+    for index, pair in enumerate(pairs, 1):
+        target = _merge_target(vault, citations, pair['sources'])
+        lines.append(f'## {index}. {target} ← ' + ' + '.join(
+            source for source in pair['sources'] if source != target))
+        lines.append('')
+        lines.append(f"- eşleşme: {pair.get('matched', 'title')}")
+        lines.append(f"- ortak sözcükler: {', '.join(pair.get('shared', [])) or '(yok)'}")
+        lines.append('- yapılacak: birleşen metni hedef nota yaz, her iki notun kaynak '
+                     'bağlantılarını koru, diğerini tek cümlelik bir işaretçiye çevir, '
+                     'sonra `python3 beyin.py sync` çalıştır.')
+        lines.append('')
+    return _write_window_file(vault, day, MERGE_PLAN, '\n'.join(lines) + '\n')
+
+
+def _write_window_file(vault, day, name, text):
+    _atomic_write(_window_dir(vault, day) / name, text.encode('utf-8'))
+    return f'{ARCHIVE_ROOT}/{day}/{name}'
+
+
 def _gate_blockers(gates, force=False):
     """Translate a gate report into the reasons a mutating window must refuse.
 
@@ -513,37 +727,50 @@ def window(vault, state, store, now=None, limits=None, extra=(), force=False):
                     'snapshot': None, 'report_path': None, 'restore_command': None}
         stats = store.receipt_stats()
         found = inventory(vault, limits=limits, extra=extra)
-        due = candidates(vault, store, stats['citations'], found['oversize'], now=moment)
+        dismissed_state, dismiss_notice = dismissed(vault)
+        due = candidates(vault, store, stats['citations'], found['oversize'], now=moment,
+                         dismissed=dismissed_state)
         refreshable = [entry for entry in due['refresh'] if not entry.get('generated')]
-        manifest = snapshot(vault, [entry['path'] for entry in refreshable], now=moment)
+        mergeable = [source for pair in due['merge'] for source in pair['sources']]
+        manifest = snapshot(vault, [entry['path'] for entry in refreshable] + mergeable, now=moment)
         applied, prose, skipped = apply_refresh(vault, refreshable, now=moment)
-        wrote = bool(applied)
         day = manifest['window']
+        merge_plan_path = (_write_merge_plan(vault, day, due['merge'], stats['citations'])
+                           if due['merge'] else None)
+        # A window produced something if it fixed a note or proposed a merge. A window
+        # with nothing to do must not move the watermark, or a weekly measurement would
+        # close its own measurement window (the §0 trap).
+        wrote = bool(applied) or bool(merge_plan_path)
         report_path = None
         if wrote:
-            # The watermark moves only when the window really changed something, or a
-            # weekly measurement would close its own measurement window (the §0 trap).
             store.write_meta(WATERMARK, moment.isoformat())
-            _write_report(vault, day, manifest, applied, prose, skipped)
+            _write_report(vault, day, manifest, applied, prose, skipped, due['merge'])
             report_path = f'{ARCHIVE_ROOT}/{day}/report.md'
-        return {'phase': 2, 'wrote': wrote, 'model_calls': False, 'network': False,
-                'gates': dict(gates, passed=True, blocked_by=[]),
-                'applied': applied, 'prose_dates': prose, 'skipped': skipped,
-                'snapshot': manifest,
-                'report_path': report_path,
-                'restore_command': f'beyin.py dream --restore {day}' if wrote else None}
+        result = {'phase': 2, 'wrote': wrote, 'model_calls': False, 'network': False,
+                  'gates': dict(gates, passed=True, blocked_by=[]),
+                  'applied': applied, 'prose_dates': prose, 'skipped': skipped,
+                  'merge': due['merge'], 'merge_plan_path': merge_plan_path,
+                  'snapshot': manifest, 'report_path': report_path,
+                  'restore_command': f'beyin.py dream --restore {day}' if wrote else None}
+        if dismiss_notice:
+            result['dismiss_notice'] = dismiss_notice
+        return result
 
 
-def _write_report(vault, day, manifest, applied, prose, skipped):
+def _write_report(vault, day, manifest, applied, prose, skipped, pairs=()):
     lines = [f'# Konsolidasyon penceresi {day}', '',
              f"Geri al: `beyin.py dream --restore {day}`", '',
              f"- Ön-image: {len(manifest['files'])} dosya (`{ARCHIVE_ROOT}/{day}/files/`)",
-             f"- Yeniden yazılan: {len(applied)}", f"- Değişmedi: {len(skipped)}", '']
+             f"- Yeniden yazılan: {len(applied)}", f"- Değişmedi: {len(skipped)}",
+             f"- Merge önerisi: {len(pairs)} (gövdeler değiştirilmedi, ajana yazılır)", '']
     for entry in applied:
         lines.append(f"- **düzenlendi** `{entry['path']}`: {', '.join(entry['changes'])}")
     for entry in prose:
         for found in entry['dates']:
             lines.append(f"- **gövdede bağıl tarih** `{entry['path']}`:{found['line']} "
                          f"→ \"{found['phrase']}\" (metin ajana ait, değiştirilmedi)")
+    for pair in pairs:
+        lines.append(f"- **merge önerisi** {' + '.join(pair['sources'])} "
+                     f"(ayrıntı: `{MERGE_PLAN}`; çözülünce aday düşer)")
     _atomic_write(_window_dir(vault, day) / 'report.md',
                   ('\n'.join(lines) + '\n').encode('utf-8'))
