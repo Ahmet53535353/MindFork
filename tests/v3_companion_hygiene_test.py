@@ -274,7 +274,22 @@ class HygieneCliTest(unittest.TestCase):
             self.assertIn('baştan yeniden', text)
             self.assertIn('her cevapta', text)
             self.assertIn('kendi kartını', text)
-        for text in (skill, installer, (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_text(encoding='utf-8')):
+        # #112: every place that tells an agent how to write Last-Session.md names the same
+        # per-session card heading, so no client falls back to rewriting the whole file.
+        router = (ROOT / 'template/CLAUDE.md').read_text(encoding='utf-8')
+        starter = companion_module.STARTERS['Last-Session.md']
+        heading = '## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>'
+        for text in (skill, installer, router, starter):
+            text = ' '.join(text.split())
+            self.assertIn(heading, text)
+            self.assertIn('kendi kartını', text)
+        for text in (skill, installer, router):
+            text = ' '.join(text.split())
+            self.assertIn('en üste', text)
+            self.assertIn('dosyanın tamamını yeniden yazma', text)
+            self.assertIn('Receipt session', text)
+        for text in (skill, installer, router, starter,
+                     (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_text(encoding='utf-8')):
             for forbidden in ('\u2014', '\u2013', '\u00e2'):  # em dash, en dash, circumflex a
                 self.assertNotIn(forbidden, text)
 
