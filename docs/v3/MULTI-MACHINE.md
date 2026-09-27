@@ -93,6 +93,18 @@ göre sıralar, en yenisini korur.
 - **Git adımları:** çalışmaya başlamadan önce `pull`; bitince `commit`, `pull --rebase`,
   `push`. Aynı vault'ta birden çok oturum açıksa git komutlarını aynı anda birden çok
   oturumdan çalıştırma; bir oturumdan ya da günün sonunda tek seferde gönder.
+- **Çakışma çözülmeden oturum açma:** `pull --rebase` çakışmada durduğunda dosyada
+  `<<<<<<<`, `=======`, `>>>>>>>` işaretleri kalır. Bu halde açılan oturumda `sync` dosyayı
+  olduğu gibi indeksler ve işaretler sonraki bağlama girer; ajan onları içerik sanabilir.
+  `sync` ve `doctor` bunu bildirmez. Önce çakışmayı çöz (`git status` temiz olmalı), sonra
+  oturum aç.
+- **Receipt `event_id`'sini makineler arasında tekil tut:** `event_id`'yi ajan seçer ve dosya
+  adı onun özetidir. İki makine aynı gün aynı konuya aynı adı verirse (`ortak-konu-2026-09-27`)
+  iki farklı receipt aynı dosyaya düşer ve `pull --rebase` `CONFLICT (add/add)` ile durur.
+  Çakışma bir tarafın dosyası seçilerek çözülürse öbür makinenin veritabanında kendi özeti
+  kalır; `sync` uyarı vermez ve iki makinenin görünümleri sessizce ayrışır. Bunu önlemek için
+  `event_id`'nin sonuna kart başlığındaki gibi `Receipt session=` değerinin ilk 8 karakterini
+  ekle: `ortak-konu-2026-09-27-3f9a1c2b`.
 
 ## Nasıl doğrulandı
 
@@ -110,3 +122,9 @@ depo ve iki vault; Beyin her birine ayrı `--state` ile kuruldu.
 - İki makine aynı anda Last-Session'a kart, Journal'a kayıt ekleyip aynı Threads satırını
   değiştirdi: `pull --rebase` Last-Session ve Journal'ı iki kaydı da koruyarak birleştirdi,
   Threads'te çakışmayla durdu.
+- Threads çakışma işaretleriyle dururken: ilk SessionStart dosyayı değişmiş kaynak diye dışarıda
+  bıraktı; `sync`'ten sonraki SessionStart bağlamında işaretler vardı. `sync` `warnings: []`
+  döndü, `doctor` bir şey göstermedi.
+- İki vault aynı `event_id` ile farklı özetli receipt yazdı: ikisi de aynı `receipts/<özet>.md`,
+  `pull --rebase` add/add çakışmasıyla durdu. A'nın dosyası seçilip devam edilince B'de `sync`
+  `conflicts: []` döndü; B'nin `recap` ve `daily/v3` çıktısı B'nin özetini göstermeye devam etti.
