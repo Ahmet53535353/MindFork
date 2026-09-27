@@ -274,6 +274,47 @@ def clip(text, budget, tail=False, both=False):
     return marker + text[-keep:] if tail else text[:keep] + marker
 
 
+DROPPED_CARDS = '\n[truncated: {count} older handoff cards not shown; read source]\n'
+
+
+def handoff_cards(text):
+    """Split a handoff file into whole cards at its own level-2 headings, newest card first.
+
+    Upstream (#118) made the card the unit that moves: everything up to the next heading of
+    the same level belongs to one card, so a date quoted inside a card never splits it. The
+    context path spends the same unit, which is why a budget here can shorten the list of
+    cards but never cut one in half. Sub-headings (### and deeper) stay inside their card.
+    """
+    heads = list(re.finditer(r'(?m)^## ', text))
+    if not heads:
+        return text, []
+    return text[:heads[0].start()], [text[head.start():heads[index + 1].start() if index + 1 < len(heads) else len(text)]
+                                    for index, head in enumerate(heads)]
+
+
+def clip_cards(text, budget):
+    """Whole cards newest first; a card that does not fit is dropped, never cut after its head."""
+    preamble, cards = handoff_cards(text)
+    if not cards:
+        return clip(text, budget)
+    kept = []
+    used = len(preamble)
+    for card in cards:
+        if used + len(card) > budget:
+            break
+        kept.append(card)
+        used += len(card)
+    if not kept:
+        # The newest card alone is over budget: spend what is left on its opening and its
+        # closing, because the closing line is the next concrete step this file exists for.
+        # It counts as shown -- ends() already names what it left out -- so the notice below
+        # only names the older cards that are missing altogether.
+        note = DROPPED_CARDS.format(count=len(cards) - 1) if len(cards) > 1 else ''
+        return preamble + clip(cards[0], max(0, budget - used - len(note)), both=True) + note
+    dropped = len(cards) - len(kept)
+    return preamble + ''.join(kept) + (DROPPED_CARDS.format(count=dropped) if dropped else '')
+
+
 def context(store, budget, session, harness, query='', receipt='', warning=''):
     """Budget actual displayed text, not repeated JSON metadata; never cut a record header."""
     target = directory(store.vault_root)
@@ -315,8 +356,11 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
                     spare -= 1
         rendered = header + notice
         for i, (label, body, name) in enumerate(sections):
-            rendered += label + clip(body, lengths[i], both=name == 'Kurallar.md',
-                                     tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
+            if name == 'Last-Session.md':
+                rendered += label + clip_cards(body, lengths[i])
+            else:
+                rendered += label + clip(body, lengths[i], both=name == 'Kurallar.md',
+                                         tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
         return rendered
 
     available = max(0, int(budget * .83) - fixed)
