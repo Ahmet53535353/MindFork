@@ -355,6 +355,8 @@ davranışında tutuldu. **Sıradaki iş kalemi.**
 4. PR ile main'e birleştirme (fork main upstream ile senkron: `db1f23d`; dal `feat/memory-consolidation` = `a680338`)
 5. CLI `context --types/--strict` bayrakları (canlı E2E bulgusu #1; kararlı tasarım + test planı `docs/specs/2026-09-25-cli-context-types-strict-roadmap.md`)
 6. Günlük log Faz-2: PreCompact kurtarma çizgisi (spec'te ertelenen kemer)
+8. V3 mimari haritası ve değişmezler: `2026-09-27-mimari.md` (katmanlar, veri
+   akışı, değişmezlerin zorlama yerleri, bu dalda ölçülmüş tuzaklar)
 7. ~~OpenCode kapanış olayı yok → yetim bloğu kapatma~~ **TAMAMLANDI** (2026-09-26):
    blok "kapanış kaydı yok" etiketiyle kapanıyor, son etkinlik ve receipt penceresi
    yazılıyor; canlı opencode akışıyla doğrulandı
