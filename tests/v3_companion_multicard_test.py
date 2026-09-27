@@ -125,6 +125,34 @@ class MulticardContextTest(unittest.TestCase):
                 self.assertIn(f'HEAD_{tag}', text)
                 self.assertIn(f'TAIL_{tag}', text)
 
+    def test_cards_are_ranked_by_date_not_by_file_position(self):
+        # Hands-on finding (2026-09-27): an agent that appends its card at the end of the file
+        # instead of opening one on top lost its own handoff from the context, and the notice
+        # called the dropped cards "older" while they were the newest ones. The card list is
+        # ordered by its own heading date, so either writing direction delivers the newest card.
+        newest, middle, oldest = CARDS
+        body = handoff([oldest, middle])          # 2026-09-26, 2026-09-27 10:32
+        body += ('\n## 2026-09-27 23:50 · gece · SONKART\n'
+                 'HEAD_SONKART: en sona eklenen kart.\n' + FILLER * 4 +
+                 'TAIL_SONKART: Sonraki somut adım: gece işi.\n')
+        self.build(body)
+        for budget in (1200, 2000, 3400):
+            with self.subTest(budget=budget):
+                text = self.context(budget)
+                self.assertIn('HEAD_SONKART', text, 'dosyanın sonundaki en yeni kart düştü')
+                self.assertIn('TAIL_SONKART', text)
+                if 'HEAD_ESKI' in text:            # older cards may still fit, never the newest
+                    self.assertIn('HEAD_ORTA', text)
+
+    def test_undated_card_heading_does_not_displace_the_newest_dated_card(self):
+        # An old single-card handoff can carry a heading without a clock; it must not win the
+        # budget over a dated card, and it must not crash the ranking.
+        body = handoff(CARDS)
+        self.build(body.rstrip() + '\n\n## Devir kartı (eski bicim)\nHEAD_ESKIBICIM: eski.\n')
+        text = self.context(1200)
+        self.assertIn('HEAD_YENI', text)
+        self.assertIn('TAIL_YENI', text)
+
     def test_legacy_single_card_with_previous_section_still_reads_correctly(self):
         legacy = ('# Son oturum\n\n'
                   '## 2026-09-20 09:00 · eski model · 1234abcd\n'
