@@ -56,7 +56,7 @@ class BoundaryTest(unittest.TestCase):
     def test_sensitive_folder_with_long_note_stays_out_of_report_body(self):
         # The guarantee is name-based exclusion; nothing reads the folder contents here.
         (self.vault / 'Arşiv').mkdir()
-        (self.vault / 'Arşiv/kasa.md').write_text('içerik ' * 600)
+        (self.vault / 'Arşiv/kasa.md').write_text('içerik ' * 600, encoding='utf-8')
         report = hygiene.boundary(self.vault)
         self.assertEqual(report['sensitive_excluded'], ['Arşiv'])
         self.assertFalse(any('kasa.md' in finding for finding in report['findings']))
@@ -83,7 +83,7 @@ class ClosedTasksTest(unittest.TestCase):
 
     def test_turkish_kapandi_status_is_recognized(self):
         old = self.vault / 'tasks/eski-tr.md'
-        old.write_text('---\nid: e\nstatus: kapandı\n---\n# eski-tr\n')
+        old.write_text('---\nid: e\nstatus: kapandı\n---\n# eski-tr\n', encoding='utf-8')
         now = time.time()
         os.utime(old, (now - 45 * 86400, now - 45 * 86400))
         report = hygiene.closed_tasks(self.vault, days=30, now=now)
