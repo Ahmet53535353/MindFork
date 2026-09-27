@@ -34,6 +34,18 @@ Aralığa takılmış bir kontrolde turn bağlamı istenirse eski kayıtları g�
 
 Bu değişiklik yerel adaydır; yayımlanmış v3.0.0 paketine otomatik olarak eklenmez. Yeni paket yayımlanmadan kullanıcılara mevcut sürüm özelliği diye duyurulmamalıdır.
 
+## Projeyi tanıyan oturum başı
+
+`python3 beyin.py preferences --project-context on` komutu, [global köprünün](GLOBAL-BRIDGE.md) vault dışındaki bir projede açılan oturumun başına o projeye ait kısa bir blok eklemesini sağlar. Varsayılan kapalıdır; kapalıyken köprünün çıktısı değişmez. Vault içindeki oturumlar etkilenmez. Açıldığında:
+
+- Aynı `project_id`'ye (klasör yolunun hash'i) bağlı en yeni receipt özeti tek satır olarak eklenir, en fazla 600 karakter. Receipt'in kaynak dosyası silinmişse ya da receipt veya `refs` içindeki bir kaynak `private` ya da güvenilmez ise o receipt atlanır ve bir öncekine bakılır.
+- O projenin tarihi gelmiş görevleri (`due_at` yerel tarihe göre bugün ya da geçmiş, durum `active` veya `waiting`) başlık ve sonraki adımla listelenir. Görev projeye `project` alanı klasör adıyla eşleşerek (büyük/küçük harf duyarsız) bağlanır; aynı adlı iki klasör aynı görevleri görür.
+- Görevler normal bağlamla aynı kapılardan geçer: `private` ve güvenilmez kayıt, supersede edilmiş görev ve indekslendikten sonra değişmiş kaynak girmez.
+- Başka projelerin ya da projesiz görevlerin başlığı verilmez, yalnız sayı yazılır: `(bu proje disinda N tarihi gelmis gorev)`.
+- Blok köprünün `--context-chars` bütçesinden geriye kalanla ve en fazla 1.200 karakterle sınırlıdır. Görev varsa receipt özeti bu alanın yarısını aşmaz. Satırlar bütün olarak eklenir; sığmayan görevler `(+N gorev sigmadi)` ile sayılır.
+- Blok salt okunur SQLite okumasıyla kurulur; model çağrısı ve yazma yoktur. Okuma başarısız olursa yalnız bu blok düşer, köprünün başlangıç talimatı aynen verilir.
+- Ayar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `project-context.json` dosyasında tutulur; makineye özeldir ve rollback güvenlidir. Kapatmak için `--project-context off`.
+
 ## Stop'ta receipt hatırlatması
 
 Kurulum, Claude ve Codex için PostToolUse hook'unu yalnız dosya düzenleyen araçlara bağlar (`Edit|Write|apply_patch`). Bu olay geldiğinde hook, vault dışındaki runtime klasörüne oturum kimliğinin hash'iyle adlandırılmış küçük bir düzenleme işareti yazar; transcript okunmaz. Kabuk komutuyla yapılan düzenlemeler bu olayı tetiklemez. Stop'ta runtime kaydında aynı istemci ve aynı `session` değeriyle, düzenlemelerden sonra yazılmış bir receipt yoksa hook oturum başına bir kez Stop'u engeller ve `python3 beyin.py receipt --file RECEIPT_JSON --harness claude` komutunu (Codex için `--harness codex`, Windows'ta `py -3`) `Receipt session=<değer>` bilgisiyle birlikte hatırlatır. Bu değer receipt JSON'undaki `session` alanına yazılmazsa receipt bu checkpoint'i kapatmaz. Receipt'ten sonra yapılan yeni düzenlemeler yeni bir pencere açar.

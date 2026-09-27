@@ -24,6 +24,131 @@ def default_state(vault: Path) -> Path:
     return base / "beyin-v3" / key
 
 
+def _in_package_container(pinned: str) -> bool:
+    """True when a pinned path runs through an MSIX package container.
+
+    Reads the string, not the local path flavour: a Windows pin is inspected the
+    same way when the tests run on POSIX.
+    """
+    parts = [part.lower() for part in pinned.replace("\\", "/").split("/") if part]
+    return "packages" in parts and "localcache" in parts[parts.index("packages") + 1:]
+
+
+def _sibling_state_roots(pinned: Path) -> list:
+    """Installed state roots for the same vault key on both sides of a package redirect.
+
+    Default roots end in beyin-v3/<vault key>. When %LOCALAPPDATA% is redirected,
+    an install run inside the package and one run outside it produce two such
+    roots for the same vault, each with its own database. Both are real and
+    populated, so neither looks broken on its own. An explicit --state root has
+    no key layout and is skipped. Returns an empty list on any lookup error.
+    """
+    parts = list(pinned.parts)
+    lowered = [part.lower() for part in parts]
+    if "beyin-v3" not in lowered or lowered.index("beyin-v3") + 2 != len(parts):
+        return []
+    index = lowered.index("beyin-v3")
+    base = parts[:index]
+    if "packages" in lowered[:index]:
+        base = parts[:lowered.index("packages")]
+    if not base:
+        return []
+    local, key = Path(*base), parts[index + 1]
+    candidates = [local / "beyin-v3" / key]
+    try:
+        packages = local / "Packages"
+        if packages.is_dir():
+            # Literal path per package, not a glob: a key is never read as a pattern.
+            candidates += [entry / "LocalCache" / "Local" / "beyin-v3" / key
+                           for entry in sorted(packages.iterdir())]
+    except OSError:
+        return []
+    found, identities = [], []
+    for candidate in candidates:
+        try:
+            if not (candidate / "v3-install.json").is_file():
+                continue
+            # Inside the package the plain spelling is redirected into the container, so
+            # both spellings reach one directory there. Count directories, not strings.
+            identity = os.path.normcase(str(candidate.resolve()))
+            if identity in identities or any(os.path.samefile(candidate, other) for other in found):
+                continue
+        except (OSError, ValueError, RuntimeError):
+            continue
+        found.append(str(candidate))
+        identities.append(identity)
+    return found
+
+
+def state_location(vault: Path, state: Path, windows=None) -> dict:
+    """Compare the pinned state root with the one this process actually reads.
+
+    Windows redirects %LOCALAPPDATA% for an MSIX-packaged client into
+    Packages/<id>/LocalCache/Local. A pin inside that container is one string and
+    two directories for processes in and out of the package, so each side can end
+    up holding half the memory. Information only: it writes nothing, makes no
+    model call and does not raise the doctor status. A pin that resolves elsewhere
+    is only warned about on Windows: a POSIX symlink resolves the same for every
+    process, so a relocated state behind one is not a split.
+    """
+    windows = sys.platform == "win32" if windows is None else windows
+    report = {"effective_state": str(state),
+              "installed_at_effective_state": (state / "v3-install.json").is_file(),
+              "pin_status": "absent", "pinned_state": None, "pinned_resolves_here_to": None,
+              "pinned_in_package_container": False, "pin_resolves_elsewhere": False,
+              "installed_at_pinned_state": None, "sibling_state_roots": [], "warnings": []}
+    config = vault / ".beyin-runtime.json"
+    pinned = None
+    if config.is_file():
+        try:
+            data = json.loads(config.read_text(encoding="utf-8"))
+            value = data.get("state") if isinstance(data, dict) else None
+        except (ValueError, OSError):
+            value = None
+        pinned = value if isinstance(value, str) and value.strip() else None
+        report["pin_status"] = "present" if pinned else "unreadable"
+    if pinned is None:
+        return report
+    try:
+        resolved = Path(pinned).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError):
+        resolved = Path(pinned)
+    same = os.path.normcase(str(resolved)) == os.path.normcase(pinned)
+    report.update({"pinned_state": pinned, "pinned_resolves_here_to": str(resolved),
+                   "pinned_in_package_container": _in_package_container(pinned),
+                   "pin_resolves_elsewhere": not same,
+                   "installed_at_pinned_state": (resolved / "v3-install.json").is_file()})
+    if report["pinned_in_package_container"]:
+        report["warnings"].append(
+            "pinned_in_package_container: the pinned state root runs through an MSIX package "
+            "container (Packages\\...\\LocalCache). That path carries the package "
+            "identity and goes away when the package is reset or reinstalled under another "
+            "identity. Moving the state to a plain local directory is the durable fix; "
+            "see docs/v3/UPDATE.md.")
+    if report["pin_resolves_elsewhere"] and windows:
+        report["warnings"].append(
+            "pin_resolves_elsewhere: this process resolves the pinned path to " + str(resolved) +
+            ". A process on the other side of an MSIX redirect reads the same string and may "
+            "reach a different directory; run doctor inside and outside the package and compare.")
+    if not report["installed_at_pinned_state"]:
+        report["warnings"].append(
+            "pinned_state_empty: no v3-install.json under the pinned state root as this process "
+            "reads it. Either the pin names a directory this process cannot see, or the state "
+            "was moved without reinstalling with the new --state.")
+    if os.path.normcase(str(resolved)) != os.path.normcase(str(state)):
+        report["warnings"].append(
+            "effective_state_differs: this run reads " + str(state) + " rather than the pinned "
+            "root. Pass the pinned --state, or use the installed beyin.py, which reads the pin.")
+    report["sibling_state_roots"] = _sibling_state_roots(resolved)
+    if len(report["sibling_state_roots"]) > 1:
+        report["warnings"].append(
+            "state_split: this vault has an installed state root on both sides of the package "
+            "redirect (" + ", ".join(report["sibling_state_roots"]) + "). Each one carries its own "
+            "database, so which half a session reads depends on whether it runs inside the "
+            "package. Keep one and move it out of the container; see docs/v3/UPDATE.md.")
+    return report
+
+
 def load_engine():
     adjacent = Path(__file__).resolve().parent / "beyin_v3.py"
     path = adjacent if adjacent != Path(__file__).resolve() and adjacent.exists() else Path(__file__).resolve().parents[1] / "template/.claude/scripts/beyin_v3.py"
@@ -168,6 +293,8 @@ def parser():
                           help="Disable/exclude a managed component or skill (repeatable)")
     settings.add_argument("--include-component", action="append", default=[], metavar="COMPONENT",
                           help="Re-enable a previously excluded component (repeatable)")
+    settings.add_argument("--project-context", choices=("on", "off"),
+                          help="Inject scoped project receipt and due tasks at SessionStart")
     compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
     compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
@@ -302,6 +429,11 @@ def main(argv=None):
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:
                 result['status'] = 'saved'
+            from beyin_v3_bridge import read_project_context, save_project_context
+            if args.project_context is not None:
+                save_project_context(state, args.project_context == 'on')
+                result['status'] = 'saved'
+            result['project_context'] = 'on' if read_project_context(state) else 'off'
         elif args.command == "jev":
             laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
@@ -330,6 +462,11 @@ def main(argv=None):
                     seen[event['harness']].add(event.get('event', 'unknown'))
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
+            # Information only; a split or container-bound state root never raises the status.
+            try:
+                result['state_location'] = state_location(vault, state)
+            except Exception as exc:  # a location report must never hide the rest of doctor
+                result['state_location'] = {'status': 'unavailable', 'error': type(exc).__name__, 'warnings': []}
             manifest = state / 'v3-install.json'
             manifest_data = json.loads(manifest.read_text(encoding='utf-8')) if manifest.exists() else {}
             result['kept_legacy_runners'] = manifest_data.get('kept_legacy', [])

@@ -25,15 +25,17 @@ Anlamlı bir iş parçası bittiğinde, final yanıtından önce kısa bir süre
 Bu kontrol her cevapta tekrarlanmaz. Codex gibi her mesajı ayrı görev sayan istemcilerde
 de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerinde düzeltir:
 
-- Last-Session.md: tek bir devir kartıdır, oturum günlüğü değildir. Üstteki kartı baştan
-  yeniden yaz: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak
-  bağlantıları ve belirsizlikler. Eski kartı alta ekleme; ayrıntısı receipt, `daily/` ve
-  knowledge notlarında yaşar, gerekirse oraya tek bağlantı ver. Kartı yeniden yazmadan önce
-  eski kartta geçerli ya da bitmemiş bilgi varsa onu önce `daily/log/` içindeki bugünün
-  oturum bloğuna taşı (`daily_log` açıksa) ya da bir knowledge notuna yaz; sonra kartı temiz
-  yaz. Varsa `## Previous`/`## Önceki`
-  bölümüne ve arşiv bağlantısına dokunma; eski metni yalnız `companion-compact` taşır.
-  Varsayılan sınır 3.000 karakter.
+- Last-Session.md: oturum başına bir devir kartıdır, oturum günlüğü değildir. Oturum kartını en üste
+  `## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla aç (etiket serbest metin, son
+  parça Receipt session kimliğinin ilk 8 karakteri); aynı oturumdaki güncellemelerde yalnız kendi
+  kartını baştan yeniden yaz, başka oturumların kartlarını ezme, dosyanın tamamını yeniden yazma.
+  Kartta: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak bağlantıları
+  ve belirsizlikler. Ayrıntısı receipt, `daily/` ve knowledge notlarında yaşar, gerekirse oraya tek
+  bağlantı ver. Kart = devir, günlük log = kayıt: oturumun ne konuşulduğu `daily/log/` bloğunda
+  yaşar (`daily_log` açıksa), kart yalnız devir tutar. Kendi eski kartında geçerli ya da bitmemiş
+  bilgi varsa kartı temiz yazmadan önce onu bugünün günlük log bloğuna ya da bir knowledge
+  notuna yaz. Varsa `## Previous`/`## Önceki` bölümüne ve arşiv bağlantısına dokunma; eski kartları
+  yalnız `companion-compact` taşır. Varsayılan sınır 3.000 karakter.
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
   güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
   al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.
@@ -160,6 +162,7 @@ Kullanıcı “ekonomik moda geç”, “otomatik kontrolleri kapat” veya “k
 - Receipt/note/task yazımlarında opt-in sır süzgeci: `python3 beyin.py preferences --secret-filter on`
 - Günlük oturum logu (varsayılan açık): `python3 beyin.py preferences --daily-log off` kapatır, `on` tekrar açar. Kullanıcı bir tercihi hiç belirtmediyse oturum başında bir kez "günlük log açık, şunu çalıştırarak kapatabilirsin" de; belirttikten sonra tekrar etme.
 - Hafıza dosyası sınırları: `python3 beyin.py preferences --last-session-chars 3000 --threads-chars 8000` (0 kapatır; ayar bu makinedeki runtime klasöründe tutulur)
+- Global köprüde projeyi tanıyan oturum başı (aynı projenin son receipt özeti ve tarihi gelen görevleri, başka projelerden yalnız sayı): `python3 beyin.py preferences --project-context on` (varsayılan kapalı; ayar bu makinedeki runtime klasöründe tutulur)
 - Bileşen veya skill susturma: `python3 beyin.py preferences --exclude-component skills/beyin-doktor` (geri açmak için `--include-component`; ayarlar `.beyin-exclusions.json` dosyasında tutulur, sonraki güncelleme veya kurulumda uygulanır)
 
 Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 5000 karakter ek bağlam. Ekonomik: yeni oturumda taze kontrol ve en çok 2000 karakter bağlam; sonraki olaylarda kontroller arası en az 15 dakika. Manuel: otomatik iş başlatma ve bağlam kapalı; açık `context`, `sync`, not/görev ve receipt komutları çalışır. Sadece aralığı değiştirmek manuel modu açmaz; kullanıcı kontrolleri yeniden açmayı istiyorsa `--auto-sync on` kullan.

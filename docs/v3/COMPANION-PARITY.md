@@ -65,10 +65,11 @@ sayan istemcilerde güncelleme her turda yeni tarihli paragraf olarak ekleniyord
 
 Düzeltme dört parçadır:
 
-- **Talimat.** `Last-Session.md` üstündeki devir kartı baştan yeniden yazılır, eski kart alta
-  eklenmez. `Threads.md` içinde konu yerinde güncellenir. Süreklilik kontrolü her cevapta
-  değil, anlamlı bir iş parçası bittiğinde yapılır. `## Previous`/`## Önceki` bölümüne ajan
-  dokunmaz; eski metni yalnız aşağıdaki komut taşır.
+- **Talimat.** `Last-Session.md` içinde oturum başına bir devir kartı açılır (`## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>`)
+  ve oturum yalnız kendi kartını yerinde günceller; başka oturumların kartları ezilmez. `Threads.md`
+  içinde konu yerinde güncellenir. Süreklilik kontrolü her cevapta değil, anlamlı bir iş parçası
+  bittiğinde yapılır. `## Previous`/`## Önceki` bölümüne ajan dokunmaz; eski kartları yalnız
+  aşağıdaki komut taşır.
 - **Ölçülebilir sınır.** Varsayılan sınır `Last-Session.md` için 3.000, `Threads.md` için
   8.000 karakterdir. Sayım Unicode karakteridir; bayt veya UTF-16 birimi değildir, bu yüzden
   Türkçe veya emoji yoğun bir dosya olduğundan büyük görünmez. `preferences
@@ -91,7 +92,10 @@ Düzeltme dört parçadır:
   `## Previous`/`## Önceki` (Last-Session) veya `## Closed`/`## Kapanan`/`## Kapalı`
   (Threads) bölümünün gövdesini, sonra dosya sınıra inene kadar en eski tarihli kayıtları
   taşır. Tarihli kayıt, ilk karakterlerinde ISO tarih bulunan bir başlık, paragraf veya
-  liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Devir kartının
+  liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Tarihli bir
+  başlık bir kart açar: aynı ya da daha üst seviyedeki bir sonraki başlığa kadar içindeki
+  tarihli satırlar ve alt başlıklar o kartındır; kart bölünmeden ya kalır ya da bütün
+  halde taşınır (#118). Devir kartının
   ve her konu başlığının en yeni kaydı yerinde kalır. Threads'te `## Active`/`## Aktif`/`## Açık`
   bölümünün doğrudan altındaki tarihli satırlar bir konunun kendisi olabileceği için taşınmaz.
   Taşınan satırlar kelimesi kelimesine ve sırasıyla companion klasöründeki
