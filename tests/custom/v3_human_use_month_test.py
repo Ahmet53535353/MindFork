@@ -304,16 +304,21 @@ class Month:
         threads.write_text('\n'.join(body), encoding='utf-8')
         self.cli('sync')
 
-    def write_last_session(self, next_step):
-        """Devir kartı tek karttır: her oturumda baştan yeniden yazılır (SKILL)."""
+    def write_last_session(self, next_step, session, offset=29, hour=9, minute=0, label='devir'):
+        """Devir kartı oturum başına bir karttır: en üste kendi kartını yazar, başkasını ezmez (SKILL)."""
         path = self.vault / '🔮 850-Companion/Last-Session.md'
         text = path.read_text(encoding='utf-8') if path.exists() else '# Son oturum\n'
-        head = text.split('\n## Previous')[0].split('\n## Önceki')[0]
-        head = re.split(r'\n## ', head)[0]
-        path.write_text(head.rstrip() + (
-            f'\n\n## Devir kartı ({vday(29)})\n\n- Yapılan: {next_step}\n'
-            f'- Sonraki somut adım: {next_step}\n'
-            '- Kaynak: daily/log/, knowledge/concepts/, tasks/\n'), encoding='utf-8')
+        text = text.split('\n## Previous')[0].split('\n## Önceki')[0].rstrip()
+        card = (f'## {vday(offset)} {hour:02d}:{minute:02d} · {label} · {session[:8]}\n\n'
+                f'- Yapılan: {next_step}\n'
+                f'- Sonraki somut adım: {next_step}\n'
+                '- Kaynak: daily/log/, knowledge/concepts/, tasks/\n')
+        if '\n## ' in text:
+            preamble, older = text.split('\n## ', 1)
+            text = f'{preamble}\n\n{card}\n## {older}'
+        else:
+            text = f'{text}\n\n{card}'
+        path.write_text(text, encoding='utf-8')
         self.cli('sync')
 
     def append_rule(self, number):
@@ -433,7 +438,8 @@ class HumanMonthE2ETest(unittest.TestCase):
                'Menü içeriğini gir ve sayfayı yayına al.', 0, type='episodic',
                completion_contract='strict', completion_criterion='Menü sayfası yayında ve içerik girilmiş')
         m.write_threads('## Menü sayfası\n\n- Sahip: zeynep. Sonraki adım: içerik girilecek. Durum: aktif.\n')
-        m.write_last_session('Menü sayfası içeriği girilecek. Proje tanıtıldı, ilk görev açıldı.')
+        m.write_last_session('Menü sayfası içeriği girilecek. Proje tanıtıldı, ilk görev açıldı.',
+                            s1, offset=0, hour=9, minute=20, label='tanıtım')
         m.receipt('g1-r', f'{PERSON}-g1-acilis',
                   'Kahve Dükkanı projesi tanıtıldı, kimlik tercihleri kaydedildi, menü sayfası görevi açıldı.\n'
                   'Öğrenilen: yok',
@@ -664,7 +670,13 @@ class HumanMonthE2ETest(unittest.TestCase):
         m.consolidate()
         m.cli('sync')
         m.dream_after = m.cli('dream')
-        m.write_last_session('Ay sonu konsolidasyonu yapıldı. Eylül için menü ve ödeme üzerine çalışılacak.')
+        m.write_last_session('Ay sonu konsolidasyonu yapıldı. Eylül için menü ve ödeme üzerine çalışılacak.',
+                            s30, offset=29, hour=17, minute=40, label='ay sonu')
+        # Ikinci kart yazildi; bundan sonraki donus baglami iki kartli dosyayi gormeli.
+        # Gozlem simulasyon aninda kaydedilir: q15'in pencere geri alimi vault'u sonradan
+        # donduruyor, testler canli dosyayi degil kaydi okumali.
+        m.handoff_cards_text = (m.vault / '🔮 850-Companion/Last-Session.md').read_text(encoding='utf-8')
+        m.handoff_two_cards = m.hook('UserPromptSubmit', s30, prompt='ay sonu kartlari ne diyor')
         m.receipt('g30-r', f'{PERSON}-g30-konsolidasyon',
                   'Dream raporundaki adaylar uygulandı: iki ödeme notu birleşti, eski taslak kapatıldı, '
                   'büyük özet notu bölündü.\nÖğrenilen: Konsolidasyon faz-1 raporu yazmadan çalışır', ['knowledge/concepts/odeme-yontemi.md', 'notes/ozet-notu.md'], 30,
@@ -1008,6 +1020,24 @@ class HumanMonthE2ETest(unittest.TestCase):
         second_path = self.month.vault / second
         second_path.unlink(missing_ok=True)
         self.month.cli('sync')
+
+    def test_q17_handoff_cards_accumulate_and_the_newest_reaches_the_session(self):
+        """Devir karti oturum basina bir karttir: yeni kart eskisini ezmez, baglam en yeniyi alir."""
+        m = self.month
+        handoff = m.handoff_cards_text
+        cards = re.findall(r'(?m)^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · (.+?) · (\S+)$', handoff)
+        self.assertEqual(len(cards), 2, f'ay icinde iki oturum kart yazmali: {cards}')
+        # Yeni kart en ustte, eski kart altta durur: hicbir oturum digerini silmemis olmali.
+        self.assertEqual(cards[0][0][:10], vday(29))
+        self.assertEqual(cards[1][0][:10], vday(0))
+        # Kart basligi SKILL.md'nin zorunlu bicimi: tarih, saat, etiket, session id ilk 8.
+        self.assertEqual(cards[0][1], 'ay sonu')
+        self.assertEqual(len(cards[0][2]), 8)
+        # Baglamda en yeni kartin "sonraki somut adim" satiri ve eski kartin basligi gorunur.
+        delivered = json.dumps(m.handoff_two_cards, ensure_ascii=False)
+        self.assertIn('Eylül için menü ve ödeme üzerine', delivered)
+        self.assertNotIn('Proje tanıtıldı, ilk görev açıldı', delivered,
+                         'baglam eski karti tasiyorsa bütce kurali bozulur')
 
     def test_q13_current_search_limits_are_pinned(self):
         """Bilinen sinirlar olculuyor: govde sozcukleridir, birlestirme (stem) yoktur."""
