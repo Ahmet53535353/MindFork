@@ -181,6 +181,17 @@ class PreferencesTest(unittest.TestCase):
         self.assertIn('2000 karakter', r.stdout)
         self.assertIn('preferences', self.cli('doctor'))
 
+    def test_project_context_preference_is_machine_local_and_rollback_safe(self):
+        self.assertEqual(self.cli('preferences')['project_context'], 'off')
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists())
+        saved = self.cli('preferences', '--project-context', 'on')
+        self.assertEqual(saved['status'], 'saved')
+        self.assertEqual(saved['project_context'], 'on')
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists(), 'must not modify vault preference schema')
+        self.assertTrue((self.state / 'project-context.json').exists())
+        self.cli('preferences', '--project-context', 'off')
+        self.assertEqual(self.cli('preferences')['project_context'], 'off')
+
 
 if __name__ == '__main__':
     unittest.main()

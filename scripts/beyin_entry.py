@@ -88,6 +88,33 @@ def plain_text(value):
                    '?' if unicodedata.category(ch) == 'Cc' or ch in _BIDI_CONTROLS else ch for ch in text)
 
 
+def state_location_lines(location):
+    """Doctor lines for the state_location warnings (#113); information only, never a status."""
+    if not isinstance(location, dict):
+        return []
+    codes = {str(warning).split(':', 1)[0] for warning in location.get('warnings') or []}
+    prefix = 'State konumu (bilgi): '
+    lines = []
+    if 'state_split' in codes:
+        lines.append(prefix + 'bu vault icin paket yonlendirmesinin iki tarafinda da kurulu state var (' +
+                     ', '.join(plain_text(root) for root in location.get('sibling_state_roots') or []) +
+                     '). Oturumun hangi yariyi okudugu paket icinde calisip calismamasina bagli;'
+                     ' guncel olani secip tasi, docs/v3/UPDATE.md.')
+    if 'pinned_in_package_container' in codes:
+        lines.append(prefix + 'sabitlenmis state koku MSIX paket kapsayicisinin (Packages\\...\\LocalCache) icinde;'
+                     ' paket sifirlanir ya da baska kimlikle kurulursa bu yol kaybolur. Tasima: docs/v3/UPDATE.md.')
+    if 'pin_resolves_elsewhere' in codes:
+        lines.append(prefix + 'sabitlenmis yol bu surecte baska bir dizine cozumleniyor (' +
+                     plain_text(location.get('pinned_resolves_here_to')) +
+                     '). doctor komutunu paket icinden ve disindan calistirip karsilastir.')
+    if 'pinned_state_empty' in codes:
+        lines.append(prefix + 'sabitlenmis state kokunde kurulum bulunamadi. State tasindiysa kurucuyu yeni'
+                     ' --state ile yeniden calistir.')
+    if 'effective_state_differs' in codes:
+        lines.append(prefix + 'bu calisma sabitlenmis kok yerine baska bir state dizinini okuyor.')
+    return lines
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
@@ -118,7 +145,8 @@ def human_result(result, command, installed_version=None):
                  'Otomatik baglam: ' + prefs['context_mode'],
                  'Baglam ust siniri: ' + str(prefs['context_chars']) + ' karakter',
                  'Sir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali'),
-                 'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali')]
+                 'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali'),
+                 'Proje oturum basi baglami: ' + ('acik' if result.get('project_context') == 'on' else 'kapali')]
         for name, value in (result.get('companion_limits') or {}).items():
             lines.append('Hafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali'))
         if result.get('excluded_components'):
@@ -237,6 +265,7 @@ def human_result(result, command, installed_version=None):
             more = references['dead_count'] - min(3, len(references['dead']))
             lines.append('Talimat ve skill dosyalarinda kirik baglanti (bilgi): ' + shown +
                          (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
+        lines += state_location_lines(result.get('state_location'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))

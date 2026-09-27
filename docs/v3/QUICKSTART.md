@@ -23,8 +23,11 @@ Moving a vault changes the default state key. The database is bound to its
 original vault root, so rebuild fresh local state from Markdown after moving;
 do not reuse the old database with `--state`. Do not put state in a synced
 vault. `--state /absolute/local/state` overrides the default and is rejected if
-it resolves inside the vault. Global `--vault` and `--state` options precede the
-command.
+it resolves inside the vault. Moving the state directory of an unchanged vault is
+a different, supported operation: copy it, leave any `update-journal.json`
+behind, and reinstall with the new `--state`; `doctor` reports the pinned and
+effective roots under `state_location`. See [UPDATE.md](UPDATE.md). Global
+`--vault` and `--state` options precede the command.
 
 ## Synthetic smoke, with no real vault
 

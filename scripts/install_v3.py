@@ -53,6 +53,9 @@ RELEASED_SKILL_HASHES = {
 # planner, so an upgraded vault can still hold it at the .claude path.
 OLDER_STOCK_DOCTOR_HASH = "1a07918cabe2177c2b8e0a6405e57eb7d5ac6a9d5bd910c7500c92105a0d55d8"  # v3.0.0, v3.0.1
 STOCK_DOCTOR_HASH = "fd7919c86d140314de82660b2b6f428e2804c4e4d5df35e68d9904dc0ab50df5"  # v3.0.2
+# scripts/skill.beyin-doktor.windows.md: from v3.0.2 on, install.ps1 swaps this edition in at
+# .claude before copying .claude\skills\* to .agents\skills, so a Windows V2 vault holds it twice.
+WINDOWS_STOCK_DOCTOR_HASH = "4b0e9aeae1067ae084380f7f179f12b9090213f3990c2973adbef999321e9a87"  # v3.0.2-v3.4.0
 RETIRED_STUB = b"# BEYIN_V3_LEGACY_RETIRED: canonical source runtime owns new outcomes.\n"
 
 
@@ -116,11 +119,14 @@ def default_skill_hashes():
     """Exempt only the starter-skill bytes released tags actually left at each managed path."""
     hashes = {root + "/skills/" + name + "/SKILL.md": list(RELEASED_SKILL_HASHES[name])
               for root in SKILL_ROOTS for name in STARTER_SKILLS}
-    doctor = hashes[".claude/skills/beyin-doktor/SKILL.md"]
-    doctor += [OLDER_STOCK_DOCTOR_HASH, STOCK_DOCTOR_HASH]
+    # V2's Windows installer (scripts/install.ps1) copied .claude\skills\* into .agents\skills
+    # instead of linking it, so the stock doctor bytes were left at both roots there.
+    for root in SKILL_ROOTS:
+        hashes[root + "/skills/beyin-doktor/SKILL.md"] += [OLDER_STOCK_DOCTOR_HASH, STOCK_DOCTOR_HASH,
+                                                           WINDOWS_STOCK_DOCTOR_HASH]
     source = ROOT / "template/.claude/skills/beyin-doktor/SKILL.md"
     if source.exists():
-        doctor.append(digest(source.read_bytes()))
+        hashes[".claude/skills/beyin-doktor/SKILL.md"].append(digest(source.read_bytes()))
     return {name: sorted(set(values)) for name, values in hashes.items()}
 
 
@@ -434,10 +440,12 @@ taşınır. Mevcut kişiselleştirilmiş klasörü kullan; ikinci kimlik açma.
 cevapları Core.md'ye kaydet. Mevcut kimliği tekrar sorgulama veya şablonla değiştirme.
 
 Anlamlı bir iş parçası bittiğinde (her cevapta değil) beyin skill'indeki ilişki ve öğrenme
-protokolünü uygula: Last-Session'daki devir kartını sonuç ve gerekçeyle baştan yeniden yaz
-(eski kartı alta ekleme, önceki oturumlar bölümüne dokunma), açık konuyu Threads'te yerinde
-güncelle, açık kullanıcı düzeltmesini kapsamıyla Kurallar'a, kalıcı öğrenimi kaynak bağlantılı
-knowledge notuna kaydet.
+protokolünü uygula: Last-Session'da oturum kartını en üste
+`## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla aç (son parça Receipt
+session kimliğinin ilk 8 karakteri), sonra yalnız kendi kartını baştan yeniden yaz
+(dosyanın tamamını yeniden yazma, başka oturumların kartını ezme, önceki oturumlar
+bölümüne dokunma), açık konuyu Threads'te yerinde güncelle, açık kullanıcı düzeltmesini
+kapsamıyla Kurallar'a, kalıcı öğrenimi kaynak bağlantılı knowledge notuna kaydet.
 Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; istenmesini
 beklemeden kaydedilir. Core ve Journal'ı yalnız yeni ve dayanaklı bir şey olduğunda
 güncelle. Bunlar kullanıcı notlarıdır; güncellemelerde korunur. Ardından kaynak

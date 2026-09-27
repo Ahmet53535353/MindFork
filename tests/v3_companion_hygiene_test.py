@@ -279,6 +279,26 @@ class HygieneCliTest(unittest.TestCase):
         self.assertEqual((self.directory / 'Last-Session.md').read_bytes(), before)
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_multi_card_parallel_sessions_compacted_losslessly_keeping_newest_card(self):
+        moment = datetime(2026, 9, 26, 16, 30)
+        cards = ['# Son oturum\n\n']
+        for i in range(12):
+            stamp = (moment - timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M')
+            cards.append(f'## {stamp} · session_{i:02d} · a{i:07x}\n'
+                         f'CARD_{i:02d}: Oturum kararı ve sonuçları. ' + FILLER * 5 + '\n\n')
+        last = self.write('Last-Session.md', ''.join(cards))
+        self.run_cli('sync')
+        self.assertIn('Memory hygiene: Last-Session.md is', self.hook())
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'compacted')
+        live = last.read_text(encoding='utf-8')
+        self.assertLessEqual(len(live), 3000)
+        self.assertIn('CARD_00', live, 'the newest session card is preserved')
+        self.assertNotIn('CARD_11', live, 'oldest session card is moved to archive')
+        month = datetime.now(timezone.utc).strftime('%Y-%m')
+        archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
+        self.assertIn('CARD_11', archive, 'oldest session card is safely preserved in archive')
+
     def test_instructions_ask_for_a_rewrite_not_an_append(self):
         skill = (ROOT / 'template/.agents/skills/beyin/SKILL.md').read_text(encoding='utf-8')
         installer = (ROOT / 'scripts/install_v3.py').read_text(encoding='utf-8')
@@ -287,7 +307,23 @@ class HygieneCliTest(unittest.TestCase):
             self.assertIn('companion-compact', text)
             self.assertIn('baştan yeniden', text)
             self.assertIn('her cevapta', text)
-        for text in (skill, installer, (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_text(encoding='utf-8')):
+            self.assertIn('kendi kartını', text)
+        # #112: every place that tells an agent how to write Last-Session.md names the same
+        # per-session card heading, so no client falls back to rewriting the whole file.
+        router = (ROOT / 'template/CLAUDE.md').read_text(encoding='utf-8')
+        starter = companion_module.STARTERS['Last-Session.md']
+        heading = '## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>'
+        for text in (skill, installer, router, starter):
+            text = ' '.join(text.split())
+            self.assertIn(heading, text)
+            self.assertIn('kendi kartını', text)
+        for text in (skill, installer, router):
+            text = ' '.join(text.split())
+            self.assertIn('en üste', text)
+            self.assertIn('dosyanın tamamını yeniden yazma', text)
+            self.assertIn('Receipt session', text)
+        for text in (skill, installer, router, starter,
+                     (ROOT / 'template/.agents/skills/beyin-doktor/SKILL.md').read_text(encoding='utf-8')):
             for forbidden in ('\u2014', '\u2013', '\u00e2'):  # em dash, en dash, circumflex a
                 self.assertNotIn(forbidden, text)
 
@@ -397,6 +433,25 @@ class CompactionPlanTest(unittest.TestCase):
         self.assertIn('## Session: 2026-09-20', result['archive'])
         self.assertIn('## Previous Sessions\n(none yet)\n', result['archive'])
 
+    def test_multi_card_parallel_session_headings_keep_newest_card(self):
+        text = (
+            '# Son oturum\n\n'
+            '## 2026-09-26 16:30 · ev · 3f9a1c2b\n'
+            'EN_YENİ_KART: 4. oturum kararı ve sonraki adım.\n- test adımı\n\n'
+            '## 2026-09-26 14:15 · ofis · 7c8b2d1a\n'
+            'KART_3: 3. oturum kararı. ' + FILLER * 3 + '\n\n'
+            '## 2026-09-26 11:00 · ev · 1a2b3c4d\n'
+            'KART_2: 2. oturum kararı. ' + FILLER * 3 + '\n\n'
+            '## 2026-09-26 09:00 · ofis · 9e8d7c6b\n'
+            'EN_ESKİ_KART_1: 1. oturum kararı. ' + FILLER * 3 + '\n'
+        )
+        result = self.plan(text, 'Last-Session.md', 350)
+        self.assertIn('## 2026-09-26 16:30 · ev · 3f9a1c2b\nEN_YENİ_KART: 4. oturum kararı', result['live'])
+        self.assertNotIn('EN_ESKİ_KART_1', result['live'])
+        self.assertIn('EN_ESKİ_KART_1', result['archive'])
+        self.assertIn('## Önceki oturumlar\n\n' + self.POINTER, result['live'])
+        self.assertLessEqual(len(result['live']), 350)
+
     def test_thread_fields_with_dates_code_fences_and_crlf_stay(self):
         text = ('# Threads\r\n## Active Threads\r\n### Thread: A\r\n**Status:** waiting, 2026-10-01\r\n'
                 'Next action: 2026-09-30 tarihine kadar karar.\r\n- 2026-09-24 A_YENİ\r\n- 2026-09-10 A_ESKİ ' + FILLER * 3 + '\r\n'
@@ -423,6 +478,47 @@ class CompactionPlanTest(unittest.TestCase):
         for moved in ('ESKİ ', '#### Ayrıntı\nESKİ_ALT', 'ÇOK_ESKİ'):
             self.assertIn(moved, result['archive'])
             self.assertNotIn(moved, result['live'])
+
+    def test_dated_lines_inside_the_newest_card_never_split_it(self):
+        # #118: an older date quoted inside a card is card content, not an older entry, so
+        # the newest card keeps its next step and the older card moves whole.
+        newest_head = '## 2026-09-27 10:00 · ev · 955bfafa\nEN_YENİ_KART: PR hazırlandı.\n'
+        next_step = '- Sıradaki: gözden geçirme.\n\n'
+        older = ('## 2026-09-26 14:05 · ofis · 3f9a1c2b\nESKİ_KART: ' + FILLER * 3 + '\n'
+                 '- 2026-09-25 ESKİ_KARTIN_MADDESİ\n### Ayrıntı\n2026-09-24: ESKİ_ALT\n')
+        for inner in ('- 2026-09-20 kararı hâlâ geçerli.\n', '- Karar (2026-09-20) geçerli.\n',
+                      '\n2026-09-20 kararı geçerli.\n', '### 2026-09-20 notları\nnot\n',
+                      '- 2026-10-01 teslim tarihi.\n'):
+            with self.subTest(inner=inner):
+                newest = newest_head + inner + next_step
+                result = self.plan('# Son oturum\n\n' + newest + older, 'Last-Session.md', 450)
+                self.assertIn(newest, result['live'])
+                self.assertIn(older, result['archive'])
+                self.assertEqual(result['moved_entries'], 1, 'each card moves whole, as one entry')
+                for moved in ('ESKİ_KART', 'ESKİ_KARTIN_MADDESİ', 'ESKİ_ALT'):
+                    self.assertNotIn(moved, result['live'])
+                self.assertLessEqual(len(result['live']), 450)
+
+    def test_a_card_ends_at_a_heading_of_its_own_level(self):
+        text = ('# Son oturum\n\n## 2026-09-27 10:00 · ev\nYENİ\n\n## 2026-09-26 09:00 · ofis\nORTA ' + FILLER * 2 +
+                '\n\n## Notlar\nNOT_KALIR\n2026-09-01: NOTLARDAKİ_ESKİ ' + FILLER * 2 + '\n')
+        result = self.plan(text, 'Last-Session.md', 200)
+        self.assertEqual(result['moved_entries'], 2)
+        self.assertIn('## 2026-09-27 10:00 · ev\nYENİ\n', result['live'])
+        self.assertIn('## Notlar\nNOT_KALIR\n', result['live'])
+        for moved in ('ORTA', 'NOTLARDAKİ_ESKİ'):
+            self.assertIn(moved, result['archive'])
+            self.assertNotIn(moved, result['live'])
+
+    def test_dated_update_headings_keep_their_dated_items_in_threads(self):
+        text = ('# Threads\n## Active Threads\n### Thread: A\n#### 2026-09-24 güncelleme\nA_YENİ\n'
+                '- 2026-09-01 A_YENİNİN_MADDESİ\n#### 2026-09-10 güncelleme\nA_ESKİ ' + FILLER * 3 + '\n'
+                '- 2026-09-02 A_ESKİNİN_MADDESİ\n')
+        result = self.plan(text, 'Threads.md', 250)
+        self.assertEqual(result['moved_entries'], 1)
+        self.assertIn('#### 2026-09-24 güncelleme\nA_YENİ\n- 2026-09-01 A_YENİNİN_MADDESİ\n', result['live'])
+        self.assertIn('### Thread: A\n#### 2026-09-10 güncelleme\nA_ESKİ ' + FILLER * 3 + '\n- 2026-09-02 A_ESKİNİN_MADDESİ\n',
+                      result['archive'])
 
     def test_dated_lines_directly_under_active_threads_never_move(self):
         text = ('# Threads\n2026-09-02: BAŞLIK_ALTI\n## Active Threads\n' +

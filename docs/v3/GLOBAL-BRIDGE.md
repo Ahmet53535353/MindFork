@@ -51,6 +51,10 @@ kurulumdan sonra her istemcide aşağıdaki geri okumayı yapın.
   gövdesi harici projeye otomatik taşınmaz. Ajan gerektiğinde açık proje
   filtresiyle `context` çağırır. Issue'daki geçici sarmalayıcıdan bu noktada
   bilinçli olarak daha dar bir davranış seçildi.
+- İstisna, isteğe bağlı `preferences --project-context on` ayarıdır: açıkken
+  aynı projenin en yeni receipt özeti ve tarihi gelmiş görevleri kısa bir blok
+  olarak eklenir, başka projelerden yalnız sayı gelir. Kapılar ve sınırlar
+  [tercihler belgesinde](PREFERENCES.md#projeyi-tanıyan-oturum-başı).
 - Yerel `auto_sync: false` / manual profil köprüyü susturur; `context_mode: off`
   başlangıç metnini susturur. Global seçenekler yerel tercih dosyasını değiştirmez.
   Mevcut kontrol aralığı korunur.
