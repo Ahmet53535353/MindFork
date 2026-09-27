@@ -1,6 +1,6 @@
 # AutoDream-lite — konsolidasyon yol haritası (roadmap spec)
 
-Tarih: 2026-09-26 · Durum: faz 1 uygulandı (kapılar + salt-okunur ölçüm + doctor `oversize`), faz 2-5 ölçüm bekliyor
+Tarih: 2026-09-26 · Durum: faz 1-2 uygulandı (kapılar, salt-okunur ölçüm, doctor `oversize`, snapshot/Refresh/`--restore`), faz 3-5 bekliyor
 İlgili kayıt: `docs/specs/2026-09-25-hybrid-rag-implementation-record.md` (Kalan işler #2)
 
 ## Amaç ve sınır
@@ -24,9 +24,13 @@ Anthropic'in AutoDream kapı modelinin işlevsel karşılığı uygulanır — *
    (`--force` yalnız teşhis için, rapora yazar).
 2. **Kanıt kuralı (≥5 receipt):** son çalışmadan beri `receipts` tablosunda ≥5
    yeni kayıt olmalı. Neden receipt ve oturum değil: oturum sayacı `daily/log`
-   bloğundan gelir, o özellik **opt-in ve varsayılan kapalı**; kapalı vault'ta
-   oturum sayacı yok. `receipts` ise her vault'ta var. (Ölçüm öncesi önerilen
-   (a) varyantı — hook'ta kalıcı oturum sayacı — ihtiyaç doğarsa ayrı iş.)
+   bloğundan gelirdi. **Bu gerekçenin dayanağı 2026-09-26'da değişti:** günlük log
+   artık varsayılan **açık** (`1b053cc`, `beyin_v3_preferences.PROFILES`), yani
+   çoğu vault'ta oturum sayacı artık var. Kural yine de receipt'ta kalıyor çünkü
+   `receipts` **her** vault'ta vardır (bilerek kapatılmış günlük logunda da) ve
+   oturum bloğu konsolidasyonun kendisiyle çakışabilir. (a) varyantı — hook'ta
+   kalıcı oturum sayacı — artık "imkânsız" değil, "gerekçesi zayıfladı"; ölçüm
+   gerektiriyorsa ayrı iş olarak açılabilir.
 3. **Kilit:** `state/dream.lock` üzerinde `_portalock.exclusive`; kilit alınamazsa
    pencere vazgeçilir (ikinci konsolidasyon yarışmaz). **Düzeltme (2026-09-26, faz-1
    uygulaması):** kilit *yazan* bir pencerede zorunludur; **salt-okunur rapor kapıyı
@@ -114,16 +118,55 @@ raporu okur, kararı ve gerekçeyi yazar, `--apply` onayı insanın. Başsız
    yeni receipt sayısı, kilit durumu); hiçbir şey yazmaz. Testler: deterministik
    çıktı, boş vault, tek dosya, kapı reddi (24 saat / <5 receipt / kilitli),
    restore edilebilirlik.
-2. **Snapshot + Refresh**: ön-image kopyası, manifest, `--restore`; Refresh yalnız
-   başlık/ayraç normalizasyonu, frontmatter tazelemesi ve **bağıl→mutlak tarih**
-   normalizasyonu (idempotent) — dış kaynaktan alınan Refresh kuralı.
+2. **Snapshot + Refresh**: ön-image kopyası, manifest, `--restore`; Refresh'in
+   kapsamı 2026-09-26'da daraltıldı ve kesinleştirildi (bkz. §5.1).
 3. **Merge**: yalnız alıntısı > 0 olan, birbirine bağlı notlar; her Merge snapshot'ın
    üstüne yazılır ve rapor satırı üretir.
+   **Ön koşul (2026-09-26, bir aylık insan kullanımı E2E'sinden):** `_merge_pairs`
+   (`dream.py:172-193`) yalnız **başlık token'larına** bakar ve "aday çözüldü"
+   durumunu tutmaz; kullanıcı notu birleştirip yerine işaretçi bıraksa aday kaybolmaz
+   (yalnız dosya gerçekten silinince kaybolur). Mutasyon başlamadan önce kalıcı
+   **dismiss listesi** ve gövde benzerliği eklenmelidir; aksi halde kullanıcının
+   `--apply` onayı yanlış nota bağlanır. Ayrıntı:
+   `docs/specs/2026-09-26-followup-findings-plan.md` (BULGU 8).
 4. **Prune**: **otomatik silme yok**; yalnız `status: draft` + 90 gün + alıntı 0
    adayları rapora düşer, kullanıcı `--apply` ile onaylar.
 5. **Re-index + doctor**: snapshot'ın ardından dizin yeniden kurulur, `doctor`
    alanları (boyut/taşma, kopya sayısı, restore noktası, son dream + kapı
    durumu) genişler.
+
+### 5.1 Refresh'in kesin sözleşmesi (2026-09-26 daraltma kararı)
+
+Dış kaynak Refresh kuralında "bağıl→mutlak tarih normalizasyonu" **gövde metnini**
+deterministik yeniden yazmayı söyler. Uygulama sırasında iki sorun görüldü:
+
+- **Anchor belirsizliği:** "dün" hangi güne göre çözülecek? Notun `updated`
+  tarihi mi, komutun çalıştığı gün mü? Sessiz tahmin, kullanıcının yazdığı
+  cümleyi yanlış tarihe çevirir ve geri al dışında iz bırakmaz.
+- **Yetki:** §4 ilkesi içerik kararının oturumdaki ajanda olduğunu söyler
+  ("ağacı yerinde düzelt, eski kartı alta ekleme"). Kodun insan cümlesini
+  yeniden yazması bu ilkeyi bayatlatırdı.
+
+**Bu yüzden kapsam ikiye ayrıldı.**
+
+*Deterministik yazan (kod, idempotent):*
+- başlık/ayraç normalizasyonu;
+- frontmatter tarih alanları — **yalnız notun kendi `updated`/`created` tarihi
+  çözülebilirse**; çözülemezse tahmin edilmez, rapora düşer;
+- `updated` tazelemesi — **yalnız gövde gerçekten değiştiyse**. Aksi halde
+  `updated_at` geri çekilir, not arama sıralamasında "yeni" görünür (sıralamanın
+  sessiz bozulması).
+
+*Yalnız raporlayan (ajanın metni):*
+- gövdedeki bağıl tarih ifadeleri `prose_dates: [{path, line, phrase}]` olarak
+  raporlanır, Türkçe diakritik katlamasıyla tarama yapılır. Metin **değişmez**.
+
+Bunun ölçülebilir bir yan faydası var: SKILL'e eklenen "mutlak tarih yaz" kuralı
+(§9.2) artık *ihlal edilebilir* ve pencere ihlalleri listeler — kural ajanı
+yazarken doğru yapmaya zorlar, pencere geriye dönük denetler. Döngü kapanır,
+kod insan cümlesine dokunmaz.
+
+Tam uygulama planı: `docs/specs/2026-09-26-autodream-phase2-snapshot-refresh-plan.md`.
 
 ## 6. Test ve kanıt disiplini
 

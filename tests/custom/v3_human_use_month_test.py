@@ -901,6 +901,68 @@ class HumanMonthE2ETest(unittest.TestCase):
         degraded = [r['source'] for r in store._retrieve(query, limit=5)['records']]
         self.assertEqual(degraded, lexical_only, 'semantik arama bozulunca kelimesel sira korunmali')
 
+    def test_q15_consolidation_window_applies_and_restores_byte_identically(self):
+        """Geri al kanitinin gercek kurulumda olculmesi (roadmap §6).
+
+        Ay surucusu sanal bir takvimde kostugu icin gercek bir 24 saat geçmez; bu
+        yuzden pencere --force ile acilir (kilit kapisi asla gecmez). Metin ajanin
+        oldugu icin duzeltmeler yalnizca makineye ait alanlardadir.
+        """
+        m = self.month
+        today = dt.date.today().isoformat()
+        # Konsolidasyon notu ikiye bolmustu, yani ay sonunda tavanin altinda: gercek
+        # bir refresh adayi yok. Insan notu buyutdukce duzensizlesir; oyle bir not
+        # uretip pencereyi onun uzerinde kosturuyoruz.
+        note = m.vault / 'notes/ozet-notu.md'
+        original_note = note.read_text(encoding='utf-8')
+        self.addCleanup(self._undo_q15, note, original_note)
+        grown = original_note
+        grown += '\n## Gun 29 ek notu  \n\n\n\n' + ''.join(
+            f'- madde {i}: ay sonu derlemesi, kirpilmamis icerik.\n\n' for i in range(1, 320))
+        note.write_text(grown, encoding='utf-8')
+        m.cli('sync')
+        self.assertGreater(len(grown), 12000, 'not tavanin altinda kaldi')
+        before = {path: digest for path, digest in snapshot(m.vault).items()
+                  if not path.startswith('archive/')}
+
+        applied = m.cli('dream', '--apply', '--force')
+        self.assertEqual(applied.get('phase'), 2, applied)
+        self.assertTrue(applied['wrote'], applied)
+        self.assertFalse(applied['model_calls'])
+        self.assertFalse(applied['network'])
+        self.assertIn('--restore', applied['restore_command'])
+        # Once yazildi: buyuk not artik tek basina duzeltilebilir durumda degil.
+        self.assertTrue(applied['applied'], applied)
+        self.assertTrue((m.vault / 'archive/auto-dream' / today / 'report.md').is_file())
+        self.assertTrue((m.vault / 'archive/auto-dream' / today / 'manifest.json').is_file())
+        # Arsiv, not agaclarinin disinda: kendi aday listesine giremez.
+        self.assertTrue(all(entry['archive'].startswith('archive/auto-dream/')
+                            for entry in applied['snapshot']['files']))
+        # Prizma tekilligi: onceden uygun olan notun baytlari degismedi.
+        self.assertEqual(applied['prose_dates'], [], applied)
+
+        restored = m.cli('dream', '--restore', today)
+        self.assertIn('notes/ozet-notu.md', restored['restored'], restored)
+        after = {path: digest for path, digest in snapshot(m.vault).items()
+                 if not path.startswith('archive/')}
+        self.assertEqual(after, before, 'geri alma vault"u bayt bayt ayni yapmadi')
+        # Kurutma setinin kendisi durur: kurtarma kiti silinmez.
+        self.assertTrue((m.vault / 'archive/auto-dream' / today / 'manifest.json').is_file())
+        # Ikinci rapor yine salt-okunur ve hicbir sey yazmaz.
+        self.assertFalse(m.cli('dream')['wrote'])
+
+    def _undo_q15(self, note, original_text):
+        """Bu test ayni ay durumunu paylasan diger sorulari bozmamali.
+
+        q15 alfabetik sirada q8'den once kostugu icin, birakilan iz (buyutulmus
+        not, ilerletilmis filigran, arsiv) sonraki sorunun aramalarini degistirirdi.
+        """
+        import shutil
+        self.month.set_dream_last_run(None)
+        note.write_text(original_text, encoding='utf-8')
+        shutil.rmtree(self.month.vault / 'archive', ignore_errors=True)
+        self.month.cli('sync')
+
     def test_q13_current_search_limits_are_pinned(self):
         """Bilinen sinirlar olculuyor: govde sozcukleridir, birlestirme (stem) yoktur."""
         engine = self._installed_engine()

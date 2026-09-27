@@ -63,8 +63,36 @@ Aynı ölçüm `doctor` çıktısında `oversize` alanı olarak da görünür: t
 tavanı aşan dosyalar, üretilen projeksiyonlar `generated` olarak işaretli. Yeni
 ayar yoktur; `Last-Session`/`Threads` için companion bütçeleri yetkili kalır.
 
-İlk sürüm yalnız ölçümdür: model çağrısı, ağ, snapshot ve rapor dosyası yoktur.
-Tasarım: `docs/specs/2026-09-26-autodream-lite-roadmap.md`.
+### Pencereyi açmak ve geri almak
+
+`python3 beyin.py dream --apply` pencereyi **açar**: kapıları uygular (yalnız
+bildirmez), kilidi alır, dokunacağı her dosyanın ön-image'ını
+`archive/auto-dream/<tarih>/files/` altına kopyalar, `manifest.json` (sha256)
+yazar, Refresh'i uygular, `archive/auto-dream/<tarih>/report.md` üretir, dizini
+yeniden kurar ve filigranı ilerletir. `wrote` yalnız gerçekten bir şey
+değiştiyse `true` olur — hiçbir şey değişmezse filigran **kıpırdamaz** (haftalık
+ölçüm kendi penceresini kapatmasın diye).
+
+`--force` yalnız 24 saat ve receipt kapılarını atlar; **kilidi asla** atlamaz.
+`--restore` bir onarım yoludur: kapı almaz, kilit almaz, çünkü onardığı şey tam
+olarak yarım kalmış bir pencerenin bıraktığı durumdur. Hash tutmuyorsa sessizce
+bozuk geri yükleme yapmaz, reddeder.
+
+### Refresh neyi yazar, neyi yazmaz
+
+Yazan (deterministik, idempotent): başlık/ayraç normalizasyonu ve **makineye ait**
+frontmatter tarih alanları — bir tarih yalnız notun kendi `updated`/`created`
+tarihi çözülebilirse mutlaklaştırılır, bugünün saatine göre tahmin edilmez.
+Gövdesi değişmeyen notun `updated` alanına dokunulmaz; her pencere eski notları
+sıralamada öne atmasın diye.
+
+Yazmayan: gövdedeki "dün", "geçen hafta" gibi bağıl tarihler. Bunlar
+`prose_dates` olarak **raporlanır** ve metne dokunulmaz — insan cümlesi ajanın
+işidir. Kelime sınırı ile taranır: "dünya", "dünleyici" eşleşmez.
+
+Model çağrısı ve ağ yoktur (her iki bayrak da çıktıda `false`). Tasarım:
+`docs/specs/2026-09-26-autodream-lite-roadmap.md`; faz-2 uygulama planı ve
+gerekçesi `docs/specs/2026-09-26-autodream-phase2-snapshot-refresh-plan.md`.
 
 ## Tur başı bağlam: pasaj düzeyinde strict arama
 
