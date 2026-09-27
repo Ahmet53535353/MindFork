@@ -253,6 +253,8 @@ def parser():
                           help="Disable/exclude a managed component or skill (repeatable)")
     settings.add_argument("--include-component", action="append", default=[], metavar="COMPONENT",
                           help="Re-enable a previously excluded component (repeatable)")
+    settings.add_argument("--project-context", choices=("on", "off"),
+                          help="Inject scoped project receipt and due tasks at SessionStart")
     compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
     compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
@@ -374,6 +376,11 @@ def main(argv=None):
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:
                 result['status'] = 'saved'
+            from beyin_v3_bridge import read_project_context, save_project_context
+            if args.project_context is not None:
+                save_project_context(state, args.project_context == 'on')
+                result['status'] = 'saved'
+            result['project_context'] = 'on' if read_project_context(state) else 'off'
         elif args.command == "jev":
             laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
