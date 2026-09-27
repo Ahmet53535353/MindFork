@@ -72,6 +72,99 @@ Yönetilen dosyada araya giren kullanıcı değişikliği varsa işlem bunu ezme
 
 Yalnız satır sonu farkı değişiklik sayılmaz: `core.autocrlf` ya da bir editör yönetilen dosyayı CRLF'e çevirmişse güncelleme, kaldırma ve rollback durmaz, dosya yeniden yazılırken stok LF biçimine döner. Conflict mesajı sebebi söyler: `content differs` gerçek bir düzenleme, `deleted` silinmiş dosya demektir.
 
+
+## State dizinini taşımak
+
+State dizini vault'un dışında, yerel hesap altındadır ve varsayılan yeri işletim
+sisteminin uygulama verisi alanıdır (Windows'ta `%LOCALAPPDATA%`). Bazı durumlarda bu
+varsayılanı bırakıp state'i başka bir yere almak gerekir:
+
+- İstemci **MSIX paketi** olarak kuruluysa Windows `%LOCALAPPDATA%` yolunu paketin
+  kapsayıcısına yönlendirir (`...\Packages\<paket-kimliği>\LocalCache\Local\...`).
+  Paket içinden ve paket dışından çalışan süreçler aynı dizeyi okuyup farklı dizine
+  gidebilir; o zaman hafızanın yarısı bir tarafta, yarısı diğerinde kalır.
+- Kapsayıcı yolu paket kimliğini içerir. Uygulama farklı bir kimlikle yeniden kurulursa
+  ya da kapsayıcı sıfırlanırsa sabitlenmiş yol geçersiz kalır.
+- `%LOCALAPPDATA%` bulut ile eşitlenen bir klasöre yönlendirilmişse state eşitlenmemelidir.
+
+Taşıma desteklenen bir işlemdir: `install_v3.py --state` yeni yolu sabitler. Veritabanı
+**vault kök yoluna** bağlıdır, state yoluna değil; bu yüzden aynı vault için state'i taşımak
+veritabanını geçersizleştirmez. Vault'u taşımak ayrı bir konudur ve orada yerel state
+Markdown'dan yeniden kurulur; ayrıntı için [QUICKSTART](QUICKSTART.md).
+
+### Adımlar
+
+1. **Ajan oturumlarını kapat.** Çalışan bir worker state'e yazıyor olabilir.
+
+2. **Mevcut yolu oku.** Vault kökündeki `.beyin-runtime.json` dosyasındaki `state`
+   alanı sabitlenmiş yoldur. Bu dosyayı elle değiştirme; kurucu yazar.
+
+3. **Hedefi seç.** Vault'un dışında, yalnız bu uygulamaya ayrılmış, yerel sabit bir
+   diskte ve bulut eşitlemesi olmayan bir dizin. Örnek: `F:\beyin-v3-state`.
+
+4. **Dizini kopyala.** Tüm içerik taşınır: `memory.sqlite3`, `v3-install.json`,
+   `hook-queue/`, `hook-done/`, `markdown-journal/`, tercih ve cache dosyaları.
+   Kopya sonrası dosya hash'lerini karşılaştır.
+
+5. **`update-journal.json` dosyasını kopyalama.** Yarıda kalmış bir güncellemeden
+   kalan journal varsa yeni konuma taşınmamalıdır. `install_v3.py` hedef state'te
+   bekleyen bir journal görürse taze kurulum yapmaz; `recover` çağırıp **eski işlemi
+   sürdürür** ve eski sabitlemeyi hedefler. Sonuç `install_resumed: true` döner ve
+   `.beyin-runtime.json` yeni yolu göstermez. Eski dizinde journal varsa önce orada
+   `beyin.py recover` ile işlemi tamamla, sonra kopyala.
+
+6. **Kurucuyu yeni yolla çalıştır.** Önce planı incele:
+
+   ```powershell
+   py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim" --state "F:\beyin-v3-state" --plan
+   ```
+
+   Plan temizse aynı komutu `--plan` olmadan çalıştır. Kurucu dizini oluşturduktan
+   **sonra** yeniden çözümleyip kanonik yolu sabitler.
+
+7. **İki taraftan doğrula.** `py -3 beyin.py doctor --json` komutunu hem ajan kabuğundan
+   (paket içi) hem de normal bir PowerShell penceresinden (paket dışı) çalıştır; aynı
+   sonucu vermeli. `state_location` alanı `warnings` listesini boş, `sibling_state_roots`
+   listesini de tek girdili (ya da boş) göstermeli. `--json` olmadan çalışan insan okunur
+   çıktıda her uyarı `State konumu (bilgi):` ile başlayan bir satırdır; hiç olmamalı.
+
+8. **Eski dizini ancak bundan sonra sil.** Doğrulama geçene kadar dur.
+
+
+### Bölünmüş state'i tanımak
+
+Bölünme kendini bozuk bir kurulum gibi göstermez: iki dizin de gerçekten vardır ve
+ikisinde de `v3-install.json` bulunur, çünkü biri paket içinden biri paket dışından
+kurulmuştur. Tek başına bakıldığında ikisi de sağlıklı görünür; fark, oturumun hangi
+yarıyı okuduğunun sürecin paket içinde olup olmamasına bağlı olmasıdır.
+
+`doctor` bunu `state_location` altında raporlar:
+
+- `sibling_state_roots`: aynı vault anahtarı için kurulu bulunan bütün state kökleri,
+  dizin kimliğine göre bir kez sayılır. Birden fazlaysa `state_split` uyarısı verilir.
+  Paket içinde düz yazım da kapsayıcıya yönlendirildiği için gerçek bir bölünme en
+  güvenilir biçimde **paket dışından** görünür.
+- `pinned_in_package_container`: sabitlenmiş yol `Packages\...\LocalCache` içinden geçiyor.
+- `pin_resolves_elsewhere`: bu süreç sabitlenmiş dizeyi başka bir dizine çözümlüyor. Alan
+  her platformda doldurulur, uyarı yalnız Windows'ta verilir; macOS ve Linux'ta bir
+  symlink her süreç için aynı yere gider, bölünme doğurmaz.
+- `pinned_state_empty`: sabitlenmiş kökte kurulum bulunamadı.
+- `effective_state_differs`: bu çalışma sabitlenmiş kök yerine başka bir state okuyor
+  (örneğin kaynak CLI farklı bir `--state` ile çağrıldı).
+
+Bunlar bilgi amaçlıdır; `doctor` durumunu yükseltmezler. Bölünme görürsen hangi yarının
+güncel olduğuna karar ver (`memory.sqlite3` tarihleri ve makbuz sayısı yardımcı olur),
+onu yukarıdaki adımlarla taşı; diğerini ancak adım 7 doğrulaması geçtikten sonra sil.
+
+### Yönlendirme öncesi yolla sabitlenmiş eski kurulumlar
+
+3.4.0 ve öncesiyle (#114 düzeltmesinden önce) yapılmış bir MSIX kurulumunda sabitlenmiş
+yol yönlendirme uygulanmadan yazılmış olabilir. Bu kendiliğinden düzelmez. Düzeltmek için
+#114'ü içeren kurucuyu **paket içinden** (ajan kabuğundan) mevcut `--state` değeriyle
+yeniden çalıştır; sabitleme yönlendirilmiş kanonik yola döner. Bu durumda kopyalama
+gerekmez, ama adım 5'teki kural geçerlidir: bekleyen bir `update-journal.json` varsa önce
+`beyin.py recover` çalıştır, sonra adım 6'daki gibi önce `--plan` ile incele.
+
 ## `invalid legacy skill hashes` (#73)
 
 17–19 Eylül 2026 arasında `cad7953` (#35) sonrası `main` üzerinden kurulan
