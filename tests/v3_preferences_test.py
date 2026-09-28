@@ -133,6 +133,34 @@ class PreferencesTest(unittest.TestCase):
         self.cli('preferences', '--project-context', 'off')
         self.assertEqual(self.cli('preferences')['project_context'], 'off')
 
+    def test_hygiene_opt_ins_are_machine_local_and_rollback_safe(self):
+        # V3.5.1 and older validate() reject any other .beyin-preferences.json key, so a
+        # rollback after enabling hygiene must find only these keys (maintainer change).
+        released_keys = {'auto_sync', 'interval_minutes', 'context_mode', 'context_chars', 'secret_filter'}
+        current = self.cli('preferences')
+        self.assertEqual(current['hygiene'], {'word_cap_warning': False, 'max_words': 500,
+                                              'folder_questions': False, 'promotion': False})
+        saved = self.cli('preferences', '--word-cap-warning', 'on', '--max-words', '800',
+                         '--folder-questions', 'on', '--promotion', 'on')
+        self.assertEqual(saved['status'], 'saved')
+        self.assertEqual(saved['hygiene'], {'word_cap_warning': True, 'max_words': 800,
+                                            'folder_questions': True, 'promotion': True})
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists(), 'must not modify vault preference schema')
+        self.cli('preferences', '--profile', 'economical', '--context-chars', '3000')
+        self.assertEqual(set(json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))), released_keys)
+        self.assertTrue(self.cli('preferences')['hygiene']['word_cap_warning'], 'a profile switch leaves hygiene alone')
+        before = (self.state / 'hygiene.json').read_bytes()
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'preferences', '--max-words', '5', '--promotion', 'off'],
+                                capture_output=True, text=True, encoding='utf-8', timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(before, (self.state / 'hygiene.json').read_bytes(), 'an invalid value changes nothing')
+        (self.state / 'hygiene.json').write_text('{"word_cap_warning": "yes"}', encoding='utf-8')
+        damaged = self.cli('preferences')
+        self.assertFalse(damaged['hygiene']['word_cap_warning'])
+        self.assertIn('hygiene_notice', damaged)
+        self.assertNotIn('Soru sirasi', json.dumps(self.hook('SessionStart', 'claude')))
+
 
 if __name__ == '__main__':
     unittest.main()

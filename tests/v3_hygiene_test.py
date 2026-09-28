@@ -1,7 +1,8 @@
-"""Read-only doctor reports ported from MrMerkus/MMS: boundary and closed tasks.
+"""MMS-derived hygiene mechanisms: doctor reports plus opt-in hook signals.
 
-Read-only for the vault: no model call, no network, no writes at all — the
-doctor command must never mutate the vault or the runtime state."""
+Read-only for the vault: no model call, no network. The only writes are the
+opt-in hook artifacts — soru cooldown markers and the touch log — under a
+state directory that must stay outside the vault. The doctor never writes."""
 import importlib.util
 import json
 import os
@@ -158,6 +159,249 @@ class ClosedTasksTest(unittest.TestCase):
         os.utime(active, (then, then))
         self.assertEqual(hygiene.closed_tasks(self.vault)['closed'], [])
         self.assertEqual(hygiene.closed_tasks(self.vault / 'tasks')['closed_count'], 0)
+
+
+class CompanionExemptionTest(unittest.TestCase):
+    """#130 decision: tam muafiyet — companion memory files never enter a scan."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-companion-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.vault = root / 'vault'
+        self.vault.mkdir()
+        self.state = root / 'state'
+        self.state.mkdir()
+        self.companion = self.vault / '🔮 850-Companion'
+        self.companion.mkdir()
+        # A personalized directory name from the runtime bootstrap marker.
+        (self.state / 'companion-bootstrap.json').write_text(
+            json.dumps({'schema': 1, 'directory': '🔮 850-Companion'}), encoding='utf-8')
+        (self.companion / 'Journal.md').write_text('gunluk ' * 600, encoding='utf-8')
+        (self.companion / 'Last-Session.md').write_text('kart ' * 700, encoding='utf-8')
+
+    def test_companion_files_never_counted_and_never_warned(self):
+        scanned = hygiene.cap_scan(self.vault, state=self.state)
+        self.assertEqual(scanned['over'], [])
+        payload = {'hook_event_name': 'PostToolUse',
+                   'tool_input': {'file_path': str(self.companion / 'Journal.md')}}
+        self.assertEqual(hygiene.hook_cap_warning(self.vault, payload, harness='claude', state=self.state), '')
+        # Without state the default companion name still applies.
+        self.assertEqual(hygiene.cap_scan(self.vault)['over'], [])
+
+    def test_companion_folder_never_asked_and_never_cold(self):
+        then = time.time() - 60 * 86400
+        os.utime(self.companion, (then, then))
+        self.assertEqual(hygiene.folder_questions(self.vault, self.state, cooldown_days=14), [])
+        self.assertFalse((self.state / 'soruldu').exists())
+        promo = hygiene.promotion(self.vault, self.state)
+        self.assertFalse([entry for entry in promo['cold'] if 'Companion' in entry['folder']])
+
+    def test_companion_touch_never_logged(self):
+        payload = {'hook_event_name': 'PostToolUse',
+                   'tool_input': {'file_path': str(self.companion / 'Journal.md')}}
+        hygiene.touch_log(self.state, self.vault, payload)
+        self.assertFalse((self.state / 'touch-log.tsv').exists())
+
+    def test_personalized_companion_directory_is_respected(self):
+        import shutil
+        shutil.rmtree(self.companion)  # a renamed bootstrap replaces the default folder
+        other = self.vault / 'Aklım'
+        other.mkdir()
+        (other / 'Journal.md').write_text('not ' * 600, encoding='utf-8')
+        (self.state / 'companion-bootstrap.json').write_text(
+            json.dumps({'schema': 1, 'directory': 'Aklım'}), encoding='utf-8')
+        self.assertEqual(hygiene.cap_scan(self.vault, state=self.state)['over'], [])
+        self.assertEqual(hygiene.folder_questions(self.vault, self.state, cooldown_days=14), [])
+
+
+class FolderQuestionsBudgetTest(unittest.TestCase):
+    """#130: SessionStart never rglobs the vault — shallow mtimes only."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-soru-budget-')
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.vault = self.root / 'vault'
+        self.vault.mkdir()
+        self.state = self.root / 'state'
+        self.state.mkdir()
+
+    def test_deep_fresh_file_cannot_block_the_question(self):
+        # A folder whose activity is only nested and old: the shallow scan reads
+        # the folder stamp and its direct children, never the deep tree.
+        (self.vault / 'Makaleler').mkdir()
+        deep = self.vault / 'Makaleler/2026-09-27-konferans'
+        deep.mkdir()
+        (deep / 'not.md').write_text('# not\n', encoding='utf-8')
+        then = time.time() - 60 * 86400
+        os.utime(self.vault / 'Makaleler', (then, then))
+        os.utime(deep, (then, then))
+        questions = hygiene.folder_questions(self.vault, self.state, cooldown_days=14)
+        self.assertEqual(len(questions), 1)
+        self.assertIn('Makaleler', questions[0])
+
+    def test_recent_nested_folder_keeps_a_folder_warm(self):
+        # Gaining a new subfolder is top-level activity: the folder is not silent.
+        (self.vault / 'Makaleler').mkdir()
+        (self.vault / 'Makaleler/2026-09-27-konferans').mkdir()
+        (self.vault / 'Makaleler/2026-09-27-konferans/yeni.md').write_text('# yeni\n', encoding='utf-8')
+        self.assertEqual(hygiene.folder_questions(self.vault, self.state, cooldown_days=14), [])
+
+    def test_top_level_activity_warms_the_folder(self):
+        (self.vault / 'Makaleler').mkdir()
+        (self.vault / 'Makaleler/konu.md').write_text('# konu\n', encoding='utf-8')
+        self.assertEqual(hygiene.folder_questions(self.vault, self.state, cooldown_days=14), [])
+
+    def test_generic_system_names_are_skipped_and_personal_names_are_not_in_code(self):
+        for name in ('daily', 'knowledge', 'tasks', 'node_modules', 'scripts', 'tests', 'docs', 'template'):
+            (self.vault / name).mkdir()
+        questions = hygiene.folder_questions(self.vault, self.state, cooldown_days=14)
+        self.assertEqual(questions, [])
+        # The reviewer's finding 6: a user's personal layout (Finans/Müşteriler/gptpro)
+        # must not be hard-coded; kasa-class names are covered by SENSITIVE_DIRS instead.
+        source = hygiene.__dict__.get('SORU_SKIP_DIRS')
+        self.assertIsNotNone(source)
+        pattern = source.pattern
+        for personal in ('Finans', 'Musteriler', 'Müşteriler', 'gptpro'):
+            self.assertNotIn(personal, pattern)
+
+
+class HarnessGateTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-harness-')
+        self.addCleanup(tmp.cleanup)
+        self.vault = Path(tmp.name)
+        self.note = self.vault / 'not.md'
+        self.note.write_text('kelime ' * 600, encoding='utf-8')
+        self.payload = {'hook_event_name': 'PostToolUse', 'tool_input': {'file_path': str(self.note)}}
+
+    def test_only_claude_and_codex_receive_the_warning(self):
+        self.assertIn('Bolum SINYALI', hygiene.hook_cap_warning(self.vault, self.payload, harness='claude'))
+        self.assertIn('Bolum SINYALI', hygiene.hook_cap_warning(self.vault, self.payload, harness='codex'))
+        for harness in ('antigravity', 'opencode', 'omp', 'hermes'):
+            self.assertEqual(hygiene.hook_cap_warning(self.vault, self.payload, harness=harness), '')
+
+
+class TouchLogOptInTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-touch-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.vault = root / 'vault'
+        self.vault.mkdir()
+        self.state = root / 'state'
+        self.state.mkdir()
+        (self.vault / 'Notlar').mkdir()
+        (self.vault / 'Notlar/a.md').write_text('# a\n', encoding='utf-8')
+
+    def payload(self, path):
+        return {'hook_event_name': 'PostToolUse', 'tool_input': {'file_path': str(path)}}
+
+    def test_touch_log_and_promotion_roundtrip(self):
+        hygiene.touch_log(self.state, self.vault, self.payload(self.vault / 'Notlar/a.md'))
+        promo = hygiene.promotion(self.vault, self.state, days=30)
+        self.assertEqual([entry['folder'] for entry in promo['hot']], ['Notlar'])
+
+    def test_untouched_user_folder_is_cold_without_deep_scan(self):
+        (self.vault / 'Beden').mkdir()
+        os.utime(self.vault / 'Beden', (time.time() - 60 * 86400,) * 2)
+        promo = hygiene.promotion(self.vault, self.state, days=30)
+        self.assertEqual([entry['folder'] for entry in promo['cold']], ['Beden'])
+
+
+class RealLayoutTest(unittest.TestCase):
+    """Maintainer regressions re-derived on template-shaped names, not synthetic bare names."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-real-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.vault, self.state = root / 'vault', root / 'state'
+        self.vault.mkdir()
+        self.state.mkdir()
+        then = time.time() - 60 * 86400
+        for name in ('📦 900-Archive', '📋 Templates', '🔐 Kasa', 'node_modules', '📥 000-Inbox', 'Makaleler'):
+            (self.vault / name).mkdir()
+            os.utime(self.vault / name, (then, then))
+
+    def test_quiet_template_archive_kasa_and_code_folders_are_never_asked(self):
+        questions = hygiene.folder_questions(self.vault, self.state, cooldown_days=14)
+        self.assertEqual(len(questions), 1)
+        self.assertTrue(questions[0].startswith('Makaleler/ klasoru 60 gundur bos.'), questions[0])
+        cold = [entry['folder'] for entry in hygiene.promotion(self.vault, self.state)['cold']]
+        self.assertEqual(cold, ['Makaleler'])
+
+    def test_cap_scan_skips_code_trees_kasa_and_nested_repositories(self):
+        for relative in ('node_modules/pkg/README.md', '🔐 Kasa/hesap.md', 'clone/.git/x.md', 'clone/big.md'):
+            (self.vault / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.vault / relative).write_text('kelime ' * 900, encoding='utf-8')
+        (self.vault / 'Makaleler/uzun.md').write_text('kelime ' * 900, encoding='utf-8')
+        self.assertEqual([entry['file'] for entry in hygiene.cap_scan(self.vault)['over']], ['Makaleler/uzun.md'])
+
+    def test_archive_marker_is_read_from_frontmatter_only(self):
+        body = 'kelime ' * 900
+        cases = {'gecmis.md': ('---\ntype: gecmis\n---\n' + body, None),
+                 'json.md': ('---\n{"durum": "Arşiv"}\n---\n' + body, None),
+                 'metin.md': ('---\ntitle: x\n---\narsiv notlari\n' + body, True)}
+        for name, (text, expected) in cases.items():
+            (self.vault / 'Makaleler' / name).write_text(text, encoding='utf-8')
+            measured = hygiene.file_over_cap(self.vault, self.vault / 'Makaleler' / name)
+            self.assertEqual(None if measured is None else measured[1], expected, name)
+
+    def test_nfd_companion_and_root_files_never_enter_the_touch_log(self):
+        companion = unicodedata.normalize('NFD', 'Aklım Özü')
+        (self.vault / companion).mkdir()
+        (self.state / 'companion-bootstrap.json').write_text(
+            json.dumps({'schema': 1, 'directory': unicodedata.normalize('NFC', 'Aklım Özü')}), encoding='utf-8')
+        for path in (self.vault / companion / 'Journal.md', self.vault / 'kok.md', self.vault / '🔐 Kasa/hesap.md'):
+            hygiene.touch_log(self.state, self.vault, {'hook_event_name': 'PostToolUse',
+                                                       'tool_input': {'file_path': str(path)}})
+        self.assertFalse((self.state / 'touch-log.tsv').exists())
+
+
+class SettingsAndDoctorTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-settings-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.vault, self.state = root / 'vault', root / 'state'
+        self.vault.mkdir()
+
+    def doctor(self):
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'doctor'], capture_output=True, text=True,
+                                encoding='utf-8', env=dict(os.environ, BEYIN_V3_NO_SPAWN='1'), timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_settings_schema_is_strict(self):
+        self.assertEqual(hygiene.read_settings(self.state), (hygiene.SETTINGS_DEFAULTS, True))
+        for bad in ({'max_words': 5}, {'word_cap_warning': 1}, {'unknown': True}, {'schema': 2}):
+            with self.assertRaises(ValueError):
+                hygiene.check_settings(bad)
+        self.assertEqual(hygiene.save_settings(self.state, {'max_words': 700})['max_words'], 700)
+        self.assertEqual(json.loads((self.state / 'hygiene.json').read_text(encoding='utf-8'))['schema'], 1)
+
+    def test_doctor_reports_follow_the_opt_in_and_never_write(self):
+        (self.vault / 'Makaleler').mkdir()
+        (self.vault / 'Makaleler/uzun.md').write_text('kelime ' * 900, encoding='utf-8')
+        then = time.time() - 60 * 86400
+        for path in (self.vault / 'Makaleler/uzun.md', self.vault / 'Makaleler'):
+            os.utime(path, (then, then))
+        default = self.doctor()
+        self.assertEqual((default['word_cap'], default['promotion']), ({'enabled': False}, {'enabled': False}))
+        hygiene.save_settings(self.state, {'word_cap_warning': True, 'max_words': 1000, 'promotion': True,
+                                           'folder_questions': True})
+        self.assertEqual(self.doctor()['word_cap']['over_count'], 0, 'the configured cap applies')
+        hygiene.save_settings(self.state, {'max_words': 800})
+        vault_before = {path: path.stat().st_mtime_ns for path in self.vault.rglob('*')}
+        report = self.doctor()
+        self.assertEqual([entry['file'] for entry in report['word_cap']['over']], ['Makaleler/uzun.md'])
+        self.assertEqual([entry['folder'] for entry in report['promotion']['cold']], ['Makaleler'])
+        self.assertEqual(vault_before, {path: path.stat().st_mtime_ns for path in self.vault.rglob('*')})
+        self.assertFalse((self.state / 'soruldu').exists(), 'doctor never stamps a question')
+        self.assertFalse((self.state / 'touch-log.tsv').exists())
 
 
 if __name__ == '__main__':

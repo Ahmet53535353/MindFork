@@ -149,6 +149,14 @@ def human_result(result, command, installed_version=None):
                  'Proje oturum basi baglami: ' + ('acik' if result.get('project_context') == 'on' else 'kapali')]
         for name, value in (result.get('companion_limits') or {}).items():
             lines.append('Hafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali'))
+        hygiene = result.get('hygiene') or {}
+        if hygiene:
+            lines.append('Hijyen sinyalleri (varsayilan kapali): kelime tavani uyarisi ' +
+                         ('acik (' + str(hygiene.get('max_words')) + ' kelime)' if hygiene.get('word_cap_warning') else 'kapali') +
+                         ', klasor sorulari ' + ('acik' if hygiene.get('folder_questions') else 'kapali') +
+                         ', terfi raporu ' + ('acik' if hygiene.get('promotion') else 'kapali'))
+        if result.get('hygiene_notice'):
+            lines.append(result['hygiene_notice'])
         if result.get('excluded_components'):
             lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']))
         if result.get('exclusion_notice'):
@@ -291,6 +299,19 @@ def human_result(result, command, installed_version=None):
             more = closed['closed_count'] - min(3, len(closed.get('closed') or []))
             lines.append(str(closed.get('days', 30)) + ' gunden eski kapali gorev tasks/ altinda duruyor (bilgi, tasima senin kararin): ' + shown +
                          (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
+        cap = result.get('word_cap') or {}
+        if cap.get('over_count'):
+            shown = ', '.join(plain_text(entry['file']) + ' (' + str(entry['words']) + ' kelime)' for entry in cap.get('over', [])[:3])
+            more = cap['over_count'] - min(3, len(cap.get('over') or []))
+            lines.append('Kelime tavani (' + str(cap['cap']) + ') asan not (bilgi): ' + shown +
+                         (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
+        promo = result.get('promotion') or {}
+        if promo.get('hot'):
+            lines.append('Sicak klasorler (son ' + str(promo.get('window_days', 30)) + ' gun dokunma): ' +
+                         ', '.join(plain_text(entry['folder']) + ' (' + str(entry['touches']) + ')' for entry in promo['hot'][:3]))
+        if promo.get('cold'):
+            lines.append('Soguk klasorler (terfi karari senin): ' +
+                         ', '.join(plain_text(entry['folder']) + ' (' + str(entry['days_quiet']) + ' gun)' for entry in promo['cold'][:3]))
         lines += state_location_lines(result.get('state_location'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
