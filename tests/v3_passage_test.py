@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unicodedata
 import unittest
 from unittest.mock import patch
@@ -76,6 +77,25 @@ class SplitTest(unittest.TestCase):
     def test_heading_levels_keep_a_two_level_path(self):
         text = '# A\n\n## B\n\n### C\n\nmetin\n\n## D\n\nson\n'
         self.assertEqual([h for h, _, _ in passage.split_blocks(text)], ['B > C', 'A > D'])
+
+    def test_heading_closing_sequence(self):
+        for line, head in [('# Başlık ##', 'Başlık'), ('# C#', 'C#'), ('# ##', '##'), ('#\t##', '##'),
+                           ('## A ## B', 'A ## B'), ('### x #\t ', 'x'), ('   #### y  ###   ', 'y'), ('#', '')]:
+            with self.subTest(line=line):
+                self.assertEqual(passage.split_blocks(line + '\n\nmetin\n')[0][0], head)
+        for line in ('#etiket', '####### yedi', '    # kod'):
+            with self.subTest(line=line):
+                self.assertEqual(passage.split_blocks(line + '\n')[0][0], '')
+
+    def test_heading_with_a_long_whitespace_run_is_linear(self):
+        # A heading line holding a long run of spaces or tabs used to backtrack quadratically in
+        # the heading pattern: about 2.5 s for 20,000 spaces, 10 s for 40,000, in one hook turn.
+        for gap in (' ' * 40000, ' \t' * 20000):
+            text = '# a' + gap + 'b\n\nmetin\n'
+            started = time.perf_counter()
+            spans = passage.split_blocks(text)
+            self.assertLess(time.perf_counter() - started, 1.0)
+            self.assertEqual(spans[0][0], 'a' + gap + 'b')
 
 
 class PassageContextTest(Vault):
