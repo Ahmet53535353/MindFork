@@ -18,7 +18,11 @@ def isolated_env(home):
     env = {'HOME': str(home), 'USERPROFILE': str(home), 'APPDATA': str(home / 'appdata'),
            'LOCALAPPDATA': str(home / 'localappdata'), 'TEMP': str(home), 'TMP': str(home),
            'PATH': str(Path(sys.executable).parent) + os.pathsep + os.defpath,
-           'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8', 'BEYIN_V3_NO_SPAWN': '1'}
+           'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8', 'BEYIN_V3_NO_SPAWN': '1',
+           # The product dates windows in UTC; a local-time subprocess reads a different day for
+           # three hours a day. Pinned here as well as in tests/conftest.py because callers build
+           # their own env from this dict and would otherwise inherit the developer's timezone.
+           'TZ': 'UTC'}
     for key in ('SYSTEMROOT', 'WINDIR'):
         if key in os.environ:
             env[key] = os.environ[key]
