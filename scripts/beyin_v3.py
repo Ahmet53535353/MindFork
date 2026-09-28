@@ -481,13 +481,13 @@ def main(argv=None):
             except Exception as exc:
                 result['validity'] = {'ignored_rejection_count': 0, 'ignored_rejections': [], 'truncated': False,
                                       'error': (type(exc).__name__ + ': ' + str(exc))[:240]}
-            try:
-                import beyin_v3_hygiene as hygiene
-                result['boundary'] = hygiene.boundary(vault)
-                result['closed_tasks'] = hygiene.closed_tasks(vault)
-            except Exception as exc:  # a hygiene scan must never hide the rest of doctor
-                result['boundary'] = result['closed_tasks'] = None
-                result['hygiene_error'] = type(exc).__name__
+            # Read-only information: each scan fails alone and never hides the rest of doctor.
+            for key in ('boundary', 'closed_tasks'):
+                try:
+                    import beyin_v3_hygiene as hygiene
+                    result[key] = getattr(hygiene, key)(vault)
+                except Exception as exc:
+                    result[key] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
             # Information only: a leftover global OMP hook copy predates the vault-owned plan
             # (OMP.md says the installer never updates or removes it). After an engine update the
