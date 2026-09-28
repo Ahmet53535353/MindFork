@@ -34,6 +34,18 @@ are ignored like OpenCode child sessions: they never submit receipts, so trackin
 only duplicate context and report false receipt gaps. Agents running in OMP submit receipts with
 `--harness omp`; retrieval output is byte-equal to Claude for the same query.
 
+## Doctor: leftover global copies
+
+If a user keeps a manual copy of the hook in the global agent directory
+(`~/.omp/agent/hooks/pre/beyin-v3.ts`), the installer never updates or removes it
+(the vault-owned file takes precedence inside the vault, and outside it the hook
+does nothing). After an engine update that copy can silently fall behind. `doctor`
+therefore reports an information-only `omp_global_hook` field: `stale: true` with
+a digest-mismatch note when the copy differs from the freshly generated hook,
+`stale: false` when it matches, and no field at all when the path is absent or a
+symlink to the vault hook (a link always follows engine updates). Doctor never
+mutates or deletes the file.
+
 ## Validation boundary
 
 `tests/v3_omp_test.py` installs a synthetic vault, imports the generated hook in Bun with a
