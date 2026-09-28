@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.4.0:** Her mesajdaki bağlam artık notun başını değil cevabı taşıyan bölümü getiriyor, `Last-Session.md` ve `Threads.md` sınırsız büyümüyor, iş bitince receipt unutulursa Stop'ta hatırlatılıyor ve Windows'ta yarım kalan kurulum düzeldi. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.4.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.5.1:** Güncelleyici depo adı değişikliğine hazırlandı; herkesin 3.5.1'e geçmesi önerilir ([notlar](docs/v3/releases/3.5.1.md)). V3.5.0 ile aynı vault'ta paralel oturumlar ve birden çok makine destekleniyor (oturum başına devir kartı, [çoklu makine rehberi](docs/v3/MULTI-MACHINE.md)), `recap` son işleri kaynaklarıyla listeliyor, istemediğin skill ve adaptörleri kapatabiliyorsun ve Windows MSIX ortamında state yolu doğru sabitleniyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.5.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
@@ -71,6 +71,8 @@ Bunlar `.agents/skills` altında bulunur; istemciler aynı kaynakları kullanır
 ## Günlük kullanım
 
 Notu yaz, ajana ne istediğini söyle. Kaynaklar oturum açılışı ve konuşmanın uygun noktalarında yeniden indekslenir. İstemciler kapalıyken sürekli tarayan bir servis yoktur. Önemli iş sonuçları kısa, kaynak bağlantılı kayıtlarla tutulur; tüm sohbetin kendiliğinden doğru bilgiye dönüştüğü iddia edilmez.
+
+Beyin sohbet metnini saklamaz. Claude Code yerel sohbet kayıtlarını (`~/.claude/projects/`) varsayılan olarak 30 gün sonra siler; kalıcı olmasını istediğin karar ve bilgiyi nota yazdır. Süreyi uzatmak için `~/.claude/settings.json` içine örneğin `"cleanupPeriodDays": 365` ekle ([Claude Code belgesi](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically)).
 
 Son günlerde ne yapıldığını görmek için vault klasöründe `python3 beyin.py recap --days 7`
 çalıştır. Son yedi UTC gününün kaynak bağlantılı iş sonuçlarını en yeniden eskiye listeler;
@@ -146,6 +148,6 @@ Arama tamamen yereldir ve model çağırmaz: Türkçe gövde ayıklama + SQLite 
 
 ## Geliştiriciler
 
-[Kaynak formatı](docs/v3/MARKDOWN.md) · [Runtime](docs/v3/RUNTIME.md) · [Semantik test sözleşmesi](docs/v3/SEMANTIC-TEST-CONTRACT.md) · [Sürüm paketi ve updater](docs/v3/UPDATE.md).
+[Kaynak formatı](docs/v3/MARKDOWN.md) · [Runtime](docs/v3/RUNTIME.md) · [Semantik test sözleşmesi](docs/v3/SEMANTIC-TEST-CONTRACT.md) · [Sürüm paketi ve updater](docs/v3/UPDATE.md) · [Birden çok makine](docs/v3/MULTI-MACHINE.md).
 
 Açık kaynak, [MIT lisansı](LICENSE). Avenox tarafından günlük ikinci beyin iş akışlarından geliştirildi. V2 bilgi derleme fikri için [Karpathy'nin bilgi tabanı desenine](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) teşekkürler.

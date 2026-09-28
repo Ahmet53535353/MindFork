@@ -93,6 +93,48 @@ class ReleasesTest(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(releases.ReleaseError): releases.safe_url(url)
         self.assertEqual(releases.safe_url('https://release-assets.githubusercontent.com/a'), 'https://release-assets.githubusercontent.com/a')
 
+    def test_both_official_repository_names_are_accepted_and_nothing_broader(self):
+        # After a rename avenoxai/avenoxbeyin -> avenoxai/beyin the old API URL redirects and the
+        # API reports asset URLs under the new name; older installs must keep updating.
+        def with_checksum(base):
+            raw = fixture(); asset = raw['assets'][0]
+            asset['browser_download_url'] = asset['browser_download_url'].replace(releases.WEB, base)
+            raw['assets'].append(dict(asset, id=457, name=asset['name'] + '.sha256',
+                                      browser_download_url=asset['browser_download_url'] + '.sha256'))
+            return raw
+        for slug in ('avenoxai/avenoxbeyin', 'avenoxai/beyin'):
+            with self.subTest(slug=slug):
+                base = 'https://github.com/' + slug + '/releases/'
+                metadata = releases.release_metadata(with_checksum(base))
+                self.assertEqual(metadata['asset_url'], base + 'download/v3.1.0/beyin-v3-3.1.0.zip')
+                self.assertEqual(metadata['checksum_url'], metadata['asset_url'] + '.sha256')
+                self.assertEqual(metadata['release_url'], base + 'tag/v3.1.0')
+                state = self.root / ('state-' + slug.replace('/', '-'))
+                with patch.object(releases, 'fetch_metadata', return_value=(metadata, None)):
+                    releases.refresh(state, now=1000)
+                self.assertEqual(releases.cache(state)['release']['release_url'], base + 'tag/v3.1.0')
+        for slug in ('avenoxai/beyin-evil', 'avenoxai/avenoxbeyin2', 'someone/beyin', 'someone/avenoxbeyin', 'AVENOXAI/beyin'):
+            with self.subTest(slug=slug), self.assertRaisesRegex(releases.ReleaseError, 'invalid_asset'):
+                releases.release_metadata(with_checksum('https://github.com/' + slug + '/releases/'))
+        mixed = with_checksum('https://github.com/avenoxai/beyin/releases/')
+        mixed['assets'][1]['browser_download_url'] = releases.WEB + 'download/v3.1.0/beyin-v3-3.1.0.zip.sha256'
+        with self.assertRaisesRegex(releases.ReleaseError, 'invalid_checksum_asset'):
+            releases.release_metadata(mixed)
+        mixed = with_checksum(releases.WEB)
+        mixed['assets'][1]['browser_download_url'] = 'https://github.com/avenoxai/beyin/releases/download/v3.1.0/beyin-v3-3.1.0.zip.sha256'
+        with self.assertRaisesRegex(releases.ReleaseError, 'invalid_checksum_asset'):
+            releases.release_metadata(mixed)
+
+    def test_renamed_repository_api_redirect_is_followed_with_json_accept(self):
+        request = releases.urllib.request.Request(releases.OFFICIAL, headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'avenoxbeyin-updater'})
+        target = 'https://api.github.com/repositories/1284449744/releases/latest'
+        followed = releases.OfficialRedirect().redirect_request(request, io.BytesIO(), 301, 'Moved Permanently', {}, target)
+        self.assertEqual(followed.full_url, target)
+        self.assertEqual(followed.get_method(), 'GET')
+        self.assertEqual(followed.headers.get('Accept'), 'application/vnd.github+json')
+        with self.assertRaisesRegex(releases.ReleaseError, 'untrusted_download_url'):
+            releases.OfficialRedirect().redirect_request(request, io.BytesIO(), 301, 'Moved', {}, 'https://evil.test/releases/latest')
+
     def test_http_not_modified_rate_limit_and_network_error_are_sanitized(self):
         with patch.object(releases.urllib.request, 'build_opener') as builder:
             opener = builder.return_value.open

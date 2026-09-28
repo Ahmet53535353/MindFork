@@ -20,6 +20,10 @@ sys.dont_write_bytecode = True
 
 OFFICIAL = 'https://api.github.com/repos/avenoxai/avenoxbeyin/releases/latest'
 WEB = 'https://github.com/avenoxai/avenoxbeyin/releases/'
+# Exact official repository slugs. A GitHub rename (avenoxai/avenoxbeyin -> avenoxai/beyin)
+# keeps the old API URL working through a redirect, but the API then reports asset URLs under
+# the new name. Both names are accepted, nothing broader: the old name must never be recreated.
+OFFICIAL_WEBS = tuple('https://github.com/' + slug + '/releases/' for slug in ('avenoxai/avenoxbeyin', 'avenoxai/beyin'))
 MAX_PACKAGE = 32 * 1024 * 1024
 DAY = 86400
 FRESH = 7 * DAY
@@ -93,9 +97,10 @@ def release_metadata(release):
     matches = [a for a in assets if isinstance(a, dict) and a.get('name') == expected]
     if len(matches) != 1: raise ReleaseError('missing_package')
     asset = matches[0]
-    url = WEB + 'download/' + tag + '/' + expected
-    if asset.get('state') != 'uploaded' or asset.get('browser_download_url') != url:
+    web = next((base for base in OFFICIAL_WEBS if asset.get('browser_download_url') == base + 'download/' + tag + '/' + expected), None)
+    if asset.get('state') != 'uploaded' or web is None:
         raise ReleaseError('invalid_asset')
+    url = web + 'download/' + tag + '/' + expected
     size = asset.get('size')
     if type(size) is not int or not 0 < size <= MAX_PACKAGE: raise ReleaseError('invalid_asset_size')
     digest = asset.get('digest')
@@ -115,7 +120,7 @@ def release_metadata(release):
     if type(release.get('id')) is not int or type(asset.get('id')) is not int:
         raise ReleaseError('invalid_release_id')
     return {'release_id': release['id'], 'version': v, 'published_at': published,
-            'release_url': WEB + 'tag/' + tag, 'asset_id': asset['id'], 'asset_name': expected,
+            'release_url': web + 'tag/' + tag, 'asset_id': asset['id'], 'asset_name': expected,
             'asset_url': url, 'asset_size': size, 'asset_sha256': digest[7:] if digest else None,
             'checksum_url': checksum_url}
 
@@ -205,7 +210,7 @@ def cache(state):
         if not isinstance(m, dict): raise ReleaseError('invalid_release_cache')
         version(m.get('version'))
         # Cached text is untrusted too: only a canonical version-derived URL is ever displayed.
-        if m.get('release_url') not in (WEB + 'tag/' + m['version'], WEB + 'tag/v' + m['version']):
+        if m.get('release_url') not in [web + 'tag/' + prefix + m['version'] for web in OFFICIAL_WEBS for prefix in ('', 'v')]:
             raise ReleaseError('invalid_release_cache')
     return value
 

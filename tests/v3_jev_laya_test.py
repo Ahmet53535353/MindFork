@@ -19,6 +19,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+from v3_package_helpers import windows_runtime_env
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -128,7 +130,7 @@ class LayaCase(unittest.TestCase):
         self.environ({'TYPESAFE_API_KEY': TYPESAFE_KEY, 'TYPESAFE_BASE_URL': 'https://marker.invalid'})
 
     def environ(self, values):
-        patcher = patch.dict(os.environ, values, clear=True)
+        patcher = patch.dict(os.environ, {**windows_runtime_env(), **values}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
 

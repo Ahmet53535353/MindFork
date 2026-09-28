@@ -12,6 +12,12 @@ INSTALLER = ROOT / 'scripts/install_v3.py'
 BUILDER = ROOT / 'scripts/build_v3_release.py'
 
 
+def windows_runtime_env():
+    """Variables Windows needs even in a cleared test environment. Without SYSTEMROOT,
+    ssl.SSLContext() fails on Python 3.14 (OpenSSL 3.5): '[SSL] unknown error (0xa080024)'."""
+    return {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR') if key in os.environ}
+
+
 def isolated_env(home):
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
@@ -23,9 +29,7 @@ def isolated_env(home):
            # three hours a day. Pinned here as well as in tests/conftest.py because callers build
            # their own env from this dict and would otherwise inherit the developer's timezone.
            'TZ': 'UTC'}
-    for key in ('SYSTEMROOT', 'WINDIR'):
-        if key in os.environ:
-            env[key] = os.environ[key]
+    env.update(windows_runtime_env())
     return env
 
 

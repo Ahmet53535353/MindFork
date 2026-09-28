@@ -10,6 +10,8 @@ import unittest
 import urllib.request
 from unittest.mock import patch
 
+from v3_package_helpers import windows_runtime_env
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'template/.claude/scripts'))
 import beyin_v3_jev_client as client
 
@@ -58,6 +60,7 @@ class LoopbackProxyTest(unittest.TestCase):
         self.proxy, self.proxy_hits = serve(self, scores)
         env = {name: self.proxy for name in PROXY_NAMES}
         env['TYPESAFE_API_KEY'] = KEY
+        env.update(windows_runtime_env())
         patcher = patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -101,7 +104,7 @@ class TelemetryTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.state = Path(tmp.name)
-        patcher = patch.dict(os.environ, {'TYPESAFE_API_KEY': KEY}, clear=True)
+        patcher = patch.dict(os.environ, {'TYPESAFE_API_KEY': KEY, **windows_runtime_env()}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
 
