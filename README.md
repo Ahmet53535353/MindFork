@@ -42,7 +42,7 @@ Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlan�
 
 Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başlat**. Codex'te `/hooks` ekranında yeni hook tanımlarını inceleyip güven; diğer istemcilerde workspace güvenini tamamla. İstemci güvenini kurucu senin adına uydurmaz. Agent ile kurulum yapmak istersen [SETUP-V3.md](SETUP-V3.md) rehberini takip etmesini iste.
 
-OpenCode için ek adım yok: installer vault içine eklentisini yazar, OpenCode vault klasöründe açılınca aynı motora bağlanır. Adımlar: [docs/v3/OPENCODE.md](docs/v3/OPENCODE.md).
+OpenCode için ek adım yok: installer vault içine eklentisini yazar, OpenCode vault klasöründe açılınca aynı motora bağlanır. Aynı eklenti OpenCode 1.x (1.3.4 ve sonrası) ve 2.x ile çalışır. OpenCode 2.x eklentileri istemci kapansa da çalışan arka plan servisinde yükler; bu yüzden orada `SessionEnd` yalnız oturum silinince veya servis durunca gelir, tur sonu senkronizasyonu `Stop` ile her turda sürer. Adımlar: [docs/v3/OPENCODE.md](docs/v3/OPENCODE.md).
 
 OMP (Oh My Pi) için ek adım yok: installer vault içine `.omp/hooks/pre/beyin-v3.ts` yazar, OMP vault klasöründe açılınca aynı motora bağlanır. Dosyayı global agentDir'e kopyalama; vault dışında işe yaramaz. Adımlar: [docs/v3/OMP.md](docs/v3/OMP.md).
 
