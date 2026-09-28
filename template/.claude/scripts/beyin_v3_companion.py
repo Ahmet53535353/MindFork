@@ -285,6 +285,11 @@ def clip(text, budget, tail=False, both=False):
 
 
 DROPPED_CARDS = '\n[truncated: {count} older handoff cards not shown; read source]\n'
+# An unreadable heading costs the order its only basis, so this notice names the cause instead of
+# claiming the dropped cards are older. SKILL.md:29 fixes the heading shape, and an agent that
+# cannot keep to it can read what went wrong here rather than losing its own card again.
+DROPPED_CARDS_UNDATED = ('\n[truncated: {count} handoff cards not shown; a card heading is not '
+                         '"YYYY-MM-DD HH:MM", so the order above follows the file; read source]\n')
 
 
 def handoff_cards(text):
@@ -308,16 +313,22 @@ def clip_cards(text, budget):
     if not cards:
         return clip(text, budget)
     # Rank by each card's own heading date instead of its line, so an agent that appends its
-    # card at the end still gets that card first. The ranking is only a comparison of dates, so
-    # it runs only while every heading is readable: one heading the parser cannot date (a label
-    # without a clock, a typo) would otherwise rank last and drop the newest card out of its own
-    # context, which is the failure this ranking exists to prevent. In that case the file's own
-    # order is the only signal left, and it is the order the writer used deliberately.
+    # card at the end still gets that card first.
     def rank(item):
         index, card = item
-        return stamp(card.splitlines()[0]), -index
-    if all(stamp(card.splitlines()[0]) for card in cards):
+        moment = stamp(card.splitlines()[0])
+        return (moment or ('', '')), -index
+    # SKILL.md:29 puts the newest card on top, so the top edge is the one that means "newest" and
+    # a heading the parser cannot date there is the newest card, not the oldest. Ranking it last
+    # dropped the handoff the writer had just written, which is the failure this ranking exists to
+    # prevent. Upstream fixed the same class for Journal.md (#135), and only the edge that the
+    # contract defines as newest is in question here; the rest is ranked by date as before.
+    unreadable = [index for index, card in enumerate(cards) if not stamp(card.splitlines()[0])]
+    if 0 in unreadable:
+        cards = [cards[0]] + [card for _, card in sorted(list(enumerate(cards))[1:], key=rank, reverse=True)]
+    else:
         cards = [card for _, card in sorted(enumerate(cards), key=rank, reverse=True)]
+    notice = DROPPED_CARDS_UNDATED if unreadable else DROPPED_CARDS
     kept = []
     used = len(preamble)
     for card in cards:
@@ -329,11 +340,11 @@ def clip_cards(text, budget):
         # The newest card alone is over budget: spend what is left on its opening and its
         # closing, because the closing line is the next concrete step this file exists for.
         # It counts as shown -- ends() already names what it left out -- so the notice below
-        # only names the older cards that are missing altogether.
-        note = DROPPED_CARDS.format(count=len(cards) - 1) if len(cards) > 1 else ''
+        # only names the cards that are missing altogether.
+        note = notice.format(count=len(cards) - 1) if len(cards) > 1 else ''
         return preamble + clip(cards[0], max(0, budget - used - len(note)), both=True) + note
     dropped = len(cards) - len(kept)
-    return preamble + ''.join(kept) + (DROPPED_CARDS.format(count=dropped) if dropped else '')
+    return preamble + ''.join(kept) + (notice.format(count=dropped) if dropped else '')
 
 
 def context(store, budget, session, harness, query='', receipt='', warning=''):
