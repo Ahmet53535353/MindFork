@@ -42,6 +42,33 @@ class JournalExcerptTest(unittest.TestCase):
             self.assertIn('LATEST_ENTRY', excerpt)
             self.assertNotIn('ANCIENT_ENTRY', excerpt)
 
+    def test_undated_newest_entry_at_the_writing_end_wins_in_a_mixed_journal(self):
+        cases = {
+            # The reproduction from #134: newest undated on top of a single dated entry.
+            'top_single': '# Journal\n## Yeni gözlem\nLATEST_ENTRY\n## 2026-09-20\nANCIENT_ENTRY\n',
+            'bottom_single': '# Journal\n## 2026-09-20\nANCIENT_ENTRY\n## Yeni gözlem\nLATEST_ENTRY\n',
+            'newest_first': '# Journal\n## Yeni gözlem\nLATEST_ENTRY\n## 2026-09-20\nANCIENT_ENTRY\n'
+                            '## 2026-09-01\nANCIENT_ENTRY\n',
+            'appended': '# Journal\n## 2026-09-01\nANCIENT_ENTRY\n## 2026-09-20\nANCIENT_ENTRY\n'
+                        '## Yeni gözlem\nLATEST_ENTRY\n',
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                excerpt = companion.excerpt('Journal.md', text)
+                self.assertIn('LATEST_ENTRY', excerpt)
+                self.assertNotIn('ANCIENT_ENTRY', excerpt)
+
+    def test_undated_entry_away_from_the_writing_end_does_not_win(self):
+        # A known direction decides the end: an undated heading on the far side is older.
+        appended = ('# Journal\n## Nasıl yazılır\nANCIENT_ENTRY\n## 2026-09-01\nANCIENT_ENTRY\n'
+                    '## 2026-09-20\nLATEST_ENTRY\n')
+        newest_first = ('# Journal\n## 2026-09-20\nLATEST_ENTRY\n## 2026-09-01\nANCIENT_ENTRY\n'
+                        '## Eski gözlem\nANCIENT_ENTRY\n')
+        for text in (appended, newest_first):
+            excerpt = companion.excerpt('Journal.md', text)
+            self.assertIn('LATEST_ENTRY', excerpt)
+            self.assertNotIn('ANCIENT_ENTRY', excerpt)
+
     def test_other_sources_are_returned_untouched(self):
         self.assertEqual(companion.excerpt('Core.md', '# Kimlik\n## 2026-09-18\nx\n'), '# Kimlik\n## 2026-09-18\nx\n')
 
