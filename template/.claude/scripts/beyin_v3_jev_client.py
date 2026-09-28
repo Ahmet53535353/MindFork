@@ -138,6 +138,67 @@ def _answer_body(config, items):
     return dict(model=config['model'], state=dict(items=body_items), questions=questions)
 
 
+def _facets(query, facets):
+    facets=[query] if facets is None else facets
+    if not isinstance(facets,list) or not 1<=len(facets)<=3 or any(not isinstance(f,str) or not f.strip() for f in facets): raise ValueError('payload_invalid')
+    return facets
+
+
+def _score_body(config, query, candidates, facets, purpose):
+    """Cards and one score question per (facet, card) for retrieval and the two review purposes."""
+    cards=[]
+    for candidate in candidates:
+        card={k:candidate[k] for k in ('id','title','statement','scope','domains') if k in candidate}
+        if any(not isinstance(card.get(k),str) for k in ('id','title','statement','scope')) or not isinstance(card.get('domains'),list) or any(not isinstance(d,str) for d in card['domains']):
+            raise ValueError('payload_invalid')
+        cards.append(card)
+    ids=[c['id'] for c in cards]
+    if len(ids)!=len(set(ids)) or any(not i for i in ids): raise ValueError('payload_invalid')
+    question_map={f'f{j}_c{i}':(j,c['id']) for j in range(len(facets)) for i,c in enumerate(cards)}
+    body=dict(model=config['model'],state=dict(query=query,facets=facets,candidates=cards),questions={
+        f'f{j}_c{i}':_question(purpose,i,j)
+        for j in range(len(facets)) for i,c in enumerate(cards)})
+    return body,question_map
+
+
+PACKAGE_LIMIT = 3
+
+
+def packages(vault, query, candidates, *, facets=None, purpose='retrieval', limit=PACKAGE_LIMIT):
+    """Split score candidates, in order, into at most `limit` requests that each fit the budget.
+
+    evaluate() refuses a request over max_candidates, max_questions or max_input_chars before
+    any network call, so a pool that is too large for one request would otherwise never be
+    judged. Planning is local: no key, cache or network access. Returns None when the pool
+    needs more than `limit` requests. Anything evaluate() would reject for another reason
+    (mode off, invalid config or payload) comes back as one package, for evaluate to report.
+    """
+    try:
+        config=load_config(vault)
+        if purpose not in ('retrieval','memory_review','evidence_review') or not isinstance(query,str) or not isinstance(candidates,list):
+            raise ValueError('payload_invalid')
+        facets=_facets(query,facets)
+        _score_body(config,query,candidates,facets,purpose)
+    except (ValueError,OSError):
+        return [candidates]
+    def fits(part):
+        if len(part)>config['max_candidates'] or len(part)*len(facets)>config['max_questions']: return False
+        return len(json.dumps(_score_body(config,query,part,facets,purpose)[0],ensure_ascii=False))<=config['max_input_chars']
+    if not candidates or fits(candidates): return [candidates]
+    result=[]; start=0
+    while start<len(candidates):
+        end=start+1
+        if not fits(candidates[start:end]): return None
+        while end<len(candidates) and fits(candidates[start:end+1]): end+=1
+        result.append(candidates[start:end]); start=end
+        if len(result)>limit: return None
+    # Greedy gives the fewest packages; equal sizes keep the slowest parallel request short.
+    count=len(result); size,extra=divmod(len(candidates),count)
+    bounds=[i*size+min(i,extra) for i in range(count+1)]
+    even=[candidates[bounds[i]:bounds[i+1]] for i in range(count)]
+    return even if all(fits(part) for part in even) else result
+
+
 def _context_body(config, query, items, scope='auto'):
     """Keyed notes and backticked paths, the same addressing answer_check uses."""
     notes, questions = {}, dict(topical=dict(type='noul', instructions=TOPICAL))
@@ -436,22 +497,11 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
             serialize=lambda validated:{i:dict(type='noul',noul=v) for i,v in validated.items()}
             def assign(validated): result['scores']=validated
         else:
-            facets=[query] if facets is None else facets
-            if not isinstance(facets,list) or not 1<=len(facets)<=3 or any(not isinstance(f,str) or not f.strip() for f in facets): raise ValueError('payload_invalid')
+            facets=_facets(query,facets)
             if len(candidates)>config['max_candidates'] or len(candidates)*len(facets)>config['max_questions']: raise ValueError('budget_exceeded')
-            cards=[]
-            for candidate in candidates:
-                card={k:candidate[k] for k in ('id','title','statement','scope','domains') if k in candidate}
-                if any(not isinstance(card.get(k),str) for k in ('id','title','statement','scope')) or not isinstance(card.get('domains'),list) or any(not isinstance(d,str) for d in card['domains']):
-                    raise ValueError('payload_invalid')
-                cards.append(card)
-            ids=[c['id'] for c in cards]
-            if len(ids)!=len(set(ids)) or any(not i for i in ids): raise ValueError('payload_invalid')
-            if not cards: return result
-            question_map={f'f{j}_c{i}':(j,c['id']) for j in range(len(facets)) for i,c in enumerate(cards)}
-            body=dict(model=config['model'],state=dict(query=query,facets=facets,candidates=cards),questions={
-                f'f{j}_c{i}':_question(purpose,i,j)
-                for j in range(len(facets)) for i,c in enumerate(cards)})
+            body,question_map=_score_body(config,query,candidates,facets,purpose)
+            ids=[c['id'] for c in body['state']['candidates']]
+            if not ids: return result
             validate=lambda response,quantized,counter:_scores(response,question_map,allow_quantized=quantized,quantized_counter=counter)
             serialize=lambda validated:{i:dict(type='score',score=score) for i,score in validated.items()}
             def assign(scores):
