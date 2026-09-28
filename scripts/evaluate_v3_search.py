@@ -64,8 +64,9 @@ def seed_store(runtime, temp_dir: Path, fixture: Dict[str, Any]) -> Tuple[Any, f
     for rec in fixture.get("records", []):
         path = vault / rec["source"]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(rec["text"], encoding="utf-8")
-        actual_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        content_bytes = rec["text"].encode("utf-8")
+        path.write_bytes(content_bytes)
+        actual_sha = hashlib.sha256(content_bytes).hexdigest()
         store.ingest({
             "id": rec["id"],
             "title": rec.get("title", ""),
