@@ -266,17 +266,30 @@ def human_result(result, command, installed_version=None):
             lines.append('Talimat ve skill dosyalarinda kirik baglanti (bilgi): ' + shown +
                          (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
         boundary_report = result.get('boundary') or {}
+        boundary_lines = {
+            'parent_obsidian_index': 'Kok siniri (bilgi): ust klasorde de bir .obsidian var; Obsidian ust klasoru acip bu vault\'u alt klasor sayabilir.',
+            'no_root_obsidian': 'Kok siniri (bilgi): vault kokunde .obsidian yok; Obsidian\'da tam olarak bu klasoru ac.',
+        }
         for finding in boundary_report.get('findings') or []:
-            if finding.startswith('kasa_excluded:'):
-                lines.append('Kasa sinifi klasor taramalarin disinda (bilgi): ' + ascii_text(finding.split(': ', 1)[1]) +
-                             '; tam garanti icin kaynaklarina visibility: private ekle.')
-            else:
-                lines.append('Kok siniri: ' + ascii_text(finding))
+            code = str(finding).split(':', 1)[0]
+            if code == 'kasa_excluded':
+                lines.append('Kasa sinifi klasor (bilgi): ' + ', '.join(plain_text(name) for name in boundary_report.get('sensitive_excluded') or []) +
+                             '; hijyen taramalari bunlari atlar, tam garanti icin kaynaklarina visibility: private ekle.')
+            elif code == 'code_inside_vault':
+                lines.append('Kok siniri (bilgi): vault icinde kod klasoru var (' + ', '.join(plain_text(name) for name in boundary_report.get('code_dirs', [])[:5]) +
+                             '); kod repo\'sunu hafiza vault\'unun disinda tut.')
+            elif code == 'nested_git_repository':
+                lines.append('Kok siniri (bilgi): vault icinde ayri git deposu var (' + ', '.join(plain_text(name) for name in boundary_report.get('nested_repositories', [])[:3]) + ').')
+            elif code == 'backup_artifacts':
+                lines.append('Kok siniri (bilgi): kokte yedek ya da esitleme kopyasi var (' + ', '.join(plain_text(name) for name in boundary_report.get('backup_artifacts', [])[:5]) +
+                             '); ozel bir kopya tasiyor olabilir.')
+            elif code in boundary_lines:
+                lines.append(boundary_lines[code])
         closed = result.get('closed_tasks') or {}
         if closed.get('closed_count'):
-            shown = ', '.join(entry['source'] + ' (' + str(entry['days_old']) + ' gun)' for entry in closed.get('closed')[:3])
+            shown = ', '.join(plain_text(entry['source']) + ' (' + str(entry['days_old']) + ' gun)' for entry in closed.get('closed')[:3])
             more = closed['closed_count'] - min(3, len(closed.get('closed') or []))
-            lines.append('Kapali durumda sedintede duran gorev (bilgi, tasima senin kararin): ' + shown +
+            lines.append(str(closed.get('days', 30)) + ' gunden eski kapali gorev tasks/ altinda duruyor (bilgi, tasima senin kararin): ' + shown +
                          (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
         cap = result.get('word_cap') or {}
         if cap.get('over_count'):
