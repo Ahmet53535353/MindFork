@@ -153,6 +153,24 @@ class MulticardContextTest(unittest.TestCase):
         self.assertIn('HEAD_YENI', text)
         self.assertIn('TAIL_YENI', text)
 
+    def test_undated_card_in_the_newest_position_is_not_ranked_as_the_oldest(self):
+        """The existing undated test appends its undated card at the end, where ranking it last
+        is right; the dangerous direction is an undated card sitting where the newest one belongs.
+        Ranking read only what it could compare, so such a card fell below genuinely older dated
+        cards and lost its own slot in the budget -- the exact failure the date ranking was
+        written to prevent, reached by a heading the parser cannot read.
+        """
+        older = handoff(CARDS[-2:])                 # 2026-09-27 10:32, then 2026-09-26 18:05
+        newest = ('## Devir kartı\n'
+                  'HEAD_TARIHSSIZ: dosyanın en üstündeki yeni kart.\n' + FILLER * 4 +
+                  'TAIL_TARIHSSIZ: Sonraki somut adım: yeni kartın adımını yaz.\n\n')
+        self.build(older.replace('# Son oturum\n\n', '# Son oturum\n\n' + newest, 1))
+        for budget in (1200, 2000):
+            with self.subTest(budget=budget):
+                text = self.context(budget)
+                self.assertIn('HEAD_TARIHSSIZ', text, 'en üstteki tarihsiz kart düştü')
+                self.assertIn('TAIL_TARIHSSIZ', text)
+
     def test_legacy_single_card_with_previous_section_still_reads_correctly(self):
         legacy = ('# Son oturum\n\n'
                   '## 2026-09-20 09:00 · eski model · 1234abcd\n'

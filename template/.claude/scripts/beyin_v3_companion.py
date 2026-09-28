@@ -297,15 +297,17 @@ def clip_cards(text, budget):
     preamble, cards = handoff_cards(text)
     if not cards:
         return clip(text, budget)
-    # Rank by each card's own heading date instead of its line. An agent that appends its card
-    # at the end must still get that card first, and the notice below must name cards that
-    # really are older. A heading without a date cannot be compared, so it ranks last and
-    # keeps its place among the undated ones.
+    # Rank by each card's own heading date instead of its line, so an agent that appends its
+    # card at the end still gets that card first. The ranking is only a comparison of dates, so
+    # it runs only while every heading is readable: one heading the parser cannot date (a label
+    # without a clock, a typo) would otherwise rank last and drop the newest card out of its own
+    # context, which is the failure this ranking exists to prevent. In that case the file's own
+    # order is the only signal left, and it is the order the writer used deliberately.
     def rank(item):
         index, card = item
-        moment = stamp(card.splitlines()[0])
-        return (moment is not None, moment or ('', ''), -index)
-    cards = [card for _, card in sorted(enumerate(cards), key=rank, reverse=True)]
+        return stamp(card.splitlines()[0]), -index
+    if all(stamp(card.splitlines()[0]) for card in cards):
+        cards = [card for _, card in sorted(enumerate(cards), key=rank, reverse=True)]
     kept = []
     used = len(preamble)
     for card in cards:
