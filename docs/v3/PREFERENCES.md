@@ -46,6 +46,22 @@ Bu değişiklik yerel adaydır; yayımlanmış v3.0.0 paketine otomatik olarak e
 - Blok salt okunur SQLite okumasıyla kurulur; model çağrısı ve yazma yoktur. Okuma başarısız olursa yalnız bu blok düşer, köprünün başlangıç talimatı aynen verilir.
 - Ayar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `project-context.json` dosyasında tutulur; makineye özeldir ve rollback güvenlidir. Kapatmak için `--project-context off`.
 
+## Opt-in hijyen sinyalleri
+
+Üç sinyal vardır ve üçü de varsayılan olarak kapalıdır; açılmadıkça hook çıktısı ve `doctor` raporu değişmez:
+
+```bash
+python3 beyin.py preferences --word-cap-warning on --max-words 800
+python3 beyin.py preferences --folder-questions on
+python3 beyin.py preferences --promotion on
+```
+
+- `--word-cap-warning`: Claude veya Codex bir notu yazdıktan sonra (PostToolUse) not tavanı aşıyorsa tek satırlık bir bölme sinyali verir. Bu bir sinyaldir, dosya bölünmez ya da taşınmaz. Tavan `--max-words` ile 10 ile 100000 arasında ayarlanır (varsayılan 500). Codex'in `apply_patch` düzenlemeleri de ölçülür. Antigravity, OpenCode, OMP ve Hermes'te bu sinyal gösterilmez.
+- `--folder-questions`: oturum başında 14 günden uzun süredir sessiz üst klasörler için en fazla üç soru ekler. Yalnız klasörün kendisine ve doğrudan içeriğine bakılır, vault taranmaz. Aynı klasör, yeniden hareketlenene kadar bir kez sorulur.
+- `--promotion`: düzenlenen notların vault içi yollarını runtime klasöründeki `touch-log.tsv` dosyasına yazar; `doctor` bunlardan sıcak ve soğuk klasör raporu çıkarır. Taşıma kararı her zaman senindir.
+
+Companion klasörü, kasa sınıfı adlar (`Kasa`, `Şifreler`, `Müşteriler`, `Özel`, `Private` gibi, emoji ya da numara önekli yazımlar dahil), arşiv, şablon ve kod klasörleri bu sinyallerin hepsinden muaftır. Ayarlar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `hygiene.json` dosyasında tutulur; makineye özeldir, profil değişimi onlara dokunmaz ve rollback güvenlidir. Kapatmak için aynı seçeneği `off` ile ver.
+
 ## Stop'ta receipt hatırlatması
 
 Kurulum, Claude ve Codex için PostToolUse hook'unu yalnız dosya düzenleyen araçlara bağlar (`Edit|Write|apply_patch`). Bu olay geldiğinde hook, vault dışındaki runtime klasörüne oturum kimliğinin hash'iyle adlandırılmış küçük bir düzenleme işareti yazar; transcript okunmaz. Kabuk komutuyla yapılan düzenlemeler bu olayı tetiklemez. Stop'ta runtime kaydında aynı istemci ve aynı `session` değeriyle, düzenlemelerden sonra yazılmış bir receipt yoksa hook oturum başına bir kez Stop'u engeller ve `python3 beyin.py receipt --file RECEIPT_JSON --harness claude` komutunu (Codex için `--harness codex`, Windows'ta `py -3`) `Receipt session=<değer>` bilgisiyle birlikte hatırlatır. Bu değer receipt JSON'undaki `session` alanına yazılmazsa receipt bu checkpoint'i kapatmaz. Receipt'ten sonra yapılan yeni düzenlemeler yeni bir pencere açar.
@@ -61,6 +77,8 @@ Yönetilen blok dışında `AGENTS.md` ya da `CLAUDE.md` içinde `knowledge/` kl
 ## Opt-in günlük oturum logu
 
 `python3 beyin.py preferences --daily-log on|off` (varsayılan **açık**) her oturumun olgu bloğunu `daily/log/YYYY-MM-DD.md` altına ekler: SessionStart bloğu açar (boş bir `### Özet` bölümüyle), SessionEnd başlık-bitiş saati, istemci, istem sayısı, oturum içi receipt referansları ve reflection işaretiyle kapatır. Özeti makine yazmaz — model çağrılmaz; SessionStart'taki tek satırlık hatırlatmayı gören aktif ajan Özet'i Bağlam / Önemli Konuşmalar / Alınan Kararlar / Öğrenilenler / Yapılacaklar başlıklarıyla doldurur, kalıcı değer yoksa boş bırakır. Varsayılan açıktır (2026-09-26: bir aylık insan kullanımı E2E'sinde özelliğin hiç keşfedilemediği görüldü, `docs/specs/2026-09-26-followup-findings-plan.md`); henüz hiçbir tercih belirtmemiş kullanıcıya oturum başında tek satır kapatma komutu söylenir, tercihi belirttikten sonra bu hatırlatma tekrar etmez. Profil değişikliği bu bağımsız tercihi değiştirmez; transcript hiçbir yere gönderilmez. Çökmeyle yarıda kalan oturum bir sonraki açılışta `OPEN (yarıda kaldı)` olarak işaretlenir. Log receipt üretmez, `daily/v3/` indeksiyle ve devir kartıyla oynamaz; passage yolu `daily/` kaynaklarını her zaman dışladığı için tur başı bağlamı şişirmez. Tasarım ve gerekçe: `docs/specs/2026-09-26-daily-log-design.md`.
+
+Bu ayar da hijyen opt-in'leri gibi makineye özeldir ve `.beyin-preferences.json` şemasına girmez: eski bir sürüme dönüldüğünde tanımadığı bir tercih alanı, hook'un durmasına yol açardı. Seçim runtime klasöründeki `daily-log.json` dosyasında durur. Hareketten önce kaydedilmiş bir `.beyin-preferences.json` içindeki `daily_log` değeri okunmaya devam eder ve bir sonraki tercih kaydında duruma taşınır — yoksa anahtar düşerken kasıtlı bir kapatma kendiliğinden açılırdı.
 
 ## Konsolidasyon penceresi (`dream`)
 

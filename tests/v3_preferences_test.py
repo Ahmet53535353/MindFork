@@ -50,32 +50,60 @@ class PreferencesTest(unittest.TestCase):
 
     def test_daily_log_is_on_by_default_in_every_profile(self):
         # Insan kullanimi E2E'si: gunluk log en gorunur hatirlatma ozelligiydi ama
-        # hicbir profilde varsayilan kapaliydi, o yuzden hic kimse bulamadi.
-        for name, profile in prefs.PROFILES.items():
-            self.assertTrue(profile['daily_log'], name)
-        self.assertTrue(prefs.read(self.vault)['daily_log'])
-        self.assertTrue(self.cli('preferences')['preferences']['daily_log'])
+        # hicbir profilde varsayilan kapaliydi, o yuzden hic kimse bulamadi. Secim makine
+        # yerel durumda duruyor ama her profilde acik.
+        self.assertTrue(prefs.DEFAULT_DAILY_LOG)
+        self.assertTrue(prefs.read_daily_log(self.state, self.vault)[0])
+        self.assertTrue(self.cli('preferences')['daily_log'])
 
     def test_daily_log_opt_out_survives_profile_changes_and_stays_off(self):
         # Ayar artik belirlendigi icin profil degisimi onu sifirlamamali.
-        self.assertFalse(self.cli('preferences', '--daily-log', 'off')['preferences']['daily_log'])
+        self.assertFalse(self.cli('preferences', '--daily-log', 'off')['daily_log'])
         for name in ('economical', 'manual', 'normal'):
-            self.assertFalse(self.cli('preferences', '--profile', name)['preferences']['daily_log'], name)
-        self.assertFalse(self.cli('preferences')['preferences']['daily_log'])
-        self.assertFalse(prefs.read(self.vault)['daily_log'])
+            self.assertFalse(self.cli('preferences', '--profile', name)['daily_log'], name)
+        self.assertFalse(self.cli('preferences')['daily_log'])
+        self.assertFalse(prefs.read_daily_log(self.state, self.vault)[0])
 
     def test_daily_log_chosen_is_false_until_the_user_sets_it(self):
-        # Gorusulur uyari yalniz hic secim yapmamis kullaniciya gider. Salt okuma
-        # tercih dosyasini yaratmaz; herhangi bir kalici tercih soru sayilir.
-        self.assertFalse(prefs.daily_log_chosen(self.vault))
+        # The notice goes only to a user who never stated a choice, and reading it writes
+        # nothing. Unlike the old key-presence proxy, an unrelated preference no longer counts
+        # as an answer: the state file is the answer, and it holds this setting alone.
+        self.assertFalse(prefs.daily_log_chosen(self.state, self.vault))
         self.cli('preferences')
-        self.assertFalse(prefs.daily_log_chosen(self.vault))
-        self.assertFalse((self.vault / '.beyin-preferences.json').exists())
-        self.cli('preferences', '--daily-log', 'off')
-        self.assertTrue(prefs.daily_log_chosen(self.vault))
-        self.vault.joinpath('.beyin-preferences.json').unlink()
+        self.assertFalse(prefs.daily_log_chosen(self.state, self.vault))
+        self.assertFalse((self.state / 'daily-log.json').exists())
         self.cli('preferences', '--context-chars', '6000')
-        self.assertTrue(prefs.daily_log_chosen(self.vault))
+        self.assertFalse(prefs.daily_log_chosen(self.state, self.vault),
+                         'ilgisiz bir tercih bu soruyu yanitlamamali')
+        self.cli('preferences', '--daily-log', 'off')
+        self.assertTrue(prefs.daily_log_chosen(self.state, self.vault))
+        self.cli('preferences', '--context-chars', '7000')
+        self.assertTrue(prefs.daily_log_chosen(self.state, self.vault), 'kayit durmali')
+
+    def test_daily_log_never_enters_the_vault_preference_schema(self):
+        # Upstream #132 found this trap: a key in .beyin-preferences.json that the build you
+        # rolled back to does not know makes validate() reject the file, and doctor,
+        # preferences and the SessionStart hook all fail behind it. So the opt-in lives in the
+        # runtime state and does not even create the file; a file saved before the move is
+        # still honoured, and the next save drops the key, which leaves it as a rolled-back
+        # build expects.
+        self.cli('preferences', '--daily-log', 'off')
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists(),
+                         'gunluk log tercihi vault tercih dosyasini olusturmamali')
+        self.cli('preferences', '--context-chars', '6000')
+        stored = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
+        self.assertEqual(set(stored), {'auto_sync', 'interval_minutes', 'context_mode',
+                                        'context_chars', 'secret_filter'})
+        self.vault.joinpath('.beyin-preferences.json').write_text(
+            json.dumps(dict(stored, daily_log=False)), encoding='utf-8')
+        (self.state / 'daily-log.json').unlink()
+        self.assertFalse(prefs.read_daily_log(self.state, self.vault)[0], 'eski dosyadaki secim kaybolmamali')
+        self.cli('preferences', '--context-chars', '7000')
+        healed = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
+        self.assertNotIn('daily_log', healed, 'bir sonraki kayit eski anahtari temizlemeli')
+        self.assertTrue((self.state / 'daily-log.json').exists(), 'eski secim duruma tasinmali')
+        self.assertFalse(prefs.read_daily_log(self.state, self.vault)[0],
+                         'anahtar temizlendi ama secim geri donmemeli')
 
     def test_secret_filter_is_explicit_and_survives_profile_changes(self):
         self.assertFalse(self.cli('preferences')['preferences']['secret_filter'])
@@ -191,6 +219,34 @@ class PreferencesTest(unittest.TestCase):
         self.assertTrue((self.state / 'project-context.json').exists())
         self.cli('preferences', '--project-context', 'off')
         self.assertEqual(self.cli('preferences')['project_context'], 'off')
+
+    def test_hygiene_opt_ins_are_machine_local_and_rollback_safe(self):
+        # V3.5.1 and older validate() reject any other .beyin-preferences.json key, so a
+        # rollback after enabling hygiene must find only these keys (maintainer change).
+        released_keys = {'auto_sync', 'interval_minutes', 'context_mode', 'context_chars', 'secret_filter'}
+        current = self.cli('preferences')
+        self.assertEqual(current['hygiene'], {'word_cap_warning': False, 'max_words': 500,
+                                              'folder_questions': False, 'promotion': False})
+        saved = self.cli('preferences', '--word-cap-warning', 'on', '--max-words', '800',
+                         '--folder-questions', 'on', '--promotion', 'on')
+        self.assertEqual(saved['status'], 'saved')
+        self.assertEqual(saved['hygiene'], {'word_cap_warning': True, 'max_words': 800,
+                                            'folder_questions': True, 'promotion': True})
+        self.assertFalse((self.vault / '.beyin-preferences.json').exists(), 'must not modify vault preference schema')
+        self.cli('preferences', '--profile', 'economical', '--context-chars', '3000')
+        self.assertEqual(set(json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))), released_keys)
+        self.assertTrue(self.cli('preferences')['hygiene']['word_cap_warning'], 'a profile switch leaves hygiene alone')
+        before = (self.state / 'hygiene.json').read_bytes()
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'preferences', '--max-words', '5', '--promotion', 'off'],
+                                capture_output=True, text=True, encoding='utf-8', timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(before, (self.state / 'hygiene.json').read_bytes(), 'an invalid value changes nothing')
+        (self.state / 'hygiene.json').write_text('{"word_cap_warning": "yes"}', encoding='utf-8')
+        damaged = self.cli('preferences')
+        self.assertFalse(damaged['hygiene']['word_cap_warning'])
+        self.assertIn('hygiene_notice', damaged)
+        self.assertNotIn('Soru sirasi', json.dumps(self.hook('SessionStart', 'claude')))
 
 
 if __name__ == '__main__':
