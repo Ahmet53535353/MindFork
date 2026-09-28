@@ -314,9 +314,11 @@ class DreamPhase2Test(unittest.TestCase):
 
     # -- cli ------------------------------------------------------------
     def test_cli_apply_then_restore_round_trip(self):
-        # CLI modulu gercek saatle tarihlendirir; bu yuzden pencere gunu burada da
-        # gercek tarihtir (sabit tarihli testler yukarida).
-        today = dt.date.today().isoformat()
+        # Bu tek test gercek CLI'yi, dolayisiyla gercek saati cagirir; sagat geri alinacak
+        # gunu `report_path` bildirir, test de duvar saatinden yeniden hesaplamaz. Once
+        # `dt.date.today()` ile karsilastiriyordu ve yerel/UTC gunleri arisip kirmiziya
+        # duserdi (her gun yerel 00:00-03:00 araliginda). Fixture'lar sabit kalir; bu
+        # testin tek gercek saatle baglantisi yazilan yoldur.
         note = 'knowledge/concepts/cli.md'
         self.write_note(note, '# CLI\n\n' + ('icerik. ' * 2000))
         self.store.ingest(self.note_record(note))
@@ -328,8 +330,10 @@ class DreamPhase2Test(unittest.TestCase):
         payload = json.loads(apply['stdout'])
         self.assertTrue(payload['wrote'], payload)
         self.assertIn('--restore', payload['restore_command'])
-        self.assertTrue((self.vault / ARCHIVE / today / 'report.md').is_file())
-        restored = self.run_cli('dream', '--restore', today)
+        report = self.vault / payload['report_path']
+        self.assertTrue(report.is_file(), f'rapor beklenen yolda degil: {payload["report_path"]}')
+        day = report.parent.name
+        restored = self.run_cli('dream', '--restore', day)
         self.assertEqual(restored['returncode'], 0, restored['stderr'])
         self.assertEqual(self.sha(note), before, 'CLI geri alimi pencere öncesi baytlari vermedi')
 

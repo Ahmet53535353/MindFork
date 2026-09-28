@@ -922,7 +922,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         oldugu icin duzeltmeler yalnizca makineye ait alanlardadir.
         """
         m = self.month
-        today = dt.date.today().isoformat()
         # Konsolidasyon notu ikiye bolmustu, yani ay sonunda tavanin altinda: gercek
         # bir refresh adayi yok. Insan notu buyutdukce duzensizlesir; oyle bir not
         # uretip pencereyi onun uzerinde kosturuyoruz.
@@ -946,21 +945,29 @@ class HumanMonthE2ETest(unittest.TestCase):
         self.assertIn('--restore', applied['restore_command'])
         # Once yazildi: buyuk not artik tek basina duzeltilebilir durumda degil.
         self.assertTrue(applied['applied'], applied)
-        self.assertTrue((m.vault / 'archive/auto-dream' / today / 'report.md').is_file())
-        self.assertTrue((m.vault / 'archive/auto-dream' / today / 'manifest.json').is_file())
+        # Pencere gununu duvar saatiyle yeniden hesaplmiyoruz: urun raporun hangi gune
+        # yazacagini kendisi bildiriyor (`report_path`), ve yazdigi gune bakmak dogru
+        # iddiadır. Once `dt.date.today()` ile karsilastirmak, yerel ve UTC gunleri
+        # arisip iki testi de saat 00:00-03:00 araliginda kirmiziya dusuruyordu.
+        report = m.vault / applied['report_path']
+        self.assertTrue(report.is_file(), f'rapor beklenen yolda degil: {applied["report_path"]}')
+        self.assertTrue((report.parent / 'manifest.json').is_file())
         # Arsiv, not agaclarinin disinda: kendi aday listesine giremez.
         self.assertTrue(all(entry['archive'].startswith('archive/auto-dream/')
                             for entry in applied['snapshot']['files']))
         # Prizma tekilligi: onceden uygun olan notun baytlari degismedi.
         self.assertEqual(applied['prose_dates'], [], applied)
 
-        restored = m.cli('dream', '--restore', today)
+        # Geri alma gunu de urunun kendi bildirdigi yoldan: duvar saati degil.
+        window_day = report.parent.name
+        restored = m.cli('dream', '--restore', window_day)
         self.assertIn('notes/ozet-notu.md', restored['restored'], restored)
         after = {path: digest for path, digest in snapshot(m.vault).items()
                  if not path.startswith('archive/')}
         self.assertEqual(after, before, 'geri alma vault"u bayt bayt ayni yapmadi')
         # Kurutma setinin kendisi durur: kurtarma kiti silinmez.
-        self.assertTrue((m.vault / 'archive/auto-dream' / today / 'manifest.json').is_file())
+        self.assertTrue((report.parent / 'manifest.json').is_file(),
+                        'kurtarma kiti silinmemis olmali')
         # Ikinci rapor yine salt-okunur ve hicbir sey yazmaz.
         self.assertFalse(m.cli('dream')['wrote'])
 
