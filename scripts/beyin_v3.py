@@ -295,6 +295,13 @@ def parser():
                           help="Re-enable a previously excluded component (repeatable)")
     settings.add_argument("--project-context", choices=("on", "off"),
                           help="Inject scoped project receipt and due tasks at SessionStart")
+    settings.add_argument("--word-cap-warning", choices=("on", "off"),
+                          help="Opt-in PostToolUse split signal for a long note (Claude and Codex only)")
+    settings.add_argument("--max-words", type=int, help="Word cap for --word-cap-warning (10..100000, default 500)")
+    settings.add_argument("--folder-questions", choices=("on", "off"),
+                          help="Opt-in SessionStart question for a long-quiet top-level folder")
+    settings.add_argument("--promotion", choices=("on", "off"),
+                          help="Opt-in touch log for the doctor's hot/cold folder report")
     compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
     compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
@@ -386,6 +393,16 @@ def main(argv=None):
             import beyin_v3_companion as companion
             limits = {name: value for name, value in (('Last-Session.md', args.last_session_chars),
                                                       ('Threads.md', args.threads_chars)) if value is not None}
+            import beyin_v3_hygiene as hygiene
+            hygiene_changes = {key: getattr(args, key) == 'on' for key in ('word_cap_warning', 'folder_questions', 'promotion')
+                               if getattr(args, key) is not None}
+            if args.max_words is not None:
+                hygiene_changes['max_words'] = args.max_words
+            if hygiene_changes:  # validated before anything is saved, like the companion limits
+                current_hygiene, hygiene_valid = hygiene.read_settings(state)
+                if not hygiene_valid:
+                    raise ValueError('hygiene.json in the runtime state is invalid; fix or remove it first')
+                hygiene.check_settings(dict(current_hygiene, **hygiene_changes))
             if limits:  # validate before anything is saved, so a bad value changes nothing
                 current_limits, limits_valid = companion.read_limits(state)
                 if not limits_valid:
@@ -396,8 +413,6 @@ def main(argv=None):
                 changes['auto_sync'] = args.auto_sync == 'on'
             if args.secret_filter is not None:
                 changes['secret_filter'] = args.secret_filter == 'on'
-            if args.daily_log is not None:
-                changes['daily_log'] = args.daily_log == 'on'
             import beyin_v3_exclusions as exclusions
             exclusion_notice = None
             if args.exclude_component or args.include_component:
@@ -415,12 +430,24 @@ def main(argv=None):
                     result_excluded = exclusions.read_exclusions(vault)
                 except ValueError as exc:
                     result_excluded, exclusion_notice = [], 'Haric tutma dosyasi gecersiz: ' + str(exc)
+            # Before the vault file is written, so a pre-move daily log choice reaches the
+            # state instead of being dropped with the key.
+            preferences.migrate_legacy_daily_log(vault, state)
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile or (args.exclude_component or args.include_component) else 'current',
                       'preferences': settings, 'excluded_components': result_excluded,
                       'model_calls': False, 'timer_installed': False}
             if exclusion_notice:
                 result['exclusion_notice'] = exclusion_notice
+            # Machine-local like the hygiene opt-ins: a key in .beyin-preferences.json that a
+            # rolled-back build does not know takes doctor, preferences and the hook down with
+            # it, so the daily log choice is read from the runtime state and never written
+            # back into the vault schema.
+            result['daily_log'] = (preferences.save_daily_log(state, args.daily_log == 'on')
+                                   if args.daily_log is not None
+                                   else preferences.read_daily_log(state, vault)[0])
+            if args.daily_log is not None:
+                result['status'] = 'saved'
             # Machine-local like update notifications: rollback-safe, outside the vault schema.
             result['companion_limits'] = companion.save_limits(state, limits) if limits else companion.read_limits(state)[0]
             if limits:
@@ -434,6 +461,14 @@ def main(argv=None):
                 save_project_context(state, args.project_context == 'on')
                 result['status'] = 'saved'
             result['project_context'] = 'on' if read_project_context(state) else 'off'
+            # Machine-local and rollback-safe like companion limits: never a .beyin-preferences.json key.
+            if hygiene_changes:
+                result['hygiene'] = hygiene.save_settings(state, hygiene_changes)
+                result['status'] = 'saved'
+            else:
+                result['hygiene'], hygiene_valid = hygiene.read_settings(state)
+                if not hygiene_valid:
+                    result['hygiene_notice'] = 'hygiene.json gecersiz; tum hijyen sinyalleri kapali sayiliyor.'
         elif args.command == "jev":
             laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
@@ -557,6 +592,22 @@ def main(argv=None):
             except Exception as exc:
                 result['validity'] = {'ignored_rejection_count': 0, 'ignored_rejections': [], 'truncated': False,
                                       'error': (type(exc).__name__ + ': ' + str(exc))[:240]}
+            # Read-only information: each scan fails alone and never hides the rest of doctor.
+            # The word cap and promotion reports follow the user's opt-in (state/hygiene.json):
+            # a default install gets no new doctor lines and no whole-vault read.
+            for key in ('boundary', 'closed_tasks', 'word_cap', 'promotion'):
+                try:
+                    import beyin_v3_hygiene as hygiene
+                    opted, _ = hygiene.read_settings(state)
+                    if key == 'word_cap':
+                        result[key] = (hygiene.cap_scan(vault, cap=opted['max_words'], state=state)
+                                       if opted['word_cap_warning'] else {'enabled': False})
+                    elif key == 'promotion':
+                        result[key] = hygiene.promotion(vault, state) if opted['promotion'] else {'enabled': False}
+                    else:
+                        result[key] = getattr(hygiene, key)(vault)
+                except Exception as exc:
+                    result[key] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
             # Information only: a leftover global OMP hook copy predates the vault-owned plan
             # (OMP.md says the installer never updates or removes it). After an engine update the

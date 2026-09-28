@@ -177,7 +177,7 @@ def default_notice(vault, state):
     """
     from beyin_v3_preferences import daily_log_chosen
     marker = Path(state) / NOTICE_MARKER
-    if daily_log_chosen(vault) or marker.exists():
+    if daily_log_chosen(state, vault) or marker.exists():
         return ''
     try:
         _atomic(marker, time.strftime('%Y-%m-%dT%H:%M:%S') + '\n')
@@ -190,7 +190,8 @@ def default_notice(vault, state):
 
 def session_start(vault, state, settings, harness, session_id, now=None):
     """Open (or reuse) today's block for this session; returns the reminder line or None."""
-    if not settings.get('daily_log'):
+    from beyin_v3_preferences import read_daily_log
+    if not read_daily_log(state, vault)[0]:
         return None
     now = now if now is not None else time.time()
     key = _key(session_id)
@@ -209,7 +210,8 @@ def session_start(vault, state, settings, harness, session_id, now=None):
 def session_end(vault, state, settings, harness, session_id, now=None):
     """Close the session's block: span, prompt count, receipts, reflection note.
     The agent-written Özet body is never touched."""
-    if not settings.get('daily_log'):
+    from beyin_v3_preferences import read_daily_log
+    if not read_daily_log(state, vault)[0]:
         return
     now = now if now is not None else time.time()
     key = _key(session_id)

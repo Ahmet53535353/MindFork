@@ -49,6 +49,96 @@ if (result.keys.length) {
 console.log(JSON.stringify(result))
 """
 
+# Drives the same module the way OpenCode 2.x does: read the default definition, call
+# setup(ctx) with hook registries and a controllable event stream, then use the cleanup.
+DRIVER_V2 = r"""
+import { pathToFileURL } from "node:url"
+const [plugin, parents] = process.argv.slice(1)
+const parentOf = JSON.parse(parents)
+const hooks = {}
+const register = (domain) => async (name, callback) => {
+  hooks[`${domain}.${name}`] = callback
+  return { dispose: async () => {} }
+}
+const pending = []
+let notify = null
+let idle = null
+let aborted = false
+function subscribe({ signal } = {}) {
+  signal?.addEventListener("abort", () => { aborted = true; notify?.() })
+  return (async function* () {
+    while (!aborted) {
+      if (pending.length) { yield pending.shift(); continue }
+      idle?.()
+      await new Promise((resolve) => { notify = resolve })
+      notify = null
+    }
+    idle?.()
+  })()
+}
+// Resolves once the plugin has fully handled the event and asked for the next one.
+const emit = (type, sessionID) => new Promise((resolve) => {
+  idle = resolve
+  pending.push({ id: `evt-${pending.length}`, type, data: { sessionID } })
+  notify?.()
+})
+const ctx = {
+  session: { hook: register("session"), get: async ({ sessionID }) => ({ id: sessionID, parentID: parentOf[sessionID] }) },
+  tool: { hook: register("tool") },
+  event: { subscribe },
+}
+const mod = await import(pathToFileURL(plugin).href)
+const definition = mod.default
+const result = {
+  id: definition?.id,
+  setup: typeof definition?.setup,
+  serverIsNamedExport: definition?.server === mod.BeyinV3 && typeof mod.BeyinV3 === "function",
+  tui: definition && "tui" in definition,
+}
+const cleanup = await definition.setup(ctx)
+result.cleanup = typeof cleanup
+result.keys = Object.keys(hooks).sort()
+if (result.keys.length) {
+  const prompt = (sessionID, text) => hooks["session.prompt"]({ sessionID, messageID: "msg", prompt: { text, files: [] }, delivery: "steer" })
+  const system = async (sessionID) => {
+    const event = { sessionID, agent: "build", model: {}, system: [{ type: "text", text: "base" }], messages: [], options: {}, tools: {} }
+    await hooks["session.context"](event)
+    return event.system.slice(1)
+  }
+  const tool = (tool, status) => hooks["tool.execute.after"]({ tool, sessionID: "oc-1", agent: "build", messageID: "msg", id: tool, input: {}, status })
+  await prompt("oc-1", "merhaba")
+  result.first = await system("oc-1")
+  await prompt("oc-1", "klima kargo DHL")
+  result.second = await system("oc-1")
+  await tool("edit", "completed")
+  await tool("write", "error")
+  await tool("read", "completed")
+  await hooks["session.compaction"]({ sessionID: "oc-1", agent: "build", model: {}, system: [], messages: [], options: {}, tools: {} })
+  await emit("session.execution.started", "oc-1")
+  await emit("session.execution.succeeded", "oc-1")
+  await emit("session.idle", "oc-1")
+  await emit("session.execution.succeeded", "oc-1")
+  await prompt("sub-1", "alt ajan")
+  result.child = await system("sub-1")
+  await emit("session.execution.succeeded", "sub-1")
+  await emit("session.deleted", "sub-1")
+  await emit("session.deleted", "oc-1")
+  result.afterDelete = await system("oc-1")
+  await emit("session.deleted", "oc-1")
+  await prompt("oc-2", "ikinci oturum")
+  await prompt("oc-3", "ucuncu oturum")
+  // Service stop while a delete is still being reported: one SessionEnd each, never two.
+  const deleting = emit("session.deleted", "oc-2")
+  await new Promise((resolve) => setImmediate(resolve))
+  await cleanup()
+  await cleanup()
+  await deleting
+  result.afterCleanup = [...await system("oc-2"), ...await system("oc-3")]
+}
+console.log(JSON.stringify(result))
+process.exit(0)
+"""
+
 
 def load(path, name):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -91,8 +181,8 @@ class OpenCodeHarnessTest(unittest.TestCase):
                                '--state', str(self.state), '--harness', harness, *extra],
                               input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8')
 
-    def drive(self, parents=None):
-        result = subprocess.run([NODE, '--input-type=module', '-e', DRIVER, str(self.plugin), json.dumps(parents or {})],
+    def drive(self, parents=None, driver=DRIVER):
+        result = subprocess.run([NODE, '--input-type=module', '-e', driver, str(self.plugin), json.dumps(parents or {})],
                                 capture_output=True, text=True, encoding='utf-8', cwd=self.vault)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])
@@ -157,18 +247,53 @@ class OpenCodeHarnessTest(unittest.TestCase):
             self.assertNotIn('prompt', event, 'Hook metadata must never persist transcript text')
 
     @unittest.skipUnless(NODE, 'node is required to execute the OpenCode plugin')
+    def test_plugin_maps_opencode_2_lifecycle_to_adapter_events(self):
+        result = self.drive({'sub-1': 'oc-1'}, DRIVER_V2)
+        self.assertEqual(result['id'], 'beyin-v3')
+        self.assertEqual(result['setup'], 'function')
+        self.assertTrue(result['serverIsNamedExport'], 'OpenCode 1.x loads default.server, which must be the same factory')
+        self.assertFalse(result['tui'], 'OpenCode 1.x rejects a definition with both server and tui')
+        self.assertEqual(result['cleanup'], 'function')
+        self.assertEqual(result['keys'], ['session.compaction', 'session.context', 'session.prompt', 'tool.execute.after'])
+        self.assertEqual(len(result['first']), 1, 'First turn injects only the SessionStart context')
+        self.assertEqual(set(result['first'][0]), {'type', 'text'}, 'OpenCode 2.x system entries are text parts')
+        self.assertEqual(result['first'][0]['type'], 'text')
+        self.assertIn('Receipt session=', result['first'][0]['text'])
+        self.assertIn('OpenCode köprüsü kuruldu', result['first'][0]['text'])
+        self.assertEqual(result['second'][0], result['first'][0], 'SessionStart context stays for the whole session')
+        self.assertIn('notes/klima.md', result['second'][1]['text'])
+        self.assertEqual(result['child'], [], 'Sub-agent sessions get no memory context')
+        self.assertEqual(result['afterDelete'], [], 'Deleted sessions are forgotten')
+        self.assertEqual(result['afterCleanup'], [], 'Cleanup forgets every session')
+        done = self.done_events()
+        self.assertEqual({e['harness'] for e in done}, {'opencode'})
+        self.assertEqual(sorted(e['event'] for e in done),
+                         sorted(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'PreCompact', 'Stop', 'SessionEnd',
+                                 'SessionStart', 'SessionEnd', 'SessionStart', 'SessionEnd']),
+                         'One Stop per prompted turn, one SessionEnd per session, nothing for read tools, '
+                         'failed tools or the sub-agent session')
+        for event in done:
+            self.assertNotIn('prompt', event, 'Hook metadata must never persist transcript text')
+
+    @unittest.skipUnless(NODE, 'node is required to execute the OpenCode plugin')
     def test_plugin_fails_open(self):
         runtime = self.vault / '.beyin-runtime.json'
         original = runtime.read_text(encoding='utf-8')
         for broken in ('{not json', '[]', '{"state": ""}', '{"state": "relative/state"}'):
             runtime.write_text(broken, encoding='utf-8')
             self.assertEqual(self.drive()['keys'], [], broken)
+            self.assertEqual(self.drive(driver=DRIVER_V2)['keys'], [], broken)
         runtime.unlink()
         self.assertEqual(self.drive()['keys'], [], 'An uninstalled vault registers no hooks')
+        self.assertEqual(self.drive(driver=DRIVER_V2)['cleanup'], 'undefined')
         runtime.write_text(original, encoding='utf-8')
         with patch.dict(os.environ, {'BEYIN_PYTHON': str(Path(self.temp.name) / 'missing-python')}):
             result = self.drive()
         self.assertEqual(result['first'], [], 'A missing interpreter degrades to no context, never an error')
+        self.assertEqual(result['second'], [])
+        with patch.dict(os.environ, {'BEYIN_PYTHON': str(Path(self.temp.name) / 'missing-python')}):
+            result = self.drive(driver=DRIVER_V2)
+        self.assertEqual(result['first'], [])
         self.assertEqual(result['second'], [])
 
 

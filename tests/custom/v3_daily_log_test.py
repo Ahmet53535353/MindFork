@@ -32,6 +32,11 @@ def load(name, filename):
     return module
 
 
+# The daily log opt-in is machine-local since upstream #132, so the state is written through
+# the real API and the test never hardcodes the on-disk shape.
+prefs = load('daily_log_preferences', 'beyin_v3_preferences.py')
+
+
 def key_of(session_id):
     return hashlib.sha256(str(session_id).encode()).hexdigest()[:24]
 
@@ -61,11 +66,18 @@ class DailyLogTest(unittest.TestCase):
         path = self.vault / 'daily/log' / f'{day or self.today}.md'
         return path.read_text(encoding='utf-8') if path.exists() else None
 
+    def set_daily_log(self, on):
+        """The gate is machine-local since #132 landed, so a direct session_start call
+        expresses it in the runtime state rather than in the settings dict it is handed."""
+        prefs.save_daily_log(self.state, on)
+
     def start(self, session, settings=SETTINGS_ON, when=None):
+        self.set_daily_log(settings.get('daily_log', True))
         return self.module.session_start(self.vault, self.state, settings, 'codex', session,
                                          now=when or at(self.today, 14, 32))
 
     def end(self, session, settings=SETTINGS_ON, when=None):
+        self.set_daily_log(settings.get('daily_log', True))
         return self.module.session_end(self.vault, self.state, settings, 'codex', session,
                                        now=when or at(self.today, 15, 10))
 
@@ -225,8 +237,8 @@ class DailyLogHookWiringTest(unittest.TestCase):
         self.addCleanup(lambda: str(SCRIPTS) in sys.path and sys.path.remove(str(SCRIPTS)))
 
     def preferences(self, daily_log):
-        from beyin_v3_preferences import save
-        save(self.vault, dict(SETTINGS_ON, daily_log=daily_log))
+        prefs.save(self.vault, dict(SETTINGS_ON))
+        prefs.save_daily_log(self.state, daily_log)
 
     def invoke(self, event, session):
         payload = {'hook_event_name': event, 'session_id': session, 'event_id': event + '-' + session,
