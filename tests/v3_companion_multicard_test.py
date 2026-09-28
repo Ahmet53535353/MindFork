@@ -171,6 +171,22 @@ class MulticardContextTest(unittest.TestCase):
                 self.assertIn('HEAD_TARIHSSIZ', text, 'en üstteki tarihsiz kart düştü')
                 self.assertIn('TAIL_TARIHSSIZ', text)
 
+    def test_undated_heading_makes_the_notice_name_the_cause_instead_of_claiming_age(self):
+        """Order can only be claimed from dates, and one unreadable heading takes that away. The
+        notice said the dropped cards were "older" while the order it had just used was a guess,
+        so a writer who never learned their heading was the problem kept losing the newest card.
+        Upstream fixed this class for Journal.md (#135); the handoff side has to say it too.
+        """
+        older = handoff(CARDS[-2:])
+        body = older.replace('# Son oturum\n\n', '# Son oturum\n\n## Devir kartı\n'
+                             'HEAD_TARIHSSIZ: yeni kart.\n' + FILLER * 4 +
+                             'TAIL_TARIHSSIZ: Sonraki somut adım: yeni kartın adımını yaz.\n\n', 1)
+        self.build(body)
+        text = self.context(1200)
+        self.assertNotRegex(text, r'older handoff cards', 'tarihsiz baslik varken yas iddiasi')
+        self.assertIn('YYYY-MM-DD HH:MM', text, 'bildirim sorunu belirtmeli')
+        self.assertIn('follows the file', text, 'siralamanin nereden geldigini soylemeli')
+
     def test_legacy_single_card_with_previous_section_still_reads_correctly(self):
         legacy = ('# Son oturum\n\n'
                   '## 2026-09-20 09:00 · eski model · 1234abcd\n'
