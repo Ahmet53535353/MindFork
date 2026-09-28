@@ -581,8 +581,9 @@ class HookInstallerTest(unittest.TestCase):
     # --- Opt-in hygiene (#130): defaults silent, preferences gate, harness gate ---
 
     def enable(self, **hygiene):
-        (self.vault / '.beyin-preferences.json').write_text(
-            json.dumps({'hygiene': hygiene}), encoding='utf-8')
+        # Machine-local opt-in (maintainer change): state/hygiene.json, never .beyin-preferences.json.
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / 'hygiene.json').write_text(json.dumps(dict(schema=1, **hygiene)), encoding='utf-8')
 
     def test_hygiene_defaults_are_completely_silent(self):
         self.seed()
@@ -642,6 +643,36 @@ class HookInstallerTest(unittest.TestCase):
         self.invoke(payload, 'claude')
         self.assertTrue((self.state / 'touch-log.tsv').exists())
         self.assertIn('notes/task.md', (self.state / 'touch-log.tsv').read_text(encoding='utf-8'))
+
+    def test_word_cap_follows_the_opt_in_under_every_profile(self):
+        # Maintainer regression: the warning lived after the context_mode early return,
+        # so the economical and manual profiles never delivered it.
+        import beyin_v3_preferences as preferences
+        self.seed()
+        big = self.vault / 'notes/uzun.md'
+        big.write_text('kelime ' * 600, encoding='utf-8')
+        self.enable(word_cap_warning=True)
+        for profile in ('economical', 'manual'):
+            preferences.save(self.vault, {}, profile)
+            payload = {'hook_event_name': 'PostToolUse', 'session_id': 'hygiene-' + profile,
+                       'tool_input': {'file_path': str(big)}}
+            response = self.invoke(payload, 'claude')
+            self.assertIn('Bolum SINYALI', response['hookSpecificOutput']['additionalContext'], profile)
+        self.assertEqual(self.invoke(dict(payload, session_id='bridge'), 'claude', extra=['--metadata-only']), {})
+
+    def test_codex_apply_patch_payload_is_measured_and_logged(self):
+        # Codex reports apply_patch as tool_input.command; there is no file_path in the payload.
+        self.seed()
+        (self.vault / 'Makaleler').mkdir()
+        big = self.vault / 'Makaleler/uzun.md'
+        big.write_text('kelime ' * 600, encoding='utf-8')
+        self.enable(word_cap_warning=True, promotion=True)
+        patch = '*** Begin Patch\n*** Update File: Makaleler/uzun.md\n@@\n-kelime\n+kelime\n*** End Patch\n'
+        payload = {'hook_event_name': 'PostToolUse', 'session_id': 'codex-patch', 'cwd': str(self.vault),
+                   'tool_name': 'apply_patch', 'tool_input': {'command': patch}}
+        response = self.invoke(payload, 'codex')
+        self.assertIn('Makaleler/uzun.md', response['hookSpecificOutput']['additionalContext'])
+        self.assertIn('Makaleler/uzun.md', (self.state / 'touch-log.tsv').read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

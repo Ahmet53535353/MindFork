@@ -310,5 +310,99 @@ class TouchLogOptInTest(unittest.TestCase):
         self.assertEqual([entry['folder'] for entry in promo['cold']], ['Beden'])
 
 
+class RealLayoutTest(unittest.TestCase):
+    """Maintainer regressions re-derived on template-shaped names, not synthetic bare names."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-real-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.vault, self.state = root / 'vault', root / 'state'
+        self.vault.mkdir()
+        self.state.mkdir()
+        then = time.time() - 60 * 86400
+        for name in ('📦 900-Archive', '📋 Templates', '🔐 Kasa', 'node_modules', '📥 000-Inbox', 'Makaleler'):
+            (self.vault / name).mkdir()
+            os.utime(self.vault / name, (then, then))
+
+    def test_quiet_template_archive_kasa_and_code_folders_are_never_asked(self):
+        questions = hygiene.folder_questions(self.vault, self.state, cooldown_days=14)
+        self.assertEqual(len(questions), 1)
+        self.assertTrue(questions[0].startswith('Makaleler/ klasoru 60 gundur bos.'), questions[0])
+        cold = [entry['folder'] for entry in hygiene.promotion(self.vault, self.state)['cold']]
+        self.assertEqual(cold, ['Makaleler'])
+
+    def test_cap_scan_skips_code_trees_kasa_and_nested_repositories(self):
+        for relative in ('node_modules/pkg/README.md', '🔐 Kasa/hesap.md', 'clone/.git/x.md', 'clone/big.md'):
+            (self.vault / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.vault / relative).write_text('kelime ' * 900, encoding='utf-8')
+        (self.vault / 'Makaleler/uzun.md').write_text('kelime ' * 900, encoding='utf-8')
+        self.assertEqual([entry['file'] for entry in hygiene.cap_scan(self.vault)['over']], ['Makaleler/uzun.md'])
+
+    def test_archive_marker_is_read_from_frontmatter_only(self):
+        body = 'kelime ' * 900
+        cases = {'gecmis.md': ('---\ntype: gecmis\n---\n' + body, None),
+                 'json.md': ('---\n{"durum": "Arşiv"}\n---\n' + body, None),
+                 'metin.md': ('---\ntitle: x\n---\narsiv notlari\n' + body, True)}
+        for name, (text, expected) in cases.items():
+            (self.vault / 'Makaleler' / name).write_text(text, encoding='utf-8')
+            measured = hygiene.file_over_cap(self.vault, self.vault / 'Makaleler' / name)
+            self.assertEqual(None if measured is None else measured[1], expected, name)
+
+    def test_nfd_companion_and_root_files_never_enter_the_touch_log(self):
+        companion = unicodedata.normalize('NFD', 'Aklım Özü')
+        (self.vault / companion).mkdir()
+        (self.state / 'companion-bootstrap.json').write_text(
+            json.dumps({'schema': 1, 'directory': unicodedata.normalize('NFC', 'Aklım Özü')}), encoding='utf-8')
+        for path in (self.vault / companion / 'Journal.md', self.vault / 'kok.md', self.vault / '🔐 Kasa/hesap.md'):
+            hygiene.touch_log(self.state, self.vault, {'hook_event_name': 'PostToolUse',
+                                                       'tool_input': {'file_path': str(path)}})
+        self.assertFalse((self.state / 'touch-log.tsv').exists())
+
+
+class SettingsAndDoctorTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-hygiene-settings-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.vault, self.state = root / 'vault', root / 'state'
+        self.vault.mkdir()
+
+    def doctor(self):
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'doctor'], capture_output=True, text=True,
+                                encoding='utf-8', env=dict(os.environ, BEYIN_V3_NO_SPAWN='1'), timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_settings_schema_is_strict(self):
+        self.assertEqual(hygiene.read_settings(self.state), (hygiene.SETTINGS_DEFAULTS, True))
+        for bad in ({'max_words': 5}, {'word_cap_warning': 1}, {'unknown': True}, {'schema': 2}):
+            with self.assertRaises(ValueError):
+                hygiene.check_settings(bad)
+        self.assertEqual(hygiene.save_settings(self.state, {'max_words': 700})['max_words'], 700)
+        self.assertEqual(json.loads((self.state / 'hygiene.json').read_text(encoding='utf-8'))['schema'], 1)
+
+    def test_doctor_reports_follow_the_opt_in_and_never_write(self):
+        (self.vault / 'Makaleler').mkdir()
+        (self.vault / 'Makaleler/uzun.md').write_text('kelime ' * 900, encoding='utf-8')
+        then = time.time() - 60 * 86400
+        for path in (self.vault / 'Makaleler/uzun.md', self.vault / 'Makaleler'):
+            os.utime(path, (then, then))
+        default = self.doctor()
+        self.assertEqual((default['word_cap'], default['promotion']), ({'enabled': False}, {'enabled': False}))
+        hygiene.save_settings(self.state, {'word_cap_warning': True, 'max_words': 1000, 'promotion': True,
+                                           'folder_questions': True})
+        self.assertEqual(self.doctor()['word_cap']['over_count'], 0, 'the configured cap applies')
+        hygiene.save_settings(self.state, {'max_words': 800})
+        vault_before = {path: path.stat().st_mtime_ns for path in self.vault.rglob('*')}
+        report = self.doctor()
+        self.assertEqual([entry['file'] for entry in report['word_cap']['over']], ['Makaleler/uzun.md'])
+        self.assertEqual([entry['folder'] for entry in report['promotion']['cold']], ['Makaleler'])
+        self.assertEqual(vault_before, {path: path.stat().st_mtime_ns for path in self.vault.rglob('*')})
+        self.assertFalse((self.state / 'soruldu').exists(), 'doctor never stamps a question')
+        self.assertFalse((self.state / 'touch-log.tsv').exists())
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
