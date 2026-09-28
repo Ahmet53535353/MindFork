@@ -333,6 +333,11 @@ class DreamPhase2Test(unittest.TestCase):
         report = self.vault / payload['report_path']
         self.assertTrue(report.is_file(), f'rapor beklenen yolda degil: {payload["report_path"]}')
         day = report.parent.name
+        # Raporun yazildigi gun, urunun kendi ilan ettigi pencere olmali. Artik tarihi
+        # yeniden hesaplamiyoruz, ama bu esitleme "gun secimi bir tesaduf degil" sözlesmesini
+        # de sabitliyor: manifest'in ilan ettigi gun ile yazilan dizin ayrilirsa duser.
+        manifest = json.loads((report.parent / 'manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(day, manifest['window'], f'rapor {day} gunune yazildi, pencere {manifest["window"]}')
         restored = self.run_cli('dream', '--restore', day)
         self.assertEqual(restored['returncode'], 0, restored['stderr'])
         self.assertEqual(self.sha(note), before, 'CLI geri alimi pencere öncesi baytlari vermedi')

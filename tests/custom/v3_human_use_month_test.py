@@ -960,6 +960,9 @@ class HumanMonthE2ETest(unittest.TestCase):
 
         # Geri alma gunu de urunun kendi bildirdigi yoldan: duvar saati degil.
         window_day = report.parent.name
+        self.assertEqual(window_day,
+                         json.loads((report.parent / 'manifest.json').read_text(encoding='utf-8'))['window'],
+                         'rapor yazildigi gun, manifestin ilan ettigi pencere degil')
         restored = m.cli('dream', '--restore', window_day)
         self.assertIn('notes/ozet-notu.md', restored['restored'], restored)
         after = {path: digest for path, digest in snapshot(m.vault).items()
