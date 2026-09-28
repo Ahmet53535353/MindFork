@@ -186,6 +186,16 @@ def excerpt(name, text):
             # the latest entry at the top, an append-ordered one at the bottom.
             newest_first = all(b <= a for (a, _), (b, _) in zip(dated, dated[1:]))
             index = max(dated, key=lambda item: (item[0], -item[1] if newest_first else item[1]))[1] if dated else len(entries) - 1
+            # An undated entry at the end the newest writing lands on is the latest thought,
+            # so it wins over dated ones instead of dropping out of the selection (#134).
+            # Without two distinct dates the direction is unknown; the bottom goes first,
+            # as in an all-undated journal.
+            undated = set(range(len(entries))) - {i for _, i in dated}
+            if len({moment for moment, _ in dated}) > 1:
+                edges = (0,) if newest_first else (len(entries) - 1,)
+            else:
+                edges = (len(entries) - 1, 0)
+            index = next((edge for edge in edges if edge in undated), index)
             return text[entries[index].start():entries[index + 1].start() if index + 1 < len(entries) else len(text)]
     if name == 'Last-Session.md':
         previous = re.search(r'(?im)^## (?:Previous|Önceki)', text)
