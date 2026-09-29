@@ -10,6 +10,12 @@ Nothing else in the suite can see this: `tests/conftest.py` pins the whole suite
 tests do not break, and under UTC the two sides agree by construction. Pinning the divergence
 here is what keeps it from becoming invisible -- a future change that makes the two agree must
 come here first, and the fix belongs to the product, not to the clock the tests run in.
+
+The split between the two is deliberate: a batch boundary must be stable, a human day must not.
+`beyin_v3_projections._local_day` therefore joins the *daily log*, not the window, and the fourth
+test below pins that the two files in `daily/` read the same clock. It is the third leg of this
+divergence and it was untested: a change could put the daily index back on UTC and nothing here
+would notice.
 """
 import datetime as dt
 import os
@@ -23,11 +29,13 @@ SCRIPTS = ROOT / 'template/.claude/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import beyin_v3_sessionlog as sessionlog
 import beyin_v3_dream as dream
+import beyin_v3_projections as projections
 
 # 21:30 UTC is 00:30 the next day at +03:00, inside the window where the two clocks disagree.
 EPOCH = dt.datetime(2026, 9, 28, 21, 30, tzinfo=dt.timezone.utc).timestamp()
 UTC_DAY = '2026-09-28'
 EAST_DAY = '2026-09-29'
+STAMP = '2026-09-28T21:30:00+00:00'
 
 
 class LocalVsUtcDayTest(unittest.TestCase):
@@ -66,6 +74,15 @@ class LocalVsUtcDayTest(unittest.TestCase):
     def test_the_two_clocks_agree_under_utc_which_is_why_the_suite_pin_hides_them(self):
         self.in_zone('UTC')
         self.assertEqual(sessionlog._day(EPOCH), self.window_day())
+
+    def test_the_daily_index_follows_the_machine_with_the_daily_log_not_the_window(self):
+        """The two files in daily/ are one human day; the window is a different concept."""
+        self.in_zone('Etc/GMT-3')
+        self.assertEqual(projections._local_day(STAMP), EAST_DAY)
+        self.assertEqual(projections._local_day(STAMP), sessionlog._day(EPOCH),
+                         'günlük dizin ve günlük log aynı günü söylemeli')
+        self.assertNotEqual(projections._local_day(STAMP), self.window_day(),
+                            'günlük dizin pencereye döndü: sözleşme günlük logla aynı saattir')
 
 
 if __name__ == '__main__':
