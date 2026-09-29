@@ -234,18 +234,45 @@ def excerpt(name, text):
     return text
 
 
+def _section_count(text):
+    """How many `##` sections a rule set declares, or 0 when the text has no such structure.
+
+    A count is only honest where the structure exists. Sources, receipts and free prose have
+    no sections, and reporting "0 of 0 omitted" there would be a number that reads as a claim
+    about content that was never sectioned in the first place.
+    """
+    return len(re.findall(r'(?m)^## ', text))
+
+
 def ends(text, budget):
-    """Opening plus closing lines of a rule set, with the omitted amount named.
+    """Opening plus closing lines of a rule set, with the omitted amount and count named.
 
     The first marker is sized with the whole length, so the final one, counting only
     what was really dropped, can never be longer and the result stays inside budget.
     Whatever the line-boundary cut gives back is taken from the middle by the closing,
     because a water-filled allocation that renders short is budget thrown away.
     """
-    def gap(omitted):
+    sections = _section_count(text)
+
+    def gap(omitted, omitted_sections=0):
+        # A rule set is a list of dated corrections to obey, so a character count alone leaves
+        # the agent unable to tell that a rule is missing at all. Name the count when there are
+        # sections to count; the character number stays either way.
+        if omitted_sections:
+            return (f'\n[truncated: {omitted} characters, {omitted_sections} of {sections} '
+                    f'sections omitted here; read source]\n')
         return f'\n[truncated: {omitted} characters omitted here; read source]\n'
 
-    keep = budget - len(gap(len(text)))
+    def count(head, closing):
+        return max(sections - _section_count(head + closing), 0)
+
+    # A source that fits must come back untouched. The filler loop below can grow a closing part
+    # past the original text, which used to return the whole source plus a marker claiming
+    # nothing was omitted: a false alarm that sends an agent to read a file it already has.
+    if len(text) <= budget:
+        return text
+
+    keep = budget - len(gap(len(text), sections))
     if keep < 80:
         return None
     # Cut on line boundaries so neither end is a half rule; the closing part also takes
@@ -254,19 +281,19 @@ def ends(text, budget):
     head = head[:head.rfind('\n') + 1] or head
     closing = text[len(text) - (keep - len(head)):]
     closing = closing[closing.find('\n') + 1:] or closing
-    best = head + gap(len(text) - len(head) - len(closing)) + closing
+    best = head + gap(len(text) - len(head) - len(closing), count(head, closing)) + closing
     # Fill the slack the snaps created: grow the closing back into the middle until the
     # budget is full, only a marker digit oscillation away from exact.
     start = len(text) - len(closing)
     for _ in range(6):
-        slack = budget - (len(head) + len(gap(start - len(head))) + len(text) - start)
+        slack = budget - (len(head) + len(gap(start - len(head), count(head, text[start:]))) + len(text) - start)
         if slack == 0:
             break
         moved = min(max(start - slack, len(head)), len(text))
         if moved == start:
             break
         start = moved
-    result = head + gap(start - len(head)) + text[start:]
+    result = head + gap(start - len(head), count(head, text[start:])) + text[start:]
     return result if len(result) <= budget else best
 
 
