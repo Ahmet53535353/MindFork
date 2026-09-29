@@ -57,11 +57,14 @@ class PreferencesTest(unittest.TestCase):
         prefs.save(self.vault, {}, 'economical')
         before = (self.vault / '.beyin-preferences.json').read_bytes()
         for changes in ({'interval_minutes': -1}, {'interval_minutes': True}, {'context_chars': 999},
-                        {'context_mode': 'unknown'}, {'unknown': 1}, {'auto_sync': 'false'},
-                        {'secret_filter': 'true'}):
+                        {'context_chars': 24001}, {'context_mode': 'unknown'}, {'unknown': 1},
+                        {'auto_sync': 'false'}, {'secret_filter': 'true'}):
             with self.assertRaises(ValueError):
                 prefs.save(self.vault, changes)
         self.assertEqual(before, (self.vault / '.beyin-preferences.json').read_bytes())
+        # Valid ceiling up to 24000
+        saved = prefs.save(self.vault, {'context_chars': 24000})
+        self.assertEqual(saved['context_chars'], 24000)
 
     def test_manual_hooks_do_not_enqueue_or_inject_across_clients(self):
         prefs.save(self.vault, {}, 'manual')

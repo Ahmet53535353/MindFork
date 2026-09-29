@@ -282,7 +282,9 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
                                      tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
         return rendered
 
+    needed = sum(len(body) for _, body, _ in sections)
     available = max(0, int(budget * .83) - fixed)
+    companion_clipped = needed > available
     text = companion(available)
     extra = ''
     index = store.source_snapshot(['index.md'], source_directory='knowledge', budget_chars=4000)
@@ -292,14 +294,28 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
         if allowance > len(label) + 40:
             extra += label + clip(index['records'][0]['text'], allowance - len(label))
     remaining = budget - len(text) - len(extra)
-    ranked = store.context_for(harness, query, budget_chars=max(0, remaining - 100)) if query else store.snapshot_context(budget_chars=max(0, remaining - 100))
+    # At SessionStart without a query, an unqueried snapshot must never starve clipped companion
+    # sources: an ambient note yields its budget so active threads and rules stay whole.
+    retrieval_share = max(0, budget - int(budget * .83) - len(extra))
+    if query:
+        retrieval_budget = min(remaining, retrieval_share) if companion_clipped else remaining
+        ranked = store.context_for(harness, query, budget_chars=max(0, retrieval_budget - 100))
+    elif not companion_clipped and remaining > 200:
+        ranked = store.snapshot_context(budget_chars=min(1500, max(0, remaining - 100)))
+    else:
+        ranked = {'records': []}
     used = {r['source'] for r in records}
+    retrieval_used = 0
+    retrieval_cap = retrieval_share if companion_clipped else remaining
     for record in ranked.get('records', []):
         if record['source'] in used:
             continue
         label = f'\n[Related source: {record["source"]}]\n'
-        if len(text) + len(extra) + len(label) + 40 < budget:
-            extra += label + clip(record['text'], budget - len(text) - len(extra) - len(label))
+        room = min(budget - len(text) - len(extra) - len(label), retrieval_cap - retrieval_used - len(label))
+        if room > 40:
+            addition = label + clip(record['text'], room)
+            extra += addition
+            retrieval_used += len(addition)
     if receipt and len(text) + len(extra) + 80 < budget:
         extra += clip(receipt, budget - len(text) - len(extra))
     # Retrieval takes its share first; every character it did not use goes back to the
