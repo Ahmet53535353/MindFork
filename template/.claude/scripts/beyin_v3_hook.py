@@ -50,8 +50,11 @@ def receipt_context(vault):
     if not candidates:
         return ""
     path = max(candidates, key=lambda p: (p.stat().st_mtime_ns, p.name))
+    budget, marker = 1200, "\n[truncated: read source]\n"
     with path.open(encoding="utf-8") as source:
-        content = source.read(1200)
+        content = source.read(budget + 1)
+    if len(content) > budget:
+        content = content[:budget - len(marker)] + marker
     return "\nLatest receipt (historical agent claim, not independently verified):\n" + content
 
 
