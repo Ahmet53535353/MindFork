@@ -7,6 +7,8 @@ description: Mevcut beyin kurulumunu yeni resmi sürüme güncelle, sürümü ko
 
 Tek güncelleme aracı vault kökündeki `beyin.py` dosyasıdır. macOS/Linux'ta `python3`, Windows'ta `py -3` kullan. Kendi curl/copy/git-pull zincirinle kullanıcı vault'unu güncelleme.
 
+**Yerel yama varsa güncellemeden önce fark al.** Updater release'i indirip `.claude/scripts/` altındaki motor dosyalarını koşulsuz ezer; `preferences --exclude-component` bu dosyaları kapsamaz (`EXCLUDABLE_COMPONENTS` yalnız skill, launcher ve adapter içerir), yani hariç tutulamazlar. `feat/memory-consolidation` dalındaki `beyin_v3_projections.py` yaması (günlük dizin artık makine gününde adlandırılıyor) tam olarak bu durumdadır. Güncellemeden önce `git -C <depo> diff > /tmp/beyin-yama.patch`, güncellemeden sonra `git -C <depo> apply /tmp/beyin-yama.patch` ile geri koy. Upstream'e PR açıldı; kabul edilip sürüme girene kadar bu geçici bir yoldur.
+
 - Kullanıcı yalnız sürüm soruyorsa `python3 beyin.py update --check --metadata-only` çalıştır; kurulum yapma.
 - Kullanıcı güncellemeyi istiyorsa `python3 beyin.py update` çalıştır. Bu istek rutin yerel güncelleme için yetkilendirmedir; ikinci kez izin isteme. Resmi stable sürüm varsayılandır; preview veya özel paket ancak kullanıcı onu seçtiyse kullanılır.
 - Kullanıcı geri dönmek istiyorsa `python3 beyin.py rollback` çalıştır; ardından `doctor` ile sonucu doğrula.
