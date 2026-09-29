@@ -31,6 +31,7 @@ HARNESS_SYNTHETIC_PROMPT_PREFIXES = (
     "<agent-message",
     "<local-command-caveat>",
     "<command-name>",
+    "<local-command-stdout>",
 )
 
 

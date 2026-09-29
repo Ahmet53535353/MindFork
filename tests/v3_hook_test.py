@@ -683,6 +683,7 @@ class HookInstallerTest(unittest.TestCase):
             '<agent-message id="1">result</agent-message>',
             '<local-command-caveat> warning',
             '<command-name>git status</command-name>',
+            '<local-command-stdout> command output',
         ):
             with self.subTest(prefix=prefix):
                 self.assertTrue(self.hook.is_synthetic_prompt({'prompt': prefix}))
