@@ -229,6 +229,24 @@ def refresh_gaps(engine, db):
     }))
 
 
+def _local_day(created_at):
+    """The machine's day for a stored UTC stamp: daily/ holds the human daily log too, and both
+    answer "what happened today". The consolidation window in beyin_v3_dream stays UTC on purpose
+    -- that is a batch boundary, not a human day. See tests/v3_local_utc_day_divergence_test.py.
+
+    None for a stamp that cannot be read. A corrupt row is skipped, never fatal: the old
+    `created_at[:10]` sliced past a bad value silently and gave it a plausible day, so a
+    malformed stamp has to be dropped explicitly rather than raise out of a whole sync.
+    """
+    try:
+        stamp = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone().date().isoformat()
+
+
 def project_receipts(engine, db):
     _hash, atomic, render = engine.projection_helpers()
     db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
@@ -241,8 +259,13 @@ def project_receipts(engine, db):
         source = 'receipts/' + _hash(event['event_id']) + '.md'
         if source in historical or not event.get('created_at'):
             continue
-        date = event['created_at'][:10]
-        grouped[date].append((event['created_at'], source, event['summary']))
+        # The machine's day, not the stamp's: daily/ also holds the human daily log, which is
+        # named locally, and both answer "what happened today". The consolidation window in
+        # beyin_v3_dream stays UTC deliberately -- that is a batch boundary, not a human day.
+        day = _local_day(event['created_at'])
+        if day is None:
+            continue
+        grouped[day].append((event['created_at'], source, event['summary']))
     desired = {}
     outcomes = []
     for day, items in sorted(grouped.items()):
@@ -269,6 +292,20 @@ def project_receipts(engine, db):
                 continue
             atomic(path, content)
         db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
+    # Every sync regroups every receipt, so a receipt that changes day renames its file and leaves
+    # the old one behind. Only the row in receipt_views proves the engine wrote that file; an
+    # edited one is a person's work and is reported, never deleted.
+    for (relative, tracked_hash) in db.execute('SELECT path, hash FROM receipt_views').fetchall():
+        if relative in desired or not relative.startswith('daily/v3/'):
+            continue
+        path = engine._path(relative)
+        if not path.exists():
+            db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
+        elif _hash(path.read_bytes()) == tracked_hash:
+            path.unlink()
+            db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
+        else:
+            conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved'})
     refresh_gaps(engine, db)
     return conflicts
 
