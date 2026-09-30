@@ -1,0 +1,742 @@
+{
+  "version": 1,
+  "description": "Sanitized realistic engineering vault corpus and evaluation queries for V3 search benchmark.",
+  "records": [
+    {
+      "id": "doc-ws-architecture",
+      "source": "knowledge/architecture/websocket-event-loop.md",
+      "title": "WebSocket Event Loop ve Heartbeat Mimarisi",
+      "kind": "concept",
+      "updated_at": "2026-08-10T14:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "websocket",
+        "protocol": "ws",
+        "heartbeat_sec": 30
+      },
+      "text": "# WebSocket Event Loop ve Heartbeat Mimarisi\n\nİstemci ve sunucu arasındaki çift yönlü veri akışını yöneten WebSocket bağlantı katmanı, asenkron event loop üzerinde çalışır.\n\n## Temel Kurallar ve Parametreler\n- **Heartbeat aralığı (ping-pong)**: 30 saniye. 3 ardışık yanıtsız ping sonrası istemci bağlantısı sonlandırılır.\n- **Yeniden bağlanma politikası**: Üstel geri çekilme (exponential backoff) algoritması uygulanır: `min(initial_delay * 1.5^retry_count, max_delay)`. Başlangıç 1s, tavan 60s.\n- **Bağlantı havuzu**: Eşzamanlı aktif bağlantı sayısı her sunucu örneği için maksimum 10,000 soket ile sınırlandırılmıştır.\n- **Tampon boyutu**: Gelen mesaj kuyruğu için kanal başına 1024 mesajlık halka arabellek (ring buffer).\n\n## Yaygın Sorunlar\nAğ kopması durumunda istemcinin hayalet soket (zombie socket) olarak kalmasını önlemek için TCP keepalive bayrağı aktif edilmelidir."
+    },
+    {
+      "id": "doc-pg-pool",
+      "source": "knowledge/architecture/postgres-connection-pool.md",
+      "title": "PostgreSQL Bağlantı Havuzu ve HikariCP Yapılandırması",
+      "kind": "concept",
+      "updated_at": "2026-08-15T09:30:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "database",
+        "engine": "postgresql",
+        "pool": "HikariCP"
+      },
+      "text": "# PostgreSQL Bağlantı Havuzu ve HikariCP Yapılandırması\n\nMikroservislerin veritabanı erişiminde connection exhaustion (bağlantı tükenmesi) yaşamaması için HikariCP havuz parametreleri optimize edilmiştir.\n\n## Havuz Boyutlandırma Formülü\nPostgreSQL resmi kılavuzuna dayalı havuz boyutu: `pool_size = ((core_count * 2) + effective_spindle_count)`.\n- **Maksimum Havuz Boyutu (maximumPoolSize)**: 20\n- **Minimum Boşta Bağlantı (minimumIdle)**: 5\n- **Bağlantı Zaman Aşımı (connectionTimeout)**: 30000 ms (30 saniye)\n- **Boşta Kalma Süresi (idleTimeout)**: 600000 ms (10 dakika)\n- **Maksimum Yaşam Süresi (maxLifetime)**: 1800000 ms (30 dakika)\n- **Sızıntı Tespiti Eşiği (leakDetectionThreshold)**: 15000 ms (15 saniye)\n\n## Sızıntı (Leak) Belirtileri\nEğer bir işlem 15 saniyeden uzun süre bağlantıyı iade etmezse loglarda `Apparent connection leak detected` uyarısı oluşur. Bu durum genellikle `@Transactional` kapsamı dışındaki uzun süren HTTP veya dosya G/Ç işlemlerinden kaynaklanır."
+    },
+    {
+      "id": "doc-redis-lock",
+      "source": "knowledge/architecture/redis-distributed-lock.md",
+      "title": "Redis Redlock Dağıtık Kilit Mekanizması",
+      "kind": "concept",
+      "updated_at": "2026-08-20T11:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "redis",
+        "lock": "redlock",
+        "ttl_ms": 30000
+      },
+      "text": "# Redis Redlock Dağıtık Kilit Mekanizması\n\nBirden çok düğüm üzerinde çalışan arka plan görevlerinin aynı veriyi eşzamanlı değiştirmesini engellemek için Redlock algoritması kullanılır.\n\n## Kilit Edinme Protokolü\n1. İstemci milisaniye cinsinden geçerli zaman damgasını alır.\n2. N adet bağımsız Redis düğümünden (en az 3 düğüm) aynı anahtar ve rastgele üretilmiş benzersiz değer (UUID) ile kilit talep eder (`SET resource_name my_random_value NX PX 30000`).\n3. Kilit edinme süresi, toplam kilit geçerlilik süresinden (TTL) küçükse ve çoğunluk (quorum: N/2 + 1) sağlandıysa kilit kazanılmış sayılır.\n4. Çoğunluk sağlanamazsa veya kilit süresi dolarsa tüm düğümlerde kilit serbest bırakılır (`DEL` komutu yalnızca değer eşleşirse Lua betiği ile çalıştırılır).\n\n## Split-Brain Koruması\nMaster failover sırasında asenkron replikasyon nedeniyle anahtarın kaybolmasını önlemek için fencing token (artan sayaç) kullanımı zorunludur."
+    },
+    {
+      "id": "doc-jwt-auth",
+      "source": "knowledge/architecture/jwt-session-security.md",
+      "title": "JWT Token ve Oturum Güvenliği",
+      "kind": "concept",
+      "updated_at": "2026-08-22T16:45:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "security",
+        "auth": "jwt",
+        "access_ttl_min": 15
+      },
+      "text": "# JWT Token ve Oturum Güvenliği\n\nKullanıcı kimlik doğrulama ve yetkilendirme mimarisinde çift token (Access Token ve Refresh Token) deseni benimsenmiştir.\n\n## Token Ömürleri ve Özellikleri\n- **Access Token**: 15 dakika geçerlilik süresi. RS256 algoritmasıyla imzalanır. Bellekte (memory) tutulur, hiçbir zaman kalıcı depolamaya (localStorage) yazılmaz.\n- **Refresh Token**: 7 gün geçerlilik süresi. Sadece HTTP-Only, Secure, SameSite=Strict çerez (cookie) içinde saklanır.\n- **Rotation (Döndürme)**: Refresh token her kullanıldığında yenisi üretilir, eski token anında geçersiz kılınır.\n- **İptal Listesi (Revocation Blacklist)**: Erken çıkış yapan veya çalınan tokenların jti (JWT ID) değerleri Redis'te TTL süresi kadar tutulur."
+    },
+    {
+      "id": "doc-clickhouse-analytics",
+      "source": "knowledge/architecture/clickhouse-event-storage.md",
+      "title": "ClickHouse Zaman Serisi Olay Depolama Mimarisi",
+      "kind": "concept",
+      "updated_at": "2026-08-28T10:15:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "analytics",
+        "engine": "MergeTree",
+        "partition": "toYYYYMM"
+      },
+      "text": "# ClickHouse Zaman Serisi Olay Depolama Mimarisi\n\nBüyük hacimli analitik olay kayıtları ve metrik verileri için sütun bazlı (columnar) ClickHouse veritabanı kullanılmaktadır.\n\n## Tablo Tasarımı ve Bölümleme\nTablolar `ReplacingMergeTree` veya standart `MergeTree` motoru ile oluşturulur:\n- **Bölümleme anahtarı (PARTITION BY)**: `toYYYYMM(event_date)` aylık partisyonlar.\n- **Sıralama ve birincil anahtar (ORDER BY / PRIMARY KEY)**: `(tenant_id, event_type, event_time, id)`.\n- **Sıkıştırma**: ZSTD(1) sıkıştırma algoritması ile disk tüketiminde 8-10 kat kazanç elde edilir.\n- **Toplu Yazma (Batching)**: Her satır tek tek yazılmaz; en az 5,000 satır veya 2 saniyelik tampon ile toplu INSERT yapılır."
+    },
+    {
+      "id": "doc-flyway-migration",
+      "source": "knowledge/architecture/flyway-database-migration.md",
+      "title": "Flyway Veritabanı Şema Göç Stratejisi",
+      "kind": "concept",
+      "updated_at": "2026-09-02T13:20:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "database",
+        "tool": "flyway",
+        "baseline": "1.0"
+      },
+      "text": "# Flyway Veritabanı Şema Göç Stratejisi\n\nVeritabanı şema değişiklikleri ve DDL güncellemeleri Flyway göç aracı ile sürüm kontrolü altında yönetilir.\n\n## Dosya Adlandırma Kuralları\n- **Sürümlü göçler (Versioned)**: `V{MAJOR}_{MINOR}__{aciklama}.sql` (Örnek: `V2_1__kullanici_tablosu.sql`). Bir kez çalıştırılır, içeriği asla değiştirilemez.\n- **Tekrarlanabilir göçler (Repeatable)**: `R__{gorunum_adi}.sql` (Görünümler ve saklı yordamlar için). Sağlama toplamı (checksum) değiştiğinde tekrar çalıştırılır.\n- **Baseline ayarı**: `baselineOnMigrate=true` ve `baselineVersion=1.0` ile mevcut canlı veritabanı şeması korunur.\n- **İşlem güvenliği**: DDL destekleyen veritabanlarında `mixed=false` ve `group=true` ile tüm betik tek bir veritabanı işlemi (transaction) içinde yürütülür."
+    },
+    {
+      "id": "doc-sqlite-wal",
+      "source": "knowledge/architecture/sqlite-wal-mode-concurrency.md",
+      "title": "SQLite WAL Modu ve Eşzamanlı Okuma-Yazma",
+      "kind": "concept",
+      "updated_at": "2026-09-04T15:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "sqlite",
+        "journal_mode": "WAL",
+        "synchronous": "NORMAL"
+      },
+      "text": "# SQLite WAL Modu ve Eşzamanlı Okuma-Yazma\n\nYerel durum ve önbellek depolarında SQLite veritabanı performansı ve eşzamanlılığı için WAL (Write-Ahead Logging) modu kullanılır.\n\n## Pragmas ve Performans Ayarları\nVeritabanı bağlantısı açılır açılmaz şu PRAGMA komutları icra edilir:\n- `PRAGMA journal_mode = WAL;` (Okuyucular yazıcıyı, yazıcı okuyucuları engellemez)\n- `PRAGMA synchronous = NORMAL;` (WAL modunda tam veri güvenliği sunarken disk G/Ç süresini düşürür)\n- `PRAGMA busy_timeout = 5000;` (Kilitlenme durumunda 5 saniyeye kadar kilit çözülmesini bekler)\n- `PRAGMA foreign_keys = ON;` (İlişkisel bütünlük kısıtlamalarını denetler)\n- `PRAGMA wal_autocheckpoint = 1000;` (1000 sayfalık WAL büyüklüğünde otomatik disk senkronizasyonu)"
+    },
+    {
+      "id": "doc-opencode-engine",
+      "source": "knowledge/architecture/opencode-direct-engine.md",
+      "title": "OpenCode Doğrudan İstemci Mimarisi",
+      "kind": "concept",
+      "updated_at": "2026-09-06T11:40:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "ai",
+        "engine": "opencode",
+        "transport": "http"
+      },
+      "text": "# OpenCode Doğrudan İstemci Mimarisi\n\nOtonom kodlama döngüsünde yerel model yönlendirmesi için LiteLLM gibi aracı katmanlar yerine doğrudan OpenCode istemcisi kullanılır.\n\n## Temel Tasarım İlkeleri\n- **Doğrudan HTTP / JSON-RPC**: Aracı servis gecikmesi olmadan model uç noktalarına doğrudan bağlantı.\n- **Akışlı Yanıt (Streaming Tokens)**: Yanıt tokenleri üretildiği anda SSE üzerinden akıtılır, bellek tüketimi sabit tutulur.\n- **Bağlam Bütçesi Denetimi**: Her sorgu öncesi prompt token sayısı modelin azami pencere bütçesine göre kırpılır.\n- **Hata Kurtarma**: HTTP 429 veya 503 durumlarında üstel geri çekilme ile 3 defaya kadar otomatik yeniden deneme yapılır."
+    },
+    {
+      "id": "doc-playwright-e2e",
+      "source": "knowledge/architecture/playwright-e2e-testing.md",
+      "title": "Playwright E2E UI Test Otomasyonu",
+      "kind": "concept",
+      "updated_at": "2026-09-08T17:10:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "testing",
+        "framework": "playwright",
+        "mode": "headless"
+      },
+      "text": "# Playwright E2E UI Test Otomasyonu\n\nKullanıcı arayüzü ve uçtan uca iş akışlarının doğrulanması Playwright test motoru ile otomatikleştirilmiştir.\n\n## Test Yürütme Standartları\n- **İzole Tarayıcı Bağlamı (BrowserContext)**: Her test senaryosu çerezlerden ve oturumlardan arındırılmış temiz bir bağlamda çalışır.\n- **Ekran Görüntüsü Yakalama (Pinpoint Screenshots)**: Hata oluşan adımlarda sayfa durumu otomatik olarak `failure-step-{name}.png` adıyla kaydedilir.\n- **Ağ Trafiği Dinleme**: `page.route` kullanılarak harici üçüncü taraf analitik servisleri engellenir ve test hızı artırılır.\n- **Lokatör Önceliği**: Testlerde CSS seçicileri yerine `getByRole`, `getByLabel` ve `getByTestId` gibi erişilebilirlik odaklı lokatörler tercih edilir."
+    },
+    {
+      "id": "doc-graphify-ast",
+      "source": "knowledge/architecture/graphify-ast-code-graph.md",
+      "title": "Graphify AST Kod Bağımlılık Grafiği",
+      "kind": "concept",
+      "updated_at": "2026-09-10T12:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "ast",
+        "tool": "graphify",
+        "complexity": "O(V+E)"
+      },
+      "text": "# Graphify AST Kod Bağımlılık Grafiği\n\nStatik kod analizi ve refactoring süreçlerinde kaynak kodun soyut sözdizim ağacı (AST) taranarak sembol ve bağımlılık grafiği çıkarılır.\n\n## Graf Yapısı ve Sembol Çözümleme\n- **Düğümler (Nodes)**: Modüller, sınıflar, fonksiyonlar, metotlar ve değişken tanımları.\n- **Kenarlar (Edges)**: `imports`, `calls`, `inherits`, `instantiates` ve `reads/writes` ilişkileri.\n- **Arama Hızı**: Graf yapısı bellek içi komşuluk listesi (adjacency list) olarak indekslenir; kök neden analizi `O(V+E)` derinlik öncelikli arama (DFS) ile yapılır.\n- **Çıktı Formatı**: DOT graf dili veya JSON formatında dışa aktarım desteği."
+    },
+    {
+      "id": "doc-adr-008-vault-sync",
+      "source": "knowledge/decisions/adr-008-vault-sync-engine.md",
+      "title": "ADR-008: Vault Senkronizasyonunda SQLite İndeksi Kararı",
+      "kind": "decision",
+      "updated_at": "2026-08-05T10:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "decision_id": "ADR-008",
+        "status": "accepted"
+      },
+      "text": "# ADR-008: Vault Senkronizasyonunda SQLite İndeksi Kararı\n\n## Durum\nKullanıcının her sorgusunda yüzlerce Markdown dosyasını diskten baştan taramak ve ayrıştırmak 1500ms'den uzun sürmekte ve G/Ç tıkanıklığı yaratmaktadır.\n\n## Karar\nVault içeriği için çalışma zamanında bir SQLite indeks veritabanı tutulacaktır:\n- Dosyaların SHA256 özetleri saklanır; yalnızca değişen dosyalar yeniden ayrıştırılır.\n- Sorgu anında disk taraması yapılmaz, doğrudan SQLite indeksinden bellek içi sözlükler doldurulur.\n- İndeks bozulursa sıfırdan yeniden oluşturulabilen geçici türetilmiş veri olarak kabul edilir.\n\n## Sonuçlar\nSorgu süresi 1500ms'den 8ms seviyesine düşmüştür. Vault içeriği dosya sisteminde saf Markdown olarak kalmaya devam eder."
+    },
+    {
+      "id": "doc-adr-012-passage-chunk",
+      "source": "knowledge/decisions/adr-012-strict-passage-retrieval.md",
+      "title": "ADR-012: Katı Bağlamda Paragraf Düzeyi Parçalama Kararı",
+      "kind": "decision",
+      "updated_at": "2026-08-18T14:15:00Z",
+      "visibility": "internal",
+      "facts": {
+        "decision_id": "ADR-012",
+        "target_chars": 900,
+        "overlap": 200
+      },
+      "text": "# ADR-012: Katı Bağlamda Paragraf Düzeyi Parçalama Kararı\n\n## Durum\nNot düzeyinde getirme yapıldığında, 5000 kelimelik bir dokümanın tek bir satırı sorguyla eşleşse dahi tüm doküman bağlama dahil edilmekte veya baş kısmı kırpılarak verilmektedir. Bu durum prompt bütçesini tüketmektedir.\n\n## Karar\nKatı arama yolunda (#83) tüm not yerine Markdown başlık duyarlı blok parçalama (passage chunking) uygulanacaktır:\n- Blok hedef boyutu 900 karakter, örtüşme (overlap) 200 karakter olarak belirlenmiştir.\n- Yalnızca ilgili blok ve başlık yolu bağlama enjekte edilir.\n\n## Sonuçlar\nPrompt token tüketiminde %65 tasarruf sağlanmış, bağlam alaka düzeyi belirgin şekilde yükselmiştir."
+    },
+    {
+      "id": "doc-adr-015-auth-cookie",
+      "source": "knowledge/decisions/adr-015-refresh-token-in-cookie.md",
+      "title": "ADR-015: Refresh Token Saklamada HttpOnly Cookie Kullanımı",
+      "kind": "decision",
+      "updated_at": "2026-08-25T11:30:00Z",
+      "visibility": "internal",
+      "facts": {
+        "decision_id": "ADR-015",
+        "cookie": "HttpOnly",
+        "mitigation": "XSS"
+      },
+      "text": "# ADR-015: Refresh Token Saklamada HttpOnly Cookie Kullanımı\n\n## Durum\nTarayıcı tarafında refresh tokenların localStorage içinde saklanması durumunda, olası bir XSS (Cross-Site Scripting) açığında saldırgan tüm kullanıcı oturumlarını çalabilmektedir.\n\n## Karar\nRefresh tokenlar kesinlikle `localStorage` veya `sessionStorage` içinde saklanmayacaktır:\n- Token sunucu tarafından `Set-Cookie` başlığı ile `HttpOnly`, `Secure` ve `SameSite=Strict` bayraklarıyla istemciye gönderilir.\n- JavaScript çalışma zamanının çerez içeriğine erişimi tarayıcı motoru tarafından engellenir.\n- CSRF riskine karşı SameSite kuralı ve özel istek başlığı doğrulaması uygulanır.\n\n## Sonuçlar\nXSS kaynaklı token sızıntısı riski tamamen bertaraf edilmiştir."
+    },
+    {
+      "id": "doc-adr-019-offline-stdlib",
+      "source": "knowledge/decisions/adr-019-pure-stdlib-search-engine.md",
+      "title": "ADR-019: Arama Çekirdeğinde Saf Standart Kütüphane Kuralı",
+      "kind": "decision",
+      "updated_at": "2026-09-01T09:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "decision_id": "ADR-019",
+        "deps": "zero",
+        "offline": true
+      },
+      "text": "# ADR-019: Arama Çekirdeğinde Saf Standart Kütüphane Kuralı\n\n## Durum\nÇekirdek kütüphaneye harici ağır bağımlılıklar (NumPy, PyTorch, Transformers, ONNX, Faiss vb.) eklendiğinde dağıtım boyutu yüzlerce megabayta çıkmakta ve çevrimdışı kurulumlar zorlaşmaktadır.\n\n## Karar\nV3 bellek ve arama çekirdeği yalnızca Python standart kütüphanesi (`math`, `re`, `json`, `collections`, `sqlite3`, `pathlib`) ile çalışacaktır:\n- Sıfır harici paket bağımlılığı ilkesi korunur.\n- Ağ çağrısı veya harici model API isteği yapılamaz.\n- Başlatma süresi (cold start) 50 milisaniyenin altında kalmalıdır.\n\n## Sonuçlar\nPlatformlar arası anında kurulum, sıfır sürüm uyuşmazlığı ve mutlak çevrimdışı çalışma garantisi sağlanmıştır."
+    },
+    {
+      "id": "doc-runbook-docker-port",
+      "source": "runbooks/docker-port-conflict-resolution.md",
+      "title": "Docker Port Çakışması ve Konteyner Kurtarma Rehberi",
+      "kind": "runbook",
+      "updated_at": "2026-08-12T15:20:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "docker",
+        "port": 8080,
+        "action": "stop-process"
+      },
+      "text": "# Docker Port Çakışması ve Konteyner Kurtarma Rehberi\n\nGeliştirme ortamında konteyner ayağa kaldırılırken `Bind for 0.0.0.0:8080 failed: port is already allocated` hatası alındığında izlenecek adımlar.\n\n## Hızlı Çözüm Adımları\n1. **Portu kullanan süreci bulma**:\n   - Windows PowerShell: `Get-NetTCPConnection -LocalPort 8080 | Select-Object OwningProcess` veya `netstat -ano | findstr :8080`\n   - Linux / macOS: `lsof -i :8080` veya `ss -lptn 'sport = :8080'`\n2. **Yetkisiz veya asılı kalan süreci sonlandırma**:\n   - Windows: `Stop-Process -Id <PID> -Force` veya `taskkill /PID <PID> /F`\n   - Linux: `kill -9 <PID>`\n3. **Konteyneri yeniden başlatma**:\n   - `docker-compose down --remove-orphans`\n   - `docker-compose up -d`"
+    },
+    {
+      "id": "doc-runbook-pg-failover",
+      "source": "runbooks/postgres-replica-failover-runbook.md",
+      "title": "PostgreSQL Birincil Sunucu Çökmesi ve Failover Adımları",
+      "kind": "runbook",
+      "updated_at": "2026-08-16T18:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "postgres",
+        "action": "failover",
+        "tool": "repmgr"
+      },
+      "text": "# PostgreSQL Birincil Sunucu Çökmesi ve Failover Adımları\n\nBirincil PostgreSQL veritabanı yanıt vermediğinde yedek (standby/replica) düğümün birincil konuma yükseltilme prosedürü.\n\n## Operasyonel Müdahale\n1. **Çöküşün doğrulanması**: `pg_isready -h db-primary -p 5432` komutu 3 denemede de başarısız olursa failover başlatılır.\n2. **Replikasyon düğümünü yükseltme**:\n   - Standby sunucusunda `pg_ctl promote -D /var/lib/postgresql/data` komutunu çalıştırın.\n   - Alternatif repmgr komutu: `repmgr standby promote -f /etc/repmgr.conf`.\n3. **Bağlantı yönlendirmesi**:\n   - PgBouncer havuz yöneticisinde `PAUSE` verin.\n   - `pgbouncer.ini` dosyasında veritabanı ana makinesini yeni birincil sunucunun IP adresine güncelleyin.\n   - `RELOAD` ve `RESUME` komutlarını yürütün."
+    },
+    {
+      "id": "doc-runbook-flyway-repair",
+      "source": "runbooks/flyway-checksum-mismatch-repair.md",
+      "title": "Flyway Checksum Uyuşmazlığı Onarım Prosedürü",
+      "kind": "runbook",
+      "updated_at": "2026-09-03T10:10:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "flyway",
+        "action": "repair",
+        "table": "flyway_schema_history"
+      },
+      "text": "# Flyway Checksum Uyuşmazlığı Onarım Prosedürü\n\nDaha önce çalıştırılmış bir göç betiği üzerinde sonradan değişiklik yapıldığında oluşan `Migration checksum mismatch for migration version X` hatasının çözümü.\n\n## Onarım Yöntemi\n1. **Onarım komutunu çalıştırma**:\n   - `flyway repair -configFiles=flyway.conf`\n   Bu komut `flyway_schema_history` tablosundaki sağlama toplamını diskteki dosyanın yeni sağlama toplamı ile günceller.\n2. **Manuel müdahale (Gerekirse)**:\n   - Eğer betik yarım kalmışsa (failed migration): `DELETE FROM flyway_schema_history WHERE success = false;`\n   - Ardından `flyway repair` ve tekrar `flyway migrate` komutları çalıştırılır."
+    },
+    {
+      "id": "doc-runbook-clean-install",
+      "source": "runbooks/temiz-kurulum-ve-on-kontrol.md",
+      "title": "Temiz Kurulum ve Ön Kontrol Prosedürü",
+      "kind": "runbook",
+      "updated_at": "2026-09-07T08:30:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "install",
+        "python_min": "3.11"
+      },
+      "text": "# Temiz Kurulum ve Ön Kontrol Prosedürü\n\nSistemin sıfırdan kurulumunda ortam gereksinimlerinin ve bağımlılıkların doğrulanması.\n\n## Ön Kontrol Listesi\n- **Python Sürümü**: `python --version` en az Python 3.11 olmalıdır.\n- **Git ve Çalışma Alanı**: Git deposunun kök dizininde write (yazma) izinleri bulunmalıdır.\n- **Dizin İzolasyonu**: Çalışma zamanı `runtime/` veya `state/` klasörü vault dizininin dışında veya hariç tutulan yollarda yer almalıdır.\n- **Test Doğrulaması**: Kurulum öncesi `python -m unittest discover -s tests` çalıştırılarak tüm birim testlerin yeşil olduğu teyit edilir."
+    },
+    {
+      "id": "doc-project-sentinel-v2",
+      "source": "projects/sentinel-db360-v2-milestones.md",
+      "title": "SentinelDB360 V2 Yol Haritası ve Görevler",
+      "kind": "project",
+      "updated_at": "2026-09-12T14:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "project": "sentinel-db360",
+        "version": "v2"
+      },
+      "text": "# SentinelDB360 V2 Yol Haritası ve Görevler\n\nVeritabanı telemetri ve izleme platformu SentinelDB360'ın ikinci sürüm geliştirme hedefleri.\n\n## Temel Kilometre Taşları\n- [x] Mikroservis mimarisine geçiş ve gRPC arayüzü tamamlandı.\n- [ ] Gerçek zamanlı yavaş sorgu izleme ve otomatik EXPLAIN analizi.\n- [ ] Otomatik eksik indeks öneri motorunun sisteme entegrasyonu.\n- [ ] Prometheus metrik dışa aktarıcısı ve Grafana gösterge panoları."
+    },
+    {
+      "id": "doc-project-companion-v3",
+      "source": "projects/beyin-companion-v3-gelistirme.md",
+      "title": "Beyin Companion V3 Bellek ve Süreklilik Mimarisi",
+      "kind": "project",
+      "updated_at": "2026-09-14T11:20:00Z",
+      "visibility": "internal",
+      "facts": {
+        "project": "beyin-companion",
+        "version": "v3"
+      },
+      "text": "# Beyin Companion V3 Bellek ve Süreklilik Mimarisi\n\nKişisel düşünme ortağı ve bellek sisteminin V3 sürüm mimari gereksinimleri.\n\n## Bileşenler ve Kurallar\n- **Last-Session Özeti**: Oturum kapanışında baştan yazılan, 1200 karakter bütçeli özet kartı.\n- **Compact Mekanizması**: Bellek şişmesini önlemek için `beyin.py companion-compact` ile eski oturumların arşive aktarılması.\n- **Çift Doğrulama**: Kullanıcının doğrudan söylediği tercihler teyit beklenmeksizin kaydedilir."
+    },
+    {
+      "id": "doc-daily-2026-09-20",
+      "source": "daily/2026-09-20-haftalik-degerlendirme.md",
+      "title": "2026-09-20 Haftalık Mühendislik Senkronizasyonu",
+      "kind": "daily",
+      "updated_at": "2026-09-20T17:30:00Z",
+      "visibility": "internal",
+      "facts": {
+        "type": "meeting_notes",
+        "date": "2026-09-20"
+      },
+      "text": "# 2026-09-20 Haftalık Mühendislik Senkronizasyonu\n\nTüm mühendislik ekiplerinin katıldığı haftalık değerlendirme toplantı notları ve alınan aksiyonlar.\n\n## Konuşulan Maddeler\n- **Bağlantı ve Ağ**: İstemcilerin websocket bağlantı süreleri ve heartbeat sorunları tartışıldı. Bazı sunucularda kopmalar görülüyor.\n- **Veritabanı**: PostgreSQL bağlantı havuzu ayarları ve HikariCP havuz boyutunun sunucu başına 20 olması gerektiği belirtildi. Bağlantı tükenmesi uyarısı loglara düşmüş.\n- **Önbellek ve Kilit**: Redis distributed lock mekanizması ile ilgili bir bug raporu incelendi, redlock TTL süresi 30 saniye olarak güncellenecek.\n- **Konteyner ve Port**: Docker konteynerlerinde port çakışması yaşayan geliştiriciler için kurtarma rehberinin güncellenmesi kararlaştırıldı.\n- **Güvenlik**: JWT token ömrü ve oturum güvenliği toplantıda tekrar gündeme geldi. Refresh token çerezleri konuşuldu.\n- **Genel**: Birim testlerin koşulması, kod incelemelerinin hızlandırılması ve sprint kapanışı ele alındı."
+    },
+    {
+      "id": "doc-daily-2026-09-22",
+      "source": "daily/2026-09-22-standup-notlari.md",
+      "title": "2026-09-22 Günlük Standup ve Altyapı Notları",
+      "kind": "daily",
+      "updated_at": "2026-09-22T09:15:00Z",
+      "visibility": "internal",
+      "facts": {
+        "type": "standup",
+        "date": "2026-09-22"
+      },
+      "text": "# 2026-09-22 Günlük Standup ve Altyapı Notları\n\nGünlük standup toplantısında altyapı ekibinin paylaştığı durum güncellemeleri.\n\n## Altyapı Notları\n- Flyway göç betiklerinde checksum uyuşmazlığı yaşayan iki geliştiriciye yardım edildi. `flyway repair` komutu önerildi.\n- Docker servislerinde port 8080 çakışması çözüldü, asılı kalan node süreci öldürüldü.\n- Veritabanı şema güncellemesi sırasında hata alan tablolar için temiz kurulum yapılması önerildi.\n- Kafka consumer lag değerlerinin stabil olduğu gözlemlendi."
+    },
+    {
+      "id": "doc-daily-2026-09-25",
+      "source": "daily/2026-09-25-canli-surum-hazirligi.md",
+      "title": "2026-09-25 Canlı Sürüm Hazırlığı ve Kontroller",
+      "kind": "daily",
+      "updated_at": "2026-09-25T16:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "type": "release_prep",
+        "date": "2026-09-25"
+      },
+      "text": "# 2026-09-25 Canlı Sürüm Hazırlığı ve Kontroller\n\nCanlıya çıkış öncesi son kontroller ve konfigürasyon doğrulamaları yapıldı.\n\n## Kontrol Özeti\n- SQLite WAL modu performansı test edildi, eşzamanlı okuma yazma işlemlerinde kilitlenme görülmedi.\n- Redis bellek tüketimi izlendi, maxmemory politikasının devrede olduğu teyit edildi.\n- Playwright E2E UI testleri pipeline üzerinde çalıştırıldı ve tüm adımlar başarıyla tamamlandı.\n- OpenCode motoru doğrudan istemci bağlantısı ile test edildi, gecikme süresi normal aralıkta."
+    },
+    {
+      "id": "doc-archive-retro-q3",
+      "source": "archive/2026-q3-retrospektif-notlari.md",
+      "title": "2026 Q3 Retrospektif ve Altyapı İyileştirme Kararları",
+      "kind": "archive",
+      "updated_at": "2026-09-26T18:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "type": "retro",
+        "period": "2026-Q3"
+      },
+      "text": "# 2026 Q3 Retrospektif ve Altyapı İyileştirme Kararları\n\nÜçüncü çeyrek boyunca karşılaşılan mimari zorluklar ve teknik borçların değerlendirilmesi.\n\n## Değerlendirme\n- WebSocket mimarisinde ani bağlantı kopmalarının temel nedeni heartbeat zaman aşımının kısa tutulmasıydı.\n- PostgreSQL bağlantı havuzu boyutlandırmasında yapılan hatalar nedeniyle HikariCP leak detection devreye girmişti.\n- Flyway veritabanı şema göçlerinde geliştiricilerin aynı sürüm numarasını kullanması çakışmalara yol açtı.\n- Docker konteyner izolasyonunun güçlendirilmesi ve temiz kurulum prosedürlerinin dokümante edilmesi faydalı oldu.\n- ClickHouse olay tablosu partisyonlarının aylık olarak bölünmesi sorgu performansını büyük ölçüde artırdı."
+    },
+    {
+      "id": "doc-inbox-random-tips",
+      "source": "inbox/gelistirici-ipuculari.md",
+      "title": "Geliştirici İpuçları ve Hızlı Komutlar",
+      "kind": "inbox",
+      "updated_at": "2026-09-18T10:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "type": "tips"
+      },
+      "text": "# Geliştirici İpuçları ve Hızlı Komutlar\n\nSık kullanılan yararlı komutlar ve kısa notlar:\n- Docker konteynerlerini temizleme: `docker system prune -f`\n- Port dinleyen uygulamayı bulma: `netstat -ano`\n- Git son commit mesajını değiştirme: `git commit --amend`\n- SQLite WAL modunu kontrol etme: `PRAGMA journal_mode;`\n- Flyway şema geçmişi sorgulama: `SELECT * FROM flyway_schema_history;`"
+    },
+    {
+      "id": "doc-kafka-retry",
+      "source": "knowledge/architecture/kafka-event-retry-topic.md",
+      "title": "Kafka Dead Letter Queue ve Yeniden Deneme Deseni",
+      "kind": "concept",
+      "updated_at": "2026-08-30T15:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "kafka",
+        "pattern": "dlq",
+        "max_retries": 3
+      },
+      "text": "# Kafka Dead Letter Queue ve Yeniden Deneme Deseni\n\nMesaj tüketiminde geçici veya kalıcı hatalarla karşılaşıldığında ana tüketim akışının tıkanmaması için yeniden deneme ve DLQ deseni uygulanır.\n\n## Yeniden Deneme Katmanları\n1. **Ana Konu (orders-topic)**: İstemci mesajı tüketmeye çalışır.\n2. **Yeniden Deneme Konuları (orders-retry-1m, orders-retry-5m)**: Başarısız olan mesajlar gecikmeli kuyruğa gönderilir. Azami yeniden deneme sayısı 3'tür.\n3. **Ölü Mektup Kuyruğu (orders-dlq)**: 3 denemede de işlenemeyen zehirli mesajlar (poison pills) analiz edilmek ve manuel incelenmek üzere DLQ konusuna aktarılır."
+    },
+    {
+      "id": "doc-grpc-protobuf",
+      "source": "knowledge/architecture/grpc-protobuf-servis-iletisimi.md",
+      "title": "gRPC ve Protocol Buffers Servisler Arası İletişim",
+      "kind": "concept",
+      "updated_at": "2026-09-01T14:30:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "rpc",
+        "protocol": "grpc",
+        "serialization": "protobuf"
+      },
+      "text": "# gRPC ve Protocol Buffers Servisler Arası İletişim\n\nİç mikroservisler arasındaki yüksek hızlı veri aktarımında JSON tabanlı REST yerine gRPC ve Protocol Buffers (proto3) kullanılır.\n\n## Avantajlar ve Standartlar\n- **İkili Serileştirme (Binary Serialization)**: Protobuf ile veri boyutu JSON'a göre %60-80 oranında küçülür.\n- **HTTP/2 Çoğullama (Multiplexing)**: Tek bir TCP bağlantısı üzerinden aynı anda yüzlerce eşzamanlı istek taşınır.\n- **Tip Güvenliği**: `.proto` dosyalarından istemci ve sunucu için tür açısından güvenli kod üretilir."
+    },
+    {
+      "id": "doc-elasticsearch-sync",
+      "source": "knowledge/architecture/elasticsearch-veri-esitleme.md",
+      "title": "Elasticsearch İndeksleme ve Debezium CDC Entegrasyonu",
+      "kind": "concept",
+      "updated_at": "2026-09-03T16:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "cdc",
+        "source": "postgres",
+        "target": "elasticsearch"
+      },
+      "text": "# Elasticsearch İndeksleme ve Debezium CDC Entegrasyonu\n\nİşlem veritabanındaki (PostgreSQL) değişikliklerin metin arama motoruna (Elasticsearch) aktarılması için Debezium CDC (Change Data Capture) kullanılır.\n\n## Veri Akış Hattı\n1. PostgreSQL write-ahead log (WAL) kayıtları Debezium konnektörü tarafından okunur.\n2. Satır bazlı ekleme, güncelleme ve silme olayları Kafka konusuna JSON/Avro olarak iletilir.\n3. Kafka Connect Elasticsearch Sink konnektörü olayları Elasticsearch indekslerine `_bulk` API ile yazar.\n4. Bu mimari sayesinde uygulama kodunda çift yazma (dual-write) karmaşıklığı önlenir."
+    },
+    {
+      "id": "doc-oauth-oidc",
+      "source": "knowledge/architecture/oidc-kimlik-dogrulama-akisi.md",
+      "title": "OpenID Connect ve OAuth2 Yetkilendirme Akışı",
+      "kind": "concept",
+      "updated_at": "2026-09-05T13:10:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "auth",
+        "standard": "oidc",
+        "flow": "pkce"
+      },
+      "text": "# OpenID Connect ve OAuth2 Yetkilendirme Akışı\n\nÜçüncü taraf istemcilerin sisteme güvenli erişimi için OAuth 2.0 Authorization Code Grant ve PKCE (Proof Key for Code Exchange) standartları zorunludur.\n\n## Güvenlik Gereksinimleri\n- **PKCE Doğrulaması**: İstemci `code_verifier` oluşturur ve SHA256 ile `code_challenge` türetir. Authorization sunucusu takas sırasında doğrular.\n- **State ve Nonce Parametreleri**: CSRF ve tekrar oynatma (replay attack) saldırılarına karşı her istekte kriptografik rastgele `state` ve `nonce` değerleri doğrulanır.\n- **ID Token Doğrulaması**: `aud`, `iss` ve imza sertifikası JWKS uç noktasından alınan anahtarlarla kontrol edilir."
+    },
+    {
+      "id": "doc-adr-021-clickhouse",
+      "source": "knowledge/decisions/adr-021-clickhouse-olay-depolama.md",
+      "title": "ADR-021: Olay Analitiği İçin ClickHouse Tercihi",
+      "kind": "decision",
+      "updated_at": "2026-08-27T10:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "decision_id": "ADR-021",
+        "chosen": "ClickHouse",
+        "rejected": "Elasticsearch"
+      },
+      "text": "# ADR-021: Olay Analitiği İçin ClickHouse Tercihi\n\n## Durum\nGünlük 50 milyon olay kaydının Elasticsearch üzerinde indekslenmesi aşırı RAM ve disk maliyetine yol açmakta, toplu toplama (aggregation) sorgularında bellek yetersizliği oluşmaktadır.\n\n## Karar\nOlay ve log analitiği için sütun bazlı ClickHouse veritabanına geçilecektir:\n- MergeTree motoru ile zaman serisi partisyonlama.\n- Sıkıştırma oranı sayesinde disk maliyeti %85 oranında düşecektir.\n- Toplama sorguları (COUNT, SUM, AVG) bellek içi vektörel işlemcilerle 100 kat hızlı çalışacaktır.\n\n## Sonuçlar\nAylık sunucu altyapı maliyeti üçte bire inmiş, sorgu süreleri milisaniyeler seviyesine gerilemiştir."
+    },
+    {
+      "id": "doc-adr-024-redis-sentinel",
+      "source": "knowledge/decisions/adr-024-redis-sentinel-high-availability.md",
+      "title": "ADR-024: Redis Yüksek Erişilebilirlik İçin Sentinel Tercihi",
+      "kind": "decision",
+      "updated_at": "2026-09-02T11:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "decision_id": "ADR-024",
+        "chosen": "Sentinel",
+        "rejected": "Cluster"
+      },
+      "text": "# ADR-024: Redis Yüksek Erişilebilirlik İçin Sentinel Tercihi\n\n## Durum\nTek düğüm Redis sunucusu çökmesi durumunda dağıtık kilitler ve oturum önbelleği çalışamaz hale gelmekte, tek hata noktası (SPOF) oluşmaktadır.\n\n## Karar\nVeri setimiz 10 GB sınırının altında olduğu için karmaşık Redis Cluster parçalama yerine 3 düğümlü Redis Sentinel mimarisi seçilmiştir:\n- 1 Master, 2 Replica ve 3 bağımsız Sentinel süreci yapılandırılır.\n- Master çöküşünde Sentinel çoğunluk oyu ile 5 saniye içinde otomatik failover gerçekleştirir.\n\n## Sonuçlar\nOperasyonel bakım yükü minimum düzeyde tutularak kesintisiz hizmet sağlanmıştır."
+    },
+    {
+      "id": "doc-runbook-kafka-consumer-lag",
+      "source": "runbooks/kafka-consumer-lag-azaltma.md",
+      "title": "Kafka Consumer Lag ve Tıkanıklık Giderme Prosedürü",
+      "kind": "runbook",
+      "updated_at": "2026-09-04T12:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "kafka",
+        "metric": "consumer_lag",
+        "action": "scale_partition"
+      },
+      "text": "# Kafka Consumer Lag ve Tıkanıklık Giderme Prosedürü\n\nTüketici grubunun (consumer group) arkada kalması ve mesaj gecikmesinin artması durumunda izlenecek adımlar.\n\n## Sorun Tespiti ve Çözüm\n1. **Gecikmeyi ölçme**: `kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group order-processors`\n2. **Partition ve tüketici dengesi**: Eğer LAG tek bir partisyonda yoğunlaşmışsa, ilgili partisyondaki zehirli mesaj (poison pill) veya yavaş harici servis çağrısı incelenmelidir.\n3. **Ölçekleme**: Konu partisyon sayısı elveriyorsa tüketici pod sayısı partisyon sayısına kadar artırılır."
+    },
+    {
+      "id": "doc-runbook-redis-memory-alert",
+      "source": "runbooks/redis-bellek-tasma-cozumu.md",
+      "title": "Redis Bellek Taşması ve Maxmemory Politikası Yönetimi",
+      "kind": "runbook",
+      "updated_at": "2026-09-06T15:45:00Z",
+      "visibility": "internal",
+      "facts": {
+        "topic": "redis",
+        "policy": "volatile-lru",
+        "threshold": 0.85
+      },
+      "text": "# Redis Bellek Taşması ve Maxmemory Politikası Yönetimi\n\nRedis bellek kullanımının %85 eşiğini aşması ve `OOM command not allowed` hatası oluşması durumunda operasyonel adımlar.\n\n## Müdahale Adımları\n1. **Bellek durumunu kontrol etme**: `redis-cli info memory` ile `used_memory_human` değerini inceleyin.\n2. **En büyük anahtarları bulma**: `redis-cli --bigkeys` komutuyla anormal büyük hash veya listeleri tespit edin.\n3. **Tahliye politikasını gözden geçirme**:\n   - `CONFIG SET maxmemory-policy volatile-lru`\n   Bu sayede yalnızca TTL belirlenmiş geçici anahtarlar tahliye edilir, kalıcı anahtarlar korunur."
+    },
+    {
+      "id": "doc-daily-2026-09-27",
+      "source": "daily/2026-09-27-hafta-sonu-altyapi-nobeti.md",
+      "title": "2026-09-27 Hafta Sonu Altyapı Nöbeti ve Olay Günlüğü",
+      "kind": "daily",
+      "updated_at": "2026-09-27T20:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "type": "oncall",
+        "date": "2026-09-27"
+      },
+      "text": "# 2026-09-27 Hafta Sonu Altyapı Nöbeti ve Olay Günlüğü\n\nHafta sonu nöbetinde meydana gelen altyapı uyarıları ve çözümleri:\n- Kafka consumer lag uyarısı alındı, tüketici servisleri yeniden başlatılarak kuyruk eritildi.\n- Redis bellek tüketimi %80 seviyesine ulaştı, gereksiz eski log anahtarları temizlendi.\n- ClickHouse toplu ekleme (batch insert) servisinde kısa süreli gecikme yaşandı, tampon boyutu artırıldı.\n- Docker konteynerlerinde beklenmeyen yeniden başlama gözlenmedi."
+    },
+    {
+      "id": "doc-project-analytics-pipeline",
+      "source": "projects/olay-analitik-hatti-entegrasyonu.md",
+      "title": "Olay Analitik Hattı ve ClickHouse Entegrasyonu Projesi",
+      "kind": "project",
+      "updated_at": "2026-09-15T10:00:00Z",
+      "visibility": "internal",
+      "facts": {
+        "project": "analytics-pipeline",
+        "target": "clickhouse"
+      },
+      "text": "# Olay Analitik Hattı ve ClickHouse Entegrasyonu Projesi\n\nKafka üzerinden gelen analitik verilerin ClickHouse veritabanına aktarımı ve gerçek zamanlı gösterge panolarının oluşturulması.\n\n## Durum ve Yol Haritası\n- [x] Kafka topic ve ClickHouse şemalarının tasarımı tamamlandı.\n- [x] Sıkıştırma ve partitioning ayarları optimize edildi.\n- [ ] Grafana veri kaynağı bağlantısının kurulması ve alarm kurallarının tanımlanması.\n- [ ] Yük ve dayanıklılık testlerinin icrası."
+    }
+  ],
+  "cases": [
+    {
+      "id": "case-01-ws-architecture",
+      "category": "title_salience",
+      "query": "WebSocket Event Loop mimarisi ve heartbeat",
+      "target_id": "doc-ws-architecture",
+      "target_source": "knowledge/architecture/websocket-event-loop.md",
+      "description": "Tests if exact title match wins over recent daily/retro notes containing incidental terms."
+    },
+    {
+      "id": "case-02-flyway-strategy",
+      "category": "title_salience",
+      "query": "Flyway veritabanı şema göç stratejisi",
+      "target_id": "doc-flyway-migration",
+      "target_source": "knowledge/architecture/flyway-database-migration.md",
+      "description": "Title explicitly names Flyway schema migration; competes against standup and retro logs."
+    },
+    {
+      "id": "case-03-sqlite-wal",
+      "category": "title_salience",
+      "query": "SQLite WAL modu eşzamanlı okuma yazma",
+      "target_id": "doc-sqlite-wal",
+      "target_source": "knowledge/architecture/sqlite-wal-mode-concurrency.md",
+      "description": "Target title matches query concepts; recent release prep note shares terms."
+    },
+    {
+      "id": "case-04-redlock-distributed",
+      "category": "title_salience",
+      "query": "Redis Redlock dağıtık kilit mekanizması",
+      "target_id": "doc-redis-lock",
+      "target_source": "knowledge/architecture/redis-distributed-lock.md",
+      "description": "Title contains core terms; daily sync note shares terms with newer timestamp."
+    },
+    {
+      "id": "case-05-playwright-e2e",
+      "category": "title_salience",
+      "query": "Playwright E2E UI test otomasyonu",
+      "target_id": "doc-playwright-e2e",
+      "target_source": "knowledge/architecture/playwright-e2e-testing.md",
+      "description": "Exact title match for E2E testing framework."
+    },
+    {
+      "id": "case-06-flyway-repair-checksum",
+      "category": "rare_vs_common",
+      "query": "Flyway onarım komutu ile checksum hatası çözümü",
+      "target_id": "doc-runbook-flyway-repair",
+      "target_source": "runbooks/flyway-checksum-mismatch-repair.md",
+      "description": "Common words (hata, cozum, komut) match multiple daily notes; rare keyword flyway repair must target runbook."
+    },
+    {
+      "id": "case-07-hikaricp-pool-exhaustion",
+      "category": "rare_vs_common",
+      "query": "HikariCP bağlantı havuzu tükenmesi ve ayarları",
+      "target_id": "doc-pg-pool",
+      "target_source": "knowledge/architecture/postgres-connection-pool.md",
+      "description": "Rare term HikariCP should dominate common terms (baglanti, havuz, ayar)."
+    },
+    {
+      "id": "case-08-redlock-split-brain",
+      "category": "rare_vs_common",
+      "query": "Redlock split brain koruması ve master failover",
+      "target_id": "doc-redis-lock",
+      "target_source": "knowledge/architecture/redis-distributed-lock.md",
+      "description": "Redlock and split-brain are rare domain concepts; general failover terms match other runbooks."
+    },
+    {
+      "id": "case-09-debezium-cdc-sync",
+      "category": "rare_vs_common",
+      "query": "Debezium CDC ile veri eşitleme",
+      "target_id": "doc-elasticsearch-sync",
+      "target_source": "knowledge/architecture/elasticsearch-veri-esitleme.md",
+      "description": "Rare keyword Debezium and CDC vs common words veri, esitleme."
+    },
+    {
+      "id": "case-10-pkce-oauth-flow",
+      "category": "rare_vs_common",
+      "query": "PKCE ile yetkilendirme kodu akışı",
+      "target_id": "doc-oauth-oidc",
+      "target_source": "knowledge/architecture/oidc-kimlik-dogrulama-akisi.md",
+      "description": "PKCE is a specialized security mechanism; akis and yetkilendirme appear broadly."
+    },
+    {
+      "id": "case-11-pg-pool-size",
+      "category": "distractor_suppression",
+      "query": "PostgreSQL bağlantı havuzu boyutu kaç olmalı",
+      "target_id": "doc-pg-pool",
+      "target_source": "knowledge/architecture/postgres-connection-pool.md",
+      "description": "Weekly sync (doc-daily-2026-09-20) and retro (doc-archive-retro-q3) mention pg pool casually."
+    },
+    {
+      "id": "case-12-docker-port-conflict",
+      "category": "distractor_suppression",
+      "query": "Docker port çakışması yaşayan konteyner nasıl kurtarılır",
+      "target_id": "doc-runbook-docker-port",
+      "target_source": "runbooks/docker-port-conflict-resolution.md",
+      "description": "Daily standups and developer tips mention docker and port; target is specific runbook."
+    },
+    {
+      "id": "case-13-kafka-dlq-retries",
+      "category": "distractor_suppression",
+      "query": "Kafka Dead Letter Queue yeniden deneme sayısı",
+      "target_id": "doc-kafka-retry",
+      "target_source": "knowledge/architecture/kafka-event-retry-topic.md",
+      "description": "Incident logs mention kafka retries; target concept note defines DLQ strategy."
+    },
+    {
+      "id": "case-14-clickhouse-partition-format",
+      "category": "distractor_suppression",
+      "query": "ClickHouse partition by toYYYYMM tablo şeması",
+      "target_id": "doc-clickhouse-analytics",
+      "target_source": "knowledge/architecture/clickhouse-event-storage.md",
+      "description": "Retro and project notes mention ClickHouse partitioning; architecture note defines exact DDL."
+    },
+    {
+      "id": "case-15-jwt-access-token-expiry",
+      "category": "distractor_suppression",
+      "query": "JWT access token ömrü ve güvenlik süresi",
+      "target_id": "doc-jwt-auth",
+      "target_source": "knowledge/architecture/jwt-session-security.md",
+      "description": "Meeting logs discuss token lifetimes; target is the authoritative architecture note."
+    },
+    {
+      "id": "case-16-hikaricp-leak-detection",
+      "category": "term_frequency",
+      "query": "PostgreSQL HikariCP connection leak ve havuz kilitlenmesi",
+      "target_id": "doc-pg-pool",
+      "target_source": "knowledge/architecture/postgres-connection-pool.md",
+      "description": "Target explains leak detection mechanism in depth; distractor mentions leak once."
+    },
+    {
+      "id": "case-17-redis-maxmemory-eviction",
+      "category": "term_frequency",
+      "query": "Redis bellek taşması maxmemory LRU tahliye",
+      "target_id": "doc-runbook-redis-memory-alert",
+      "target_source": "runbooks/redis-bellek-tasma-cozumu.md",
+      "description": "Runbook details maxmemory-policy and eviction; daily oncall note mentions memory once."
+    },
+    {
+      "id": "case-18-kafka-consumer-lag-scaling",
+      "category": "term_frequency",
+      "query": "Kafka consumer lag birikmesi ve partition ölçekleme",
+      "target_id": "doc-runbook-kafka-consumer-lag",
+      "target_source": "runbooks/kafka-consumer-lag-azaltma.md",
+      "description": "Runbook densely explains lag diagnostics; weekend log mentions lag once."
+    },
+    {
+      "id": "case-19-graphify-ast-dependencies",
+      "category": "term_frequency",
+      "query": "Graphify AST bağımlılık grafiği düğüm kenar analizi",
+      "target_id": "doc-graphify-ast",
+      "target_source": "knowledge/architecture/graphify-ast-code-graph.md",
+      "description": "Target note repeatedly references AST nodes, edges and graph traversal."
+    },
+    {
+      "id": "case-20-single-flyway",
+      "category": "single_term_strict",
+      "query": "Flyway",
+      "target_id": "doc-flyway-migration",
+      "target_source": "knowledge/architecture/flyway-database-migration.md",
+      "description": "Single-term query; strict mode drops records with shared_count < 2 (Recall = 0)."
+    },
+    {
+      "id": "case-21-single-clickhouse",
+      "category": "single_term_strict",
+      "query": "ClickHouse",
+      "target_id": "doc-clickhouse-analytics",
+      "target_source": "knowledge/architecture/clickhouse-event-storage.md",
+      "description": "Single domain term; tests strict minimum shared cutoff behavior."
+    },
+    {
+      "id": "case-22-single-playwright",
+      "category": "single_term_strict",
+      "query": "Playwright",
+      "target_id": "doc-playwright-e2e",
+      "target_source": "knowledge/architecture/playwright-e2e-testing.md",
+      "description": "Single framework name query testing strict retrieval threshold."
+    },
+    {
+      "id": "case-23-single-graphify",
+      "category": "single_term_strict",
+      "query": "Graphify",
+      "target_id": "doc-graphify-ast",
+      "target_source": "knowledge/architecture/graphify-ast-code-graph.md",
+      "description": "Single unique keyword query."
+    },
+    {
+      "id": "case-24-single-redlock",
+      "category": "single_term_strict",
+      "query": "Redlock",
+      "target_id": "doc-redis-lock",
+      "target_source": "knowledge/architecture/redis-distributed-lock.md",
+      "description": "Single algorithm name query."
+    },
+    {
+      "id": "case-25-adr-cookie-vs-localstorage",
+      "category": "decision_adr",
+      "query": "Refresh token neden LocalStorage yerine HttpOnly cookie içinde saklanıyor",
+      "target_id": "doc-adr-015-auth-cookie",
+      "target_source": "knowledge/decisions/adr-015-refresh-token-in-cookie.md",
+      "description": "ADR query comparing storage mechanisms and XSS rationale."
+    },
+    {
+      "id": "case-26-adr-stdlib-rule",
+      "category": "decision_adr",
+      "query": "Arama çekirdeğinde harici kütüphane yerine saf stdlib kullanma kararı",
+      "target_id": "doc-adr-019-offline-stdlib",
+      "target_source": "knowledge/decisions/adr-019-pure-stdlib-search-engine.md",
+      "description": "ADR query on zero external dependencies rule."
+    },
+    {
+      "id": "case-27-adr-clickhouse-vs-es",
+      "category": "decision_adr",
+      "query": "Olay analitiğinde neden Elasticsearch yerine ClickHouse seçildi",
+      "target_id": "doc-adr-021-clickhouse",
+      "target_source": "knowledge/decisions/adr-021-clickhouse-olay-depolama.md",
+      "description": "ADR query comparing ClickHouse to Elasticsearch."
+    },
+    {
+      "id": "case-28-adr-sqlite-cache",
+      "category": "decision_adr",
+      "query": "Vault indeksinde neden dosya tarama yerine SQLite tercih edildi",
+      "target_id": "doc-adr-008-vault-sync",
+      "target_source": "knowledge/decisions/adr-008-vault-sync-engine.md",
+      "description": "ADR query regarding SQLite index for fast markdown vault synchronization."
+    },
+    {
+      "id": "case-29-clean-preflight-install",
+      "category": "clean_baseline",
+      "query": "Temiz kurulum öncesi sistem ön kontrol adımları",
+      "target_id": "doc-runbook-clean-install",
+      "target_source": "runbooks/temiz-kurulum-ve-on-kontrol.md",
+      "description": "Direct operational runbook query."
+    },
+    {
+      "id": "case-30-clean-opencode-streaming",
+      "category": "clean_baseline",
+      "query": "OpenCode doğrudan istemci mimarisi ve streaming",
+      "target_id": "doc-opencode-engine",
+      "target_source": "knowledge/architecture/opencode-direct-engine.md",
+      "description": "Direct architectural design query."
+    },
+    {
+      "id": "case-31-clean-sentinel-roadmap",
+      "category": "clean_baseline",
+      "query": "SentinelDB360 V2 gerçek zamanlı sorgu izleme yol haritası",
+      "target_id": "doc-project-sentinel-v2",
+      "target_source": "projects/sentinel-db360-v2-milestones.md",
+      "description": "Direct project milestone query."
+    },
+    {
+      "id": "case-32-clean-companion-compact",
+      "category": "clean_baseline",
+      "query": "Beyin Companion V3 bellek kompaktlaştırma ve Last-Session",
+      "target_id": "doc-project-companion-v3",
+      "target_source": "projects/beyin-companion-v3-gelistirme.md",
+      "description": "Direct companion specification query."
+    }
+  ]
+}
