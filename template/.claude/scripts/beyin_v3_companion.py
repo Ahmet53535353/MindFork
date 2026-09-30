@@ -227,6 +227,8 @@ def ends(text, budget):
     The first marker is sized with the whole length, so the final one, counting only
     what was really dropped, can never be longer and the result stays inside budget.
     """
+    if len(text) <= budget:
+        return text
     gap = f'\n[truncated: {len(text)} characters omitted here; read source]\n'
     keep = budget - len(gap)
     if keep < 80:
@@ -237,7 +239,19 @@ def ends(text, budget):
     head = head[:head.rfind('\n') + 1] or head
     closing = text[len(text) - (keep - len(head)):]
     closing = closing[closing.find('\n') + 1:] or closing
-    return head + f'\n[truncated: {len(text) - len(head) - len(closing)} characters omitted here; read source]\n' + closing
+    # Snapping to line boundaries gives characters back. Spend them on whole lines,
+    # alternating between the two ends, never letting the ends meet (#151).
+    start = len(text) - len(closing)
+    grown = True
+    while grown:
+        grown = False
+        cut = text.rfind('\n', len(head), start - 1) + 1 or len(head)
+        if cut < start and len(head) + len(closing) + start - cut <= keep:
+            closing, start, grown = text[cut:], cut, True
+        end = text.find('\n', len(head), start) + 1
+        if end and len(closing) + end <= keep and end < start:
+            head, grown = text[:end], True
+    return head + f'\n[truncated: {start - len(head)} characters omitted here; read source]\n' + closing
 
 
 def clip(text, budget, tail=False, both=False):
