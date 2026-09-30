@@ -43,8 +43,9 @@ def output_context(harness, event, text):
 
 
 def prompt_text(payload):
-    """The user's prompt as text. Harnesses may send null (Claude Code turns without a typed prompt, such as
-    background task notifications) or a list of content blocks; retrieval and the opt-out check need a string."""
+    """The user's prompt as text; retrieval and the opt-out check need a string. Claude Code (checked on 2.1.285,
+    where task notifications arrive as <task-notification> text), Codex and the bundled OpenCode, Hermes and OMP
+    adapters send a string; null or a list of content blocks from any other caller must not crash the turn."""
     prompt = payload.get("prompt") if isinstance(payload, dict) else None
     if isinstance(prompt, str):
         return prompt
