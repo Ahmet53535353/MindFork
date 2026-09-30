@@ -235,6 +235,11 @@ class CompanionTest(unittest.TestCase):
             "nerede kaldıydım",
             "nerde kaldigimizi soyle",
             "en son nerede kaldığım yeri göster",
+            "nerede kalmışım",
+            "nerede kaldıysak oradan devam edelim",
+            "NERDE KALMIŞTIK",
+            "NEREDE KALDIĞIMIZI SÖYLE",
+            "nerde kaldıgımızı hatırlat",
             "ne yaptık",
             "son oturum",
             "beni hatırla",
@@ -256,6 +261,9 @@ class CompanionTest(unittest.TestCase):
             "Kargonun nerede kaldığını kontrol eder misin?",
             "Paketin nerede kaldığı belli değil",
             "nerde kaldı bu kargo",
+            "Kargoların nerede kaldıklarını kontrol et",
+            "Paketlerin nerede kaldiklarini bul",
+            "Misafirler nerede kalacaklar?",
         ]
         for query in negatives:
             self.assertFalse(relevant(query), f"Expected False for unrelated query: {query}")
