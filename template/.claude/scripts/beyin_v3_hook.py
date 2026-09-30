@@ -56,8 +56,7 @@ def is_synthetic_prompt(payload):
         return False
     if isinstance(kind, str) and kind in SYNTHETIC_ORIGIN_KINDS:
         return True
-    query = payload.get("prompt", "")
-    return isinstance(query, str) and query.lstrip().startswith(HARNESS_SYNTHETIC_PROMPT_PREFIXES)
+    return prompt_text(payload).lstrip().startswith(HARNESS_SYNTHETIC_PROMPT_PREFIXES)
 
 
 def atomic(path, data):

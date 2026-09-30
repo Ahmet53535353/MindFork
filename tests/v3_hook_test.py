@@ -780,6 +780,10 @@ class HookInstallerTest(unittest.TestCase):
         self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'plain text', 'origin': {'kind': 'coordinator'}}))
         self.assertFalse(self.hook.is_synthetic_prompt({'prompt': '<task-notification>', 'origin': {'kind': 'human'}}))
         self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula', 'origin': {'kind': ['peer']}}))
+        # Content-block prompts (#156) are judged by their text like a plain string.
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': [{'type': 'text', 'text': '<task-notification>\n<task-id>x</task-id>'}]}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': [{'type': 'text', 'text': 'Nebula calibration'}]}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': None}))
         self.seed()
         resp = self.lifecycle('UserPromptSubmit', 'channel-sess', 'claude', prompt='Nebula calibration',
                               origin={'kind': 'channel', 'server': 'telegram'})
