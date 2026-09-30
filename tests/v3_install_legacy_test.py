@@ -1,5 +1,6 @@
 """A vault whose state manifest is gone must still reinstall, and a customized legacy runner
 must be retirable through one named path instead of a blanket override."""
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -16,6 +17,29 @@ SKILLS = ('beyin', 'beyin-doktor', 'beyin-guncelle')
 ROOTS = ('.agents', '.claude')
 CUSTOM_RUNNER = b'# kullanicinin kendi flush surumu\nprint("synthetic customized legacy runner")\n'
 CUSTOM_HOOK = b'#!/bin/sh\n# kullanicinin kendi session-end kancasi\nexit 0\n'
+
+
+# Digests of the V2 hooks every V3 release retires. The installer recognizes an untouched V2
+# hook only by these bytes, so editing template/.claude/hooks turns every stock V2 vault into
+# "Customized legacy runner requires review" (#155). Fix the V3 engine instead.
+RELEASED_V2_HOOKS = {
+    'session-start.sh': '92dd2ce61777cc80034894fc8e0e053cebcec3bfc3c2455e5c1783b7bbae4088',
+    'session-start.ps1': 'c90f93b3bd21deae6289504646b56b0aeb91a5ba38401b8188053d73eb1edcee',
+    'session-end.sh': '3f079c8b64a907fc81b58187d32317b1db182e14190d600498d6cd48b1fbb92a',
+    'session-end.ps1': '8fbf8f92572d01eb5b71582ae4e05df392c0aa69e60cfc57d5f3686c5251471c',
+    'pre-compact.sh': '19e39f72f431203374fe3f26b94c4ceae0f031949617d8a5bfdcb9b93964ffd8',
+    'pre-compact.ps1': '1af3b730efbe4148444cf9e6ea0421ca03b49d8588a43c7ed1760c1c5712c835',
+    'prompt-counter.sh': '3494e2a7282c0278372496c08a51c0e605879d16146ffe184a71e218721a40c0',
+    'prompt-counter.ps1': 'bcb6375090dcbf716c62e0232f61772a69d83ced289ad5ed7d37126246237cde',
+}
+
+
+class ReleasedLegacyHooksTest(unittest.TestCase):
+    def test_legacy_hook_templates_keep_their_released_bytes(self):
+        for name, expected in RELEASED_V2_HOOKS.items():
+            with self.subTest(name=name):
+                data = (ROOT / 'template/.claude/hooks' / name).read_bytes()
+                self.assertEqual(hashlib.sha256(data).hexdigest(), expected)
 
 
 class InstallLegacyExemptionTest(unittest.TestCase):

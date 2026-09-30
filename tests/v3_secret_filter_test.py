@@ -69,6 +69,68 @@ class SecretFilterTest(unittest.TestCase):
         clean = 'Temiz bir Turkce ve English sentence; anahtar degeri icermiyor.'
         self.assertEqual(redact(clean, self.state), (clean, 0))
 
+    def test_provider_token_formats_are_redacted(self):
+        """#151: provider formats the dashed sk- pattern never saw. Repeated characters
+        keep every fixture structurally valid and impossible as a real credential."""
+        values = [
+            'sk_live_' + '1'*24,
+            'sk_test_' + '2'*24,
+            'rk_live_' + '3'*24,
+            'xoxb-' + '3'*12 + '-' + '4'*13 + '-' + 'a'*24,
+            'xoxp-' + '3'*12 + '-' + '4'*12 + '-' + '5'*12 + '-' + 'a'*24,
+            'xapp-1-' + 'A'*11 + '-' + '6'*13 + '-' + 'b'*64,
+            'AIza' + 'C'*35,
+            'AIza' + 'C'*33 + '-_',
+            'npm_' + 'D'*36,
+            'SG.' + 'E'*22 + '.' + 'F'*43,
+            'eyJhbGciOiJIUzI1NiJ9.' + 'G'*24 + '.' + 'H'*24,
+            'eyJhbGciOiJSU0EtT0FFUCJ9.' + 'I'*20 + '.' + 'J'*16 + '.' + 'K'*30 + '.' + 'L'*22,
+            'M' + 'T'*25 + '.' + 'G'*6 + '.' + 'x'*38,
+            'N' + 'z'*23 + '.' + 'Y'*6 + '.' + 'q'*27,
+        ]
+        for value in values:
+            with self.subTest(value=value[:12]):
+                for text in (value, f'Anahtar: {value} (sentetik).', f'"{value}"', f'key={value}&x=1'):
+                    filtered, count = redact(text, self.state)
+                    self.assertGreaterEqual(count, 1)
+                    self.assertNotIn(value, filtered)
+                    self.assertNotIn(value[8:], filtered)
+
+    def test_provider_patterns_leave_ordinary_text_and_identifiers_alone(self):
+        png = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+               'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+        clean = [
+            'Bugün Şifre ekranını düzelttik; Müşteri Arşiv klasörü yerinde kaldı.',
+            'We shipped the release notes and moved the sk_live rotation doc to the wiki.',
+            'commit 1f0e9d3c2b4a5968778695a4b3c2d1e0f9a8b7c6 fixed the updater',
+            'id 123e4567-e89b-12d3-a456-426614174000 and 00000000-0000-0000-0000-000000000000',
+            png,
+            'eyJhbGciOiJIUzI1NiJ9 alone is only a header, not a token',
+            '[Kurulum rehberi](https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/INSTALL.md#windows-kurulumu)',
+            '![diagram](assets/Mxxxxxxxxxxxxxxxxxxxxxxxxx.abcdef.png)',
+            'com.Mycompanyinternalservicesxx.abcdef.somethingveryverylongidentifier.Main',
+            'npm_config_registry=https://registry.npmjs.org/ and npm_package_version',
+            'task_live_rotation_helper_function and desk_test_fixture_loader_value',
+            'xoxb- tokens are Slack bot tokens; AIza keys belong to Google; SG. keys to SendGrid.',
+            'MNOPQRSTUVWXYZabcdefghijkl.mnopqr is a sentence fragment, not a token.',
+        ]
+        for text in clean:
+            with self.subTest(text=text[:30]):
+                self.assertEqual(redact(text, self.state), (text, 0))
+
+    def test_enabled_filter_keeps_a_stripe_key_out_of_receipt_and_index(self):
+        """#151 end to end: the key reached both the receipt file and memory.sqlite3."""
+        save(self.vault, {'secret_filter': True})
+        reference = self.vault/'reference.md'; reference.write_text('Synthetic reference.\n')
+        self.engine.sync()
+        key = 'sk_live_' + '1'*24
+        result = self.engine.receipt('stripe-event', 'Rotated '+key+' today.', ['reference.md'], 'codex')
+        self.assertGreaterEqual(result['redacted'], 1)
+        self.engine.sync()
+        self.assertNotIn(key, (self.vault/result['source']).read_text(encoding='utf-8'))
+        for database in self.state.rglob('*.sqlite3*'):
+            self.assertNotIn(key.encode(), database.read_bytes(), database.name)
+
     def test_custom_state_literal_is_redacted_and_never_written_to_health(self):
         save(self.vault, {'secret_filter': True})
         self.state.mkdir(parents=True, exist_ok=True)

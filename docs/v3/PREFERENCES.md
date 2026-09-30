@@ -20,6 +20,22 @@ dosyası hiçbir ayarı kaydettirmez. Sınır aşılınca oturum başındaki uya
 ve kayıpsız `companion-compact` komutu [companion incelemesinde](COMPANION-PARITY.md)
 anlatılır.
 
+## Oturum başı hafıza bağlamı
+
+Oturum başındaki hafıza bağlamı (ve "nerede kaldık" gibi süreklilik soruları) `Core`, `Kurallar`,
+`Last-Session`, `Threads` ve `Journal` dosyalarını birlikte taşır. Yalnız iki handoff dosyasının
+sınırları 3.000 + 8.000 karakter olduğundan 12.000 tavanı dar kalabilir.
+`python3 beyin.py preferences --companion-context-chars 24000` bu açılış bağlamına 1.000 ile
+24.000 arasında ayrı bir bütçe verir; `0` yeniden `context_chars` değerini kullanır. Diğer
+turlardaki bağlam `context_chars` ile sınırlı kalır. Ayar vault tercih dosyasında değil,
+runtime klasöründeki `companion-context.json` dosyasında tutulur: eski sürümler tercih
+dosyasındaki bilinmeyen alanı ya da aralık dışı değeri reddettiği için rollback güvenli
+kalır. Bozuk dosya açılışı `context_chars` sınırına döndürür ve kendiliğinden ezilmez.
+
+Açılışta hafıza dosyaları kırpılıyorsa sorgusuz seçilen ilgisiz bir not eklenmez; kalan
+bütçe kırpılan dosyalara döner. Dosyalar tam sığıyorsa en fazla 1.500 karakterlik bir
+güncel not eklenebilir.
+
 ## Opt-in sır süzgeci
 
 `python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create ve task-create gövdesi, bu komutların ve task-update değişikliklerinin `title`, `next_action`, `completion_criterion` ve `facts` alanlarında yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.

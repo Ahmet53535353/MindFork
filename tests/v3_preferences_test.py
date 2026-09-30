@@ -57,11 +57,56 @@ class PreferencesTest(unittest.TestCase):
         prefs.save(self.vault, {}, 'economical')
         before = (self.vault / '.beyin-preferences.json').read_bytes()
         for changes in ({'interval_minutes': -1}, {'interval_minutes': True}, {'context_chars': 999},
-                        {'context_mode': 'unknown'}, {'unknown': 1}, {'auto_sync': 'false'},
-                        {'secret_filter': 'true'}):
+                        {'context_chars': 12001}, {'context_mode': 'unknown'}, {'unknown': 1},
+                        {'auto_sync': 'false'}, {'secret_filter': 'true'}):
             with self.assertRaises(ValueError):
                 prefs.save(self.vault, changes)
         self.assertEqual(before, (self.vault / '.beyin-preferences.json').read_bytes())
+
+    def test_larger_opening_budget_is_machine_local_and_rollback_safe(self):
+        # #140: the opening may use up to 24000 characters, but the vault preference range
+        # stays 1000..12000. An older release validates .beyin-preferences.json and would
+        # reject a wider value in every hook, in doctor and in preferences itself.
+        directory = self.vault / '🔮 850-Companion'
+        directory.mkdir()
+        (directory / 'Core.md').write_text('# Kimlik\nIDENTITY_CANARY\n', encoding='utf-8')
+        threads = ('# Threads\n## Active Threads\n' +
+                   ''.join(f'- Konu {i}: açık iş maddesi ve bir sonraki adım burada duruyor.\n' for i in range(220)) +
+                   '- THREADS_TAIL_CANARY\n## Closed Threads\n')
+        self.assertGreater(len(threads), 13000)
+        (directory / 'Threads.md').write_text(threads, encoding='utf-8')
+        self.cli('sync')
+        self.cli('preferences', '--context-mode', 'session', '--context-chars', '12000')
+        short = self.hook('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertLessEqual(len(short), 12000)
+        self.assertNotIn('THREADS_TAIL_CANARY', short)
+        saved = self.cli('preferences', '--companion-context-chars', '24000')
+        self.assertEqual(saved['companion_context'], {'context_chars': 24000})
+        self.assertEqual(json.loads((self.state / 'companion-context.json').read_text(encoding='utf-8')),
+                         {'schema': 1, 'context_chars': 24000})
+        stored = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
+        self.assertEqual(set(stored), set(prefs.PROFILES['normal']), 'no new vault preference field')
+        self.assertEqual(stored['context_chars'], 12000, 'vault range unchanged for older releases')
+        text = self.hook('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertGreater(len(text), 12000)
+        self.assertLessEqual(len(text), 24000)
+        self.assertIn('THREADS_TAIL_CANARY', text)
+        before = (self.state / 'companion-context.json').read_bytes()
+        for value in ('999', '24001'):
+            r = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                '--state', str(self.state), 'preferences', '--context-chars', '3000',
+                                '--companion-context-chars', value],
+                               capture_output=True, text=True, encoding='utf-8', timeout=20)
+            self.assertNotEqual(r.returncode, 0)
+        self.assertEqual((self.state / 'companion-context.json').read_bytes(), before)
+        self.assertEqual(json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))['context_chars'],
+                         12000, 'a rejected opening budget saves nothing else')
+        # A damaged file falls back to context_chars; the opening is never lost.
+        (self.state / 'companion-context.json').write_text('{broken', encoding='utf-8')
+        fallback = self.hook('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertLessEqual(len(fallback), 12000)
+        self.assertIn('IDENTITY_CANARY', fallback)
+        self.assertIn('companion_context_notice', self.cli('preferences'))
 
     def test_manual_hooks_do_not_enqueue_or_inject_across_clients(self):
         prefs.save(self.vault, {}, 'manual')

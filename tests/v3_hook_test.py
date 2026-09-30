@@ -227,6 +227,26 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn(summary, context)
         self.assertTrue(any(marker in context.casefold() for marker in ['historical', 'history', 'geçmiş', 'gecmis']))
 
+    def test_receipt_context_truncation_marker_when_exceeding_budget(self):
+        receipts_dir = self.vault / 'receipts'
+        receipts_dir.mkdir(parents=True, exist_ok=True)
+        short_body = '---\n{"kind": "receipt", "event_id": "short"}\n---\nShort summary.\n'
+        receipt_file = receipts_dir / 'short.md'
+        receipt_file.write_text(short_body, encoding='utf-8')
+        context = self.hook.receipt_context(str(self.vault))
+        self.assertIn(short_body, context)
+        self.assertNotIn('[truncated: read source]', context)
+
+        long_body = '---\n{"kind": "receipt", "event_id": "long", "refs": [' + ', '.join(f'"ref_{i:03d}.md"' for i in range(100)) + ']}\n---\nLong summary.\n'
+        self.assertGreater(len(long_body), 1200)
+        time.sleep(0.01)
+        receipt_file.write_text(long_body, encoding='utf-8')
+        context = self.hook.receipt_context(str(self.vault))
+        self.assertTrue(context.endswith('\n[truncated: read source]\n'))
+        header = '\nLatest receipt (historical agent claim, not independently verified):\n'
+        body = context[len(header):]
+        self.assertEqual(len(body), 1200)
+
     def test_stop_stdin_queues_and_explicit_worker_drains(self):
         self.seed()
         response = self.invoke(dict(self.payload, hook_event_name='Stop'), 'claude')
@@ -271,6 +291,16 @@ class HookInstallerTest(unittest.TestCase):
         self.lifecycle('PostToolUse', 'no-session', 'claude')
         engine.receipt('no-session-1', 'Edited the task note.', ['notes/task.md'], 'claude')
         self.assertEqual(self.lifecycle('Stop', 'no-session', 'claude')['decision'], 'block')
+
+    def test_user_prompt_submit_accepts_null_and_block_list_prompts(self):
+        self.seed()
+        for index, prompt in enumerate((None, [{'type': 'text', 'text': 'Nebula calibration owner'}], 42)):
+            output = self.lifecycle('UserPromptSubmit', 'non-string-' + str(index), 'claude', prompt=prompt)
+            self.assertFalse((self.state / 'hook-error.json').exists(), prompt)
+            self.assertNotIn('V3 source sync failed', json.dumps(output), prompt)
+        self.assertEqual(self.hook.prompt_text({'prompt': ['a', {'type': 'text', 'text': 'b'}, {'type': 'image'}]}), 'a\nb')
+        self.assertEqual(self.hook.prompt_text({'prompt': None}), '')
+        self.assertEqual(self.hook.prompt_text(None), '')
 
     def test_stop_receipt_reminder_session_closes_the_gap(self):
         engine = self.seed()

@@ -150,6 +150,67 @@ class AdvisorTest(unittest.TestCase):
         self.assertTrue(result['jev']['degraded'])
         self.assertEqual(result['jev']['scores'], {})
 
+    def long_pool(self, count=advisor.MANUAL_POOL):
+        # Ordinary notes longer than the 800-character excerpt: a full manual pool of these
+        # is over the default 24,000-character request budget in one request.
+        for i in range(count):
+            text = f'Release planning note {i:02d}. ' + f'Checklist item {i} covers staging and rollback steps. ' * 30
+            path = self.vault / f'n{i:02d}.md'
+            path.write_text(text, encoding='utf-8')
+            self.store.ingest(dict(id=f'n{i:02d}', text=text, source=path.name, project='quartz'))
+
+    def scoring(self, favourite, fail_on=None):
+        def transport(url, body, key, timeout):
+            ids = [c['id'] for c in body['state']['candidates']]
+            self.calls.append(dict(ids=ids, chars=len(json.dumps(body, ensure_ascii=False))))
+            if fail_on in ids:
+                raise TimeoutError('synthetic')
+            return {'answers': {q: {'type': 'score', 'score': 2 if ids[int(q.split('_c')[1])] == favourite else 1}
+                                for q in body['questions']}}
+        return transport
+
+    def test_large_pool_is_split_into_packages_that_fit(self):
+        self.long_pool()
+        self.config('on')
+        result = advisor.advise_context(self.store, 'release planning', project='quartz',
+                                        transport=self.scoring('n15'))
+        jev = result['jev']
+        self.assertFalse(jev['degraded'], jev['diagnostics'])
+        self.assertNotIn('budget_exceeded', jev['diagnostics'])
+        self.assertTrue(2 <= len(self.calls) <= 3, len(self.calls))
+        self.assertEqual(jev['packages'], len(self.calls))
+        self.assertEqual(jev['http_requests'], len(self.calls))
+        self.assertTrue(all(call['chars'] <= 24000 for call in self.calls))
+        sent = [ident for call in self.calls for ident in call['ids']]
+        self.assertEqual(len(sent), advisor.MANUAL_POOL)
+        self.assertEqual(len(set(sent)), len(sent))
+        self.assertEqual(set(jev['scores']), set(sent))
+        self.assertEqual(result['records'][0]['id'], 'n15')
+
+    def test_failed_package_keeps_local_order_without_retry(self):
+        self.long_pool()
+        self.config('on')
+        local = self.store.retrieve('release planning', project='quartz')
+        result = advisor.advise_context(self.store, 'release planning', project='quartz',
+                                        transport=self.scoring('n15', fail_on='n15'))
+        self.assertTrue(result['jev']['degraded'])
+        self.assertEqual(result['jev']['scores'], {})
+        self.assertEqual(result['records'], local['records'])
+        self.assertEqual(len(self.calls), result['jev']['packages'])
+        self.assertEqual(result['jev']['http_requests'], len(self.calls))
+        self.assertEqual(sum(call['ids'].count('n15') for call in self.calls), 1)
+
+    def test_pool_needing_more_than_three_packages_makes_no_call(self):
+        self.long_pool()
+        (self.store.state_dir / 'jev.json').write_text(json.dumps({'mode': 'on', 'max_input_chars': 6000}), encoding='utf-8')
+        local = self.store.retrieve('release planning', project='quartz')
+        result = advisor.advise_context(self.store, 'release planning', project='quartz',
+                                        transport=self.scoring('n15'))
+        self.assertTrue(result['jev']['degraded'])
+        self.assertIn('budget_exceeded', result['jev']['diagnostics'])
+        self.assertFalse(self.calls)
+        self.assertEqual(result['records'], local['records'])
+
 
 class InstalledAdvisorTest(unittest.TestCase):
     def test_installed_cli_keeps_local_default_and_reviews_without_writing_source(self):
