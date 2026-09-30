@@ -19,6 +19,22 @@ BUILTIN_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}"),
+    # Provider formats with a fixed, distinctive prefix. Stripe keys use underscores,
+    # so the dashed sk- pattern above never sees them (#151).
+    re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,255}\b"),
+    re.compile(r"\bxox[abeoprs]-[0-9]+-[A-Za-z0-9-]{8,255}\b"),
+    re.compile(r"\bxapp-[0-9]+-[A-Za-z0-9-]{8,255}\b"),
+    re.compile(r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])"),
+    re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
+    re.compile(r"(?<![A-Za-z0-9_.-])SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])"),
+    # A JWT header is base64url JSON, so it always opens with eyJ; three dot-separated
+    # base64url segments are required (five for an encrypted JWE). Plain base64
+    # (images, blobs) has no dots.
+    re.compile(r"(?<![A-Za-z0-9_.-])eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,}){2}(?:\.[A-Za-z0-9_-]+){0,2}(?![A-Za-z0-9_-])"),
+    # Discord bot token: base64 of a numeric user id (so it starts with M, N or O),
+    # a 6 character timestamp and an HMAC of at least 27 characters. Like SendGrid it
+    # must stand alone: a segment of a longer dotted name is not a token.
+    re.compile(r"(?<![A-Za-z0-9_.-])[MNO][A-Za-z0-9_-]{22,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,40}(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])"),
 )
 
 

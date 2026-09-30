@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 
 NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
 FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
@@ -208,11 +209,27 @@ def hygiene_notice(report):
             'afterwards rewrite in place, never append.\n')
 
 
+# Turkish letters that NFKD does not decompose; the rest (ş, ü, ç, â, ...) lose their marks there.
+FOLD = str.maketrans('ıİ', 'iI')
+# "We are back, what were we doing" in its common first-person forms, matched on folded
+# text so a keyboard without Turkish letters (donduk, yapmistik) reads the same (#151).
+RETURNING = re.compile(r'\b(?:ne(?:ler)? (?:yaptik|yapmistik|yapiyorduk)|nere?deydik|kaldigimiz (?:yer|konu)'
+                       r'|son durum(?:umuz)? (?:ne|nedir|neydi)\b|ne olmustu|(?:tatil|izin)den don(?:dum|duk)\b'
+                       r'|kisilig|what (?:did|have) we (?:do|done|work(?:ed)? on)|what were we (?:doing|working on)'
+                       r'|where were we|catch me up)')
+
+
+def fold(text):
+    """Lowercase ASCII-ish form for matching: ı/İ become i, combining marks drop."""
+    decomposed = unicodedata.normalize('NFKD', text.translate(FOLD))
+    return ''.join(c for c in decomposed if not unicodedata.combining(c)).lower()
+
+
 def relevant(query):
     # 'nerede kal' only as a first-person continuity question (#145): kargo nerede kaldı is not.
     # (?!l[ae]r) keeps kaldıkları/kaldiklarini (theirs) out; re.I already folds ı/i/I/İ, only
     # ş/s and ğ/g need ASCII spellings.
-    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|ner(?:e)?de kal(?:dık|dıydık|mıştık|dığım|dım|dıydım|mıştım|mışız|mışım|dıysak|dıysam|dik|diydik|mistik|digim|dim|diydim|mistim|misiz|misim|diysak|diysam)(?!l[ae]r)|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query))
+    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|ner(?:e)?de kal(?:dık|dıydık|mıştık|dığım|dım|dıydım|mıştım|mışız|mışım|dıysak|dıysam|dik|diydik|mistik|digim|dim|diydim|mistim|misiz|misim|diysak|diysam)(?!l[ae]r)|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query)) or bool(RETURNING.search(fold(query)))
 
 
 def stamp(header):
@@ -263,6 +280,8 @@ def ends(text, budget):
     The first marker is sized with the whole length, so the final one, counting only
     what was really dropped, can never be longer and the result stays inside budget.
     """
+    if len(text) <= budget:
+        return text
     gap = f'\n[truncated: {len(text)} characters omitted here; read source]\n'
     keep = budget - len(gap)
     if keep < 80:
@@ -273,7 +292,19 @@ def ends(text, budget):
     head = head[:head.rfind('\n') + 1] or head
     closing = text[len(text) - (keep - len(head)):]
     closing = closing[closing.find('\n') + 1:] or closing
-    return head + f'\n[truncated: {len(text) - len(head) - len(closing)} characters omitted here; read source]\n' + closing
+    # Snapping to line boundaries gives characters back. Spend them on whole lines,
+    # alternating between the two ends, never letting the ends meet (#151).
+    start = len(text) - len(closing)
+    grown = True
+    while grown:
+        grown = False
+        cut = text.rfind('\n', len(head), start - 1) + 1 or len(head)
+        if cut < start and len(head) + len(closing) + start - cut <= keep:
+            closing, start, grown = text[cut:], cut, True
+        end = text.find('\n', len(head), start) + 1
+        if end and len(closing) + end <= keep and end < start:
+            head, grown = text[:end], True
+    return head + f'\n[truncated: {start - len(head)} characters omitted here; read source]\n' + closing
 
 
 def clip(text, budget, tail=False, both=False):
