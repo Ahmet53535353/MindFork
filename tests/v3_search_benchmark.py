@@ -46,11 +46,11 @@ class SearchBenchmarkTest(unittest.TestCase):
         self.assertGreaterEqual(non_strict["recall_at_5"], 0.95, "Baseline non-strict Recall@5 drop")
         self.assertLessEqual(non_strict["median_latency_ms"], 150.0, "Latency ceiling exceeded")
 
-        # Strict search contract: single terms are filtered by design (STRICT_MIN_SHARED=2)
+        # Strict search: only floors, never ceilings. Single-term queries score 0 today
+        # (STRICT_MIN_SHARED=2); that is reported as a measured gap, not pinned, so a
+        # correct future improvement cannot fail this test.
         strict = report["modes"]["strict"]
-        single_term_stats = strict["categories"]["single_term_strict"]
-        self.assertEqual(single_term_stats["recall_at_1"], 0.0, "Strict mode must drop single-term queries (< 2 shared)")
-        self.assertEqual(single_term_stats["mrr"], 0.0)
+        self.assertGreaterEqual(strict["recall_at_1"], 0.75, "Baseline strict Recall@1 drop")
 
         # Baseline control queries must pass at 100%
         self.assertEqual(strict["categories"]["clean_baseline"]["recall_at_1"], 1.0)
