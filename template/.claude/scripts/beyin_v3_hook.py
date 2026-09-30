@@ -25,6 +25,38 @@ KNOWLEDGE_REMINDER = (
     "Distill lasting learnings into knowledge/concepts/<name>.md (or update an existing concept, then sync); "
     "if no permanent note is required, state that in one sentence to proceed."
 )
+HARNESS_SYNTHETIC_PROMPT_PREFIXES = (
+    "<task-notification>",
+    "Another Claude session sent a message:",
+    "<agent-message",
+    "<local-command-caveat>",
+    "<command-name>",
+    "<local-command-stdout>",
+)
+# Claude Code turn origins that no human typed. Its hook payload carries no origin field today (2.1.285), so
+# the prefixes above do the work; if one appears, other kinds (channel, bridge, remote, ...) can be a person
+# typing elsewhere, so only these known kinds skip retrieval and anything else falls back to the prefix check.
+SYNTHETIC_ORIGIN_KINDS = frozenset({"task-notification", "peer", "coordinator"})
+
+
+def is_synthetic_prompt(payload):
+    """Detect automated, subagent, or notification turns in UserPromptSubmit.
+
+    Prevents expensive search retrieval and irrelevant context injection on
+    non-human turns (Claude Code subagent completions, peer agent messages,
+    background task notifications).
+    """
+    if not isinstance(payload, dict):
+        return False
+    if os.environ.get("BEYIN_V3_FILTER_HARNESS_TURNS") == "0":
+        return False
+    origin = payload.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else origin
+    if kind == "human":
+        return False
+    if isinstance(kind, str) and kind in SYNTHETIC_ORIGIN_KINDS:
+        return True
+    return prompt_text(payload).lstrip().startswith(HARNESS_SYNTHETIC_PROMPT_PREFIXES)
 
 
 def atomic(path, data):
@@ -386,7 +418,7 @@ def main():
         # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
         reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event, vault=vault)
         inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
-        if not inject or args.metadata_only:
+        if not inject or args.metadata_only or (event == 'UserPromptSubmit' and is_synthetic_prompt(payload)):
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))
             return
         if event in ("SessionStart", "UserPromptSubmit"):

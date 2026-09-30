@@ -704,6 +704,91 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('Makaleler/uzun.md', response['hookSpecificOutput']['additionalContext'])
         self.assertIn('Makaleler/uzun.md', (self.state / 'touch-log.tsv').read_text(encoding='utf-8'))
 
+    def test_is_synthetic_prompt_detection(self):
+        # Prefix heuristics
+        for prefix in (
+            '<task-notification> subagent finished',
+            '   <task-notification> with leading whitespace',
+            'Another Claude session sent a message: ping',
+            '<agent-message id="1">result</agent-message>',
+            '<local-command-caveat> warning',
+            '<command-name>git status</command-name>',
+            '<local-command-stdout> command output',
+        ):
+            with self.subTest(prefix=prefix):
+                self.assertTrue(self.hook.is_synthetic_prompt({'prompt': prefix}))
+
+        # Origin metadata checks
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': {'kind': 'task-notification'}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': {'kind': 'peer'}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': 'task-notification'}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': {'kind': 'human'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': 'human'}))
+
+        # Human & edge case inputs
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Lütfen kodları incele'}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': ''}))
+        self.assertFalse(self.hook.is_synthetic_prompt({}))
+        self.assertFalse(self.hook.is_synthetic_prompt(None))
+
+        # Opt-out environment variable
+        with patch.dict(os.environ, {'BEYIN_V3_FILTER_HARNESS_TURNS': '0'}):
+            self.assertFalse(self.hook.is_synthetic_prompt({'prompt': '<task-notification> test'}))
+
+    def test_user_prompt_submit_skips_retrieval_on_synthetic_prompts(self):
+        self.seed()
+        before = len(list((self.state / 'hook-queue').glob('*.json')))
+
+        # 1. Synthetic prefix returns {} immediately, but queues metadata
+        resp_prefix = self.lifecycle('UserPromptSubmit', 'synth-sess-1', 'claude',
+                                     prompt='<task-notification> subagent done')
+        self.assertEqual(resp_prefix, {})
+        queue_files = list((self.state / 'hook-queue').glob('*.json'))
+        self.assertEqual(len(queue_files), before + 1)
+
+        # 2. Synthetic origin returns {} even with keywords matching seeded note
+        resp_origin = self.lifecycle('UserPromptSubmit', 'synth-sess-2', 'claude',
+                                     prompt='Nebula calibration',
+                                     origin={'kind': 'task-notification'})
+        self.assertEqual(resp_origin, {})
+        self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 2)
+
+        # 3. Genuine human query delivers search context
+        resp_human = self.lifecycle('UserPromptSubmit', 'human-sess', 'claude',
+                                    prompt='Nebula calibration')
+        self.assertIn('hookSpecificOutput', resp_human)
+        self.assertIn('Synthetic Reviewer', resp_human['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 3)
+
+    def test_user_prompt_submit_synthetic_filter_honours_opt_out_env(self):
+        self.seed()
+        self.env['BEYIN_V3_FILTER_HARNESS_TURNS'] = '0'
+        resp = self.lifecycle('UserPromptSubmit', 'optout-sess', 'claude',
+                              prompt='<task-notification> Nebula calibration')
+        self.assertIn('hookSpecificOutput', resp)
+        self.assertIn('Synthetic Reviewer', resp['hookSpecificOutput']['additionalContext'])
+
+    def test_unknown_origin_kinds_fall_back_to_the_prompt_prefix(self):
+        # Claude Code also tags turns a person typed elsewhere (channel, bridge, remote); only
+        # the known non-human kinds skip retrieval, anything else is judged by the prompt text.
+        for kind in ('channel', 'bridge', 'remote', 'cli', ''):
+            with self.subTest(kind=kind):
+                self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula calibration', 'origin': {'kind': kind}}))
+                self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula calibration', 'origin': kind}))
+                self.assertTrue(self.hook.is_synthetic_prompt({'prompt': '<task-notification>\n<task-id>x</task-id>',
+                                                               'origin': {'kind': kind}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'plain text', 'origin': {'kind': 'coordinator'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': '<task-notification>', 'origin': {'kind': 'human'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula', 'origin': {'kind': ['peer']}}))
+        # Content-block prompts (#156) are judged by their text like a plain string.
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': [{'type': 'text', 'text': '<task-notification>\n<task-id>x</task-id>'}]}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': [{'type': 'text', 'text': 'Nebula calibration'}]}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': None}))
+        self.seed()
+        resp = self.lifecycle('UserPromptSubmit', 'channel-sess', 'claude', prompt='Nebula calibration',
+                              origin={'kind': 'channel', 'server': 'telegram'})
+        self.assertIn('Synthetic Reviewer', resp['hookSpecificOutput']['additionalContext'])
+
 
 if __name__ == '__main__':
     unittest.main()
