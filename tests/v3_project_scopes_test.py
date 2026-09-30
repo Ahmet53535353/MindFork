@@ -87,6 +87,9 @@ class ProjectScopesTest(unittest.TestCase):
     def test_folder_match_stops_at_a_path_boundary(self):
         self.note('sibling', 'Projeler/Oyun Kanalları Eski/Plan.md')
         self.note('root', 'Oyun.md')
+        # Both mapped folders exist, so only the path boundary keeps them apart.
+        (self.vault / GAME).mkdir(parents=True)
+        (self.vault / 'Oyun').mkdir()
         self.scopes({'folders': {GAME: 'oyun', 'Oyun': 'kok'}})
         self.assertEqual(self.ids('oyun'), [])
         self.assertEqual(self.ids('kok'), [])
@@ -96,6 +99,32 @@ class ProjectScopesTest(unittest.TestCase):
         decomposed = unicodedata.normalize('NFD', GAME).replace('/', '\\') + '/'
         self.scopes({'folders': {decomposed: 'oyun'}})
         self.assertEqual(self.ids('oyun'), ['game'])
+
+    def test_folder_case_and_decomposed_disk_names_still_claim_their_notes(self):
+        # macOS keeps names as typed (often NFD) and matches case-insensitively; a folder
+        # typed in another case must not leave its notes in the shared scope.
+        client = unicodedata.normalize('NFD', 'Projeler/Müşteri X')
+        self.note('client', client + '/Teklif.md')
+        self.note('rules', 'Companion/Kurallar.md')
+        self.scopes({'folders': {'projeler/müşteri x': 'musteri'}, 'shared_unscoped': True})
+        self.assertEqual(self.ids('musteri'), ['client', 'rules'])
+        self.assertEqual(self.ids('oyun'), ['rules'])
+
+    def test_missing_or_renamed_folder_fails_closed(self):
+        # A renamed project folder matches nothing; with shared_unscoped its notes would
+        # otherwise join every other project's scope.
+        self.note('archive', 'Projeler/Arşiv 2025/Plan.md')
+        self.note('game', GAME + '/Plan.md')
+        for folders in ({ARCHIVE: 'arsiv', GAME: 'oyun'}, {'Projeler/Arsiv 2025': 'arsiv'}):
+            with self.subTest(folders=folders):
+                self.scopes({'folders': folders, 'shared_unscoped': True})
+                with self.assertRaisesRegex(ValueError, 'not found'):
+                    self.store._eligible('internal', 'oyun')
+        self.scopes({'folders': {GAME: 'oyun', 'projeler/oyun kanalları/': 'oyun'}})
+        self.assertEqual(self.ids('oyun'), ['game'])
+        self.scopes({'folders': {GAME: 'oyun', 'projeler/oyun kanalları': 'arsiv'}})
+        with self.assertRaisesRegex(ValueError, 'assigned twice'):
+            self.store._eligible('internal', 'oyun')
 
     def test_no_project_path_ignores_the_file_even_when_invalid(self):
         self.vault_notes()

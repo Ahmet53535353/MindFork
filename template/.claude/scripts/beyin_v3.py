@@ -7,6 +7,7 @@ import functools
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -60,6 +61,33 @@ def _scope_path(value):
     return folder
 
 
+def _scope_key(value):
+    # macOS and Windows vaults are case-insensitive and macOS may store names decomposed
+    # (NFD): a folder typed as "projeler/arşiv" must still claim "Projeler/Arşiv", or its
+    # notes fall through to the shared scope of every project.
+    return unicodedata.normalize("NFC", value.replace("\\", "/")).casefold()
+
+
+def _scope_folder_exists(vault_root, folder):
+    """Every configured folder must name a real vault folder under the matching rule.
+
+    A mistyped or renamed folder would otherwise match nothing, and with shared_unscoped
+    its notes would silently join every other project's scope.
+    """
+    current = Path(vault_root)
+    for part in folder.split("/"):
+        key = _scope_key(part)
+        try:
+            with os.scandir(current) as entries:
+                match = next((entry.name for entry in entries if entry.is_dir() and _scope_key(entry.name) == key), None)
+        except OSError:
+            return False
+        if match is None:
+            return False
+        current = current / match
+    return True
+
+
 def read_project_scopes(vault_root):
     """None when the vault has no scope file: every gate keeps its exact-field behavior.
 
@@ -87,9 +115,12 @@ def read_project_scopes(vault_root):
         if not isinstance(project, str) or not project.strip():
             raise ValueError("project scope names must be non-empty strings")
         folder = _scope_path(folder)
-        if mapped.get(folder, project) != project:
+        if not _scope_folder_exists(vault_root, folder):
+            raise ValueError("project scope folder not found in the vault: " + folder)
+        key = _scope_key(folder)
+        if mapped.get(key, project) != project:
             raise ValueError("project scope folder is assigned twice: " + folder)
-        mapped[folder] = project
+        mapped[key] = project
     # Longest folder first, so a nested folder can belong to a different project.
     return {"folders": sorted(mapped.items(), key=lambda item: -len(item[0])), "shared_unscoped": shared}
 
@@ -99,7 +130,7 @@ def record_scope(record, scopes):
     project = record.get("project")
     if isinstance(project, str) and project.strip():
         return project
-    source = unicodedata.normalize("NFC", str(record.get("source", "")))
+    source = _scope_key(str(record.get("source", "")))
     for folder, name in scopes["folders"]:
         if source.startswith(folder + "/"):
             return name

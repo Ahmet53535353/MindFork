@@ -80,10 +80,10 @@ Proje kapsamı varsayılan olarak kaydın kendi `project` alanıdır. Notların�
 }
 ```
 
-- `folders`: vault'a göreli klasör → proje. Kaydın boş olmayan kendi `project` alanı her zaman önce gelir; iç içe klasörlerde en uzun eşleşme kazanır. Eşleşme klasör sınırında durur (`Projeler/Oyun` klasörü `Projeler/Oyun Eski` içindekileri kapsamaz); yol yazımı Unicode NFC ve `/` ile karşılaştırılır.
+- `folders`: vault'a göreli klasör → proje. Kaydın boş olmayan kendi `project` alanı her zaman önce gelir; iç içe klasörlerde en uzun eşleşme kazanır. Eşleşme klasör sınırında durur (`Projeler/Oyun` klasörü `Projeler/Oyun Eski` içindekileri kapsamaz); yollar Unicode NFC, `/` ve büyük/küçük harf farkı gözetmeden karşılaştırılır (macOS ve Windows kasaları gibi). Yazılan her klasör kasada gerçekten bulunmalıdır: yanlış yazılmış ya da yeniden adlandırılmış bir klasör hiçbir notu eşlemez ve `shared_unscoped` açıkken o notlar her projeye ortak kayıt olarak girerdi; bu yüzden böyle bir dosya açık proje çağrısını durdurur.
 - `shared_unscoped`: `true` ise hiçbir projeye düşmeyen kayıtlar (kurallar, genel notlar) her açık proje sorgusunda ortak kayıt olarak kapsama girer. Başka bir projenin kaydı hiçbir durumda girmez. Varsayılan `false`.
 - Dosya yalnız açık proje verilen çağrılarda okunur. Proje göndermeyen her tur bağlamı ve dosyası olmayan kasalar eskisiyle birebir aynı çalışır. Görünürlük, güven, güncellik ve superseded kapıları kapsamın içinde de aynen uygulanır.
-- Geçersiz dosya (bozuk JSON, bilinmeyen anahtar, mutlak ya da `..` içeren yol, boş proje adı) açık proje çağrısını hata ile durdurur; kapsam sessizce genişlemez.
+- Geçersiz dosya (bozuk JSON, bilinmeyen anahtar, mutlak ya da `..` içeren yol, kasada bulunmayan klasör, boş proje adı) açık proje çağrısını hata ile durdurur; kapsam sessizce genişlemez. Proje klasörünü yeniden adlandırınca dosyayı da güncelleyin.
 - `shared_unscoped: true` açıkken dış proje köprüsünden yapılan `context --project` aramaları da ortak kayıtları görür; kişisel notlar ortak rafta kalacaksa `private` görünürlük kullanın.
 
 ## Kaydedilmemiş bilgi adayını inceleme
