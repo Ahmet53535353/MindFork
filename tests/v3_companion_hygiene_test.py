@@ -390,6 +390,17 @@ class CompactionPlanTest(unittest.TestCase):
         self.assertIn('AKŞAM', live)
         self.assertNotIn('SABAH', live)
 
+    def test_same_day_thread_updates_keep_the_bottom_one(self):
+        # The reproduction from #163: thread updates are appended, so the bottom one is newest.
+        text = ('# Threads\n\n## Active Threads\n### Thread: Volt\n**Status:** Active\n'
+                '2026-09-28 kontrol: ÜST hâlâ 0 testçi. ' + FILLER + '\n'
+                '2026-09-28: ORTA 8 testçi kayıtlı. ' + FILLER + '\n'
+                '**2026-09-28: ALT 12+ testçi, kapalı test başladı.**\n\n## Closed Threads\n')
+        result = self.plan(text, 'Threads.md', len(text) - 60)
+        self.assertIn('ALT 12+', result['live'])
+        self.assertNotIn('ÜST', result['live'])
+        self.assertIn('ÜST', result['archive'])
+
     def test_v2_session_headings_and_structured_handoff_blocks(self):
         text = ('# Last Session\n\n## Session: 2026-09-24 (Codex)\nYENİ\n### Açık kalanlar\n- test\n\n'
                 '## Session: 2026-09-20\nESKİ ' + FILLER * 4 + '\n\n## Previous Sessions\n(none yet)\n')

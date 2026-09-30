@@ -142,7 +142,11 @@ def plan(text, name, limit, pointer):
     order, protected = {}, set()
     for positions in groups.values():
         keys = [parsed[p]['key'] for p in positions]
-        newest_first = all(b <= a for a, b in zip(keys, keys[1:]))
+        rising = any(a < b for a, b in zip(keys, keys[1:]))
+        falling = any(a > b for a, b in zip(keys, keys[1:]))
+        # Same-day entries carry no order of their own, so the file's direction decides:
+        # Last-Session cards are newest-first, thread updates are appended at the bottom (#163).
+        newest_first = falling and not rising if rising or falling else name == 'Last-Session.md'
         for rank, p in enumerate(positions):
             order[p] = (parsed[p]['key'], -rank if newest_first else rank, p)
         protected.add(max(positions, key=order.get))
