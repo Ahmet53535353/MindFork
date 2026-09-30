@@ -214,6 +214,60 @@ class CompanionTest(unittest.TestCase):
         self.sync()
         self.assertNotIn('EXTERNAL_IDENTITY_CANARY', self.hook())
 
+    def test_relevant_continuity_query_patterns_and_exclusions(self):
+        scripts_dir = str(ROOT / 'template/.claude/scripts')
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from beyin_v3_companion import relevant
+        positives = [
+            "Nerede kaldık?",
+            "Nerede kalmıştık?",
+            "nerede kaldığımızı hatırlıyor musun?",
+            "Nerede kalmıştım?",
+            "Nerede kalmışız?",
+            "Kod incelemesinde nerede kaldım?",
+            "nerede kaldigimizi hatırlat",
+            "Nerede kaldik acaba?",
+            "nerede kalmistik",
+            "nerde kaldık",
+            "nerde kalmıştık",
+            "nerede kaldıydık",
+            "nerede kaldıydım",
+            "nerde kaldigimizi soyle",
+            "en son nerede kaldığım yeri göster",
+            "nerede kalmışım",
+            "nerede kaldıysak oradan devam edelim",
+            "NERDE KALMIŞTIK",
+            "NEREDE KALDIĞIMIZI SÖYLE",
+            "nerde kaldıgımızı hatırlat",
+            "ne yaptık",
+            "son oturum",
+            "beni hatırla",
+            "sen kimsin",
+            "where did we leave off",
+            "who are you",
+        ]
+        for query in positives:
+            self.assertTrue(relevant(query), f"Expected True for continuity query: {query}")
+
+        negatives = [
+            "Kargo nerede kaldı acaba, kontrol eder misin?",
+            "Bu ürün nerede kaldı, hâlâ gelmedi mi?",
+            "Siparişim nerede kalıyor?",
+            "Kargo nerede kalmış?",
+            "Paket nerede kalacak?",
+            "Bugün toplantı nerede?",
+            "Python'da liste nasıl sıralanır?",
+            "Kargonun nerede kaldığını kontrol eder misin?",
+            "Paketin nerede kaldığı belli değil",
+            "nerde kaldı bu kargo",
+            "Kargoların nerede kaldıklarını kontrol et",
+            "Paketlerin nerede kaldiklarini bul",
+            "Misafirler nerede kalacaklar?",
+        ]
+        for query in negatives:
+            self.assertFalse(relevant(query), f"Expected False for unrelated query: {query}")
+
 
 if __name__ == '__main__':
     unittest.main()

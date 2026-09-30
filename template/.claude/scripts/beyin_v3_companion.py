@@ -161,7 +161,10 @@ def hygiene_notice(report):
 
 
 def relevant(query):
-    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|nerede kal|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query))
+    # 'nerede kal' only as a first-person continuity question (#145): kargo nerede kaldı is not.
+    # (?!l[ae]r) keeps kaldıkları/kaldiklarini (theirs) out; re.I already folds ı/i/I/İ, only
+    # ş/s and ğ/g need ASCII spellings.
+    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|ner(?:e)?de kal(?:dık|dıydık|mıştık|dığım|dım|dıydım|mıştım|mışız|mışım|dıysak|dıysam|dik|diydik|mistik|digim|dim|diydim|mistim|misiz|misim|diysak|diysam)(?!l[ae]r)|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query))
 
 
 def stamp(header):
