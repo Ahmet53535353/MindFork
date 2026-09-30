@@ -42,6 +42,18 @@ def output_context(harness, event, text):
     return {"injectSteps": [{"ephemeralMessage": text}]} if harness == "antigravity" else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
 
+def prompt_text(payload):
+    """The user's prompt as text. Harnesses may send null (Claude Code turns without a typed prompt, such as
+    background task notifications) or a list of content blocks; retrieval and the opt-out check need a string."""
+    prompt = payload.get("prompt") if isinstance(payload, dict) else None
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        parts = [part if isinstance(part, str) else part.get("text") if isinstance(part, dict) else None for part in prompt]
+        return "\n".join(part for part in parts if isinstance(part, str))
+    return ""
+
+
 def receipt_context(vault):
     directory = Path(vault) / "receipts"
     if not directory.exists() or not directory.resolve().is_relative_to(Path(vault).resolve()):
@@ -167,8 +179,7 @@ def receipt_reminder(payload, state, harness, event, vault=None):
         if done.exists() and kdone.exists():
             return None
         if event == "UserPromptSubmit":
-            prompt = payload.get("prompt")
-            if isinstance(prompt, str) and "[kaydetme]" in prompt:
+            if "[kaydetme]" in prompt_text(payload):
                 folder.mkdir(parents=True, exist_ok=True)
                 done.touch()
                 kdone.touch()
@@ -388,7 +399,7 @@ def main():
                 raise RuntimeError("Source sync failed; metadata remains queued")
             from beyin_v3_sync import SyncEngine
             store = SyncEngine(vault, state).store
-            query = payload.get("prompt", "")
+            query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
