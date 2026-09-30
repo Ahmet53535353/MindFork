@@ -147,6 +147,11 @@ def human_result(result, command, installed_version=None):
                  'Sir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali'),
                  'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali'),
                  'Proje oturum basi baglami: ' + ('acik' if result.get('project_context') == 'on' else 'kapali')]
+        opening = (result.get('companion_context') or {}).get('context_chars')
+        if opening is not None:
+            lines.append('Oturum basi hafiza baglami: ' + (str(opening) + ' karakter' if opening else 'baglam ust siniri kadar'))
+        if result.get('companion_context_notice'):
+            lines.append(result['companion_context_notice'])
         for name, value in (result.get('companion_limits') or {}).items():
             lines.append('Hafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali'))
         hygiene = result.get('hygiene') or {}
