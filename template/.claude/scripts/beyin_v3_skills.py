@@ -23,11 +23,49 @@ def _tree(path, vault):
     return digest.hexdigest()
 
 
+# Harnesses load every folder under a skills root that holds a SKILL.md, dot-named or
+# not, so staging and reversible backups live in a sibling of the root (#157).
+BACKUP_DIR = '.skill-backups'
+PARKED = ('.v3-backup-', '.v3-skill-')
+
+
+def _backup_root(skills_root):
+    root = Path(skills_root).parent / BACKUP_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    # Backups pile up with every mirrored edit; keep them out of a versioned vault.
+    ignore = root / '.gitignore'
+    if not ignore.exists():
+        try: ignore.write_text('*\n', encoding='utf-8')
+        except OSError: pass
+    return root
+
+
+def _relocate_parked(skills_root):
+    """Move backups and stale stages older releases left inside a skills root.
+
+    Renamed, never deleted: a backup is the user's reversible original.
+    """
+    moved = []
+    try: entries = [p for p in skills_root.iterdir() if p.name.startswith(PARKED)]
+    except OSError: return moved
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            destination = _backup_root(skills_root) / entry.name
+            if destination.exists() or destination.is_symlink():
+                continue
+            entry.rename(destination)
+            moved.append(entry.name)
+        except OSError:
+            continue
+    return moved
+
+
 def _copy(source, target, expected, vault, source_root=None):
     if target.exists() and _tree(target, vault) != expected:
         raise ValueError('skill changed concurrently')
-    backup_root = target.parent.parent / '.skill-backups'
-    backup_root.mkdir(parents=True, exist_ok=True)
+    backup_root = _backup_root(target.parent)
     stage = Path(tempfile.mkdtemp(prefix='.v3-skill-', dir=backup_root))
     try:
         shutil.copytree(source, stage, dirs_exist_ok=True)
@@ -61,6 +99,9 @@ def sync_skills(vault, state, mode=None):
     try:
         db.execute('CREATE TABLE IF NOT EXISTS skills(name TEXT PRIMARY KEY, hash TEXT NOT NULL)')
         db.execute('BEGIN IMMEDIATE')
+        # Under the lock, so two syncs never race for the same parked folder.
+        relocated=[name for root in (right,left) for name in _relocate_parked(root)]
+        if relocated:result['relocated_backups']=relocated
         names=sorted({p.name for root in (left,right) for p in root.iterdir() if not p.name.startswith('.')})
         for name in names:
             a=left/name;b=right/name

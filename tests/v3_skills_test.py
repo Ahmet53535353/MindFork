@@ -136,4 +136,20 @@ class SkillsTest(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "SKILL.md").read_text(), "version 1")
 
+    def test_parked_folders_from_older_releases_move_out_of_skills_roots(self):
+        # Vaults synced before #157 hold backups and crashed stages inside the roots,
+        # where Claude Code lists them as extra skills. The next sync moves them, intact.
+        self.write(".agents","sample","v1");self.write(".claude","sample","v1")
+        old=self.vault/".claude/skills/.v3-backup-sample-0123abcd";old.mkdir();(old/"SKILL.md").write_text("original")
+        stale=self.vault/".agents/skills/.v3-skill-k2j3";stale.mkdir();(stale/"SKILL.md").write_text("half copy")
+        result=module().sync_skills(self.vault,self.state,mode="copy")
+        self.assertEqual(result["conflicts"],[])
+        self.assertEqual(sorted(result["relocated_backups"]),[".v3-backup-sample-0123abcd",".v3-skill-k2j3"])
+        for side in (".agents",".claude"):
+            self.assertEqual([p.name for p in (self.vault/side/"skills").iterdir()],["sample"])
+        self.assertEqual((self.vault/".claude/.skill-backups/.v3-backup-sample-0123abcd/SKILL.md").read_text(),"original")
+        self.assertEqual((self.vault/".agents/.skill-backups/.v3-skill-k2j3/SKILL.md").read_text(),"half copy")
+        self.assertEqual((self.vault/".claude/.skill-backups/.gitignore").read_text(),"*\n")
+        self.assertNotIn("relocated_backups",module().sync_skills(self.vault,self.state,mode="copy"))
+
 if __name__ == "__main__":unittest.main()
