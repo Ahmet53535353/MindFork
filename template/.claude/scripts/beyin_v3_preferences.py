@@ -22,7 +22,7 @@ def validate(value):
         raise ValueError('auto_sync must be boolean')
     if type(result['secret_filter']) is not bool:
         raise ValueError('secret_filter must be boolean')
-    for key, low, high in [('interval_minutes', 0, 1440), ('context_chars', 1000, 24000)]:
+    for key, low, high in [('interval_minutes', 0, 1440), ('context_chars', 1000, 12000)]:
         if type(result[key]) is not int or not low <= result[key] <= high:
             raise ValueError(f'{key} must be an integer between {low} and {high}')
     if result['context_mode'] not in ('turn', 'session', 'off'):

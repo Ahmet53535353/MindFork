@@ -245,6 +245,8 @@ def parser():
     settings.add_argument("--interval-minutes", type=int)
     settings.add_argument("--context-mode", choices=("turn", "session", "off"))
     settings.add_argument("--context-chars", type=int)
+    settings.add_argument("--companion-context-chars", type=int,
+                          help="Opening context budget (SessionStart, continuity questions), 1000..24000; 0 uses --context-chars")
     settings.add_argument("--secret-filter", choices=("on", "off"))
     settings.add_argument("--update-notifications", choices=("on", "off"))
     settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
@@ -352,6 +354,11 @@ def main(argv=None):
                 if not hygiene_valid:
                     raise ValueError('hygiene.json in the runtime state is invalid; fix or remove it first')
                 hygiene.check_settings(dict(current_hygiene, **hygiene_changes))
+            if args.companion_context_chars is not None:  # validated before anything is saved
+                current_context, context_valid = companion.read_context(state)
+                if not context_valid:
+                    raise ValueError(companion.CONTEXT_FILE + ' in the runtime state is invalid; fix or remove it first')
+                companion.check_context(dict(current_context, context_chars=args.companion_context_chars))
             if limits:  # validate before anything is saved, so a bad value changes nothing
                 current_limits, limits_valid = companion.read_limits(state)
                 if not limits_valid:
@@ -389,6 +396,14 @@ def main(argv=None):
             result['companion_limits'] = companion.save_limits(state, limits) if limits else companion.read_limits(state)[0]
             if limits:
                 result['status'] = 'saved'
+            # Machine-local like the limits (#140): a larger opening budget must survive a rollback.
+            if args.companion_context_chars is not None:
+                result['companion_context'] = companion.save_context(state, args.companion_context_chars)
+                result['status'] = 'saved'
+            else:
+                result['companion_context'], context_valid = companion.read_context(state)
+                if not context_valid:
+                    result['companion_context_notice'] = companion.CONTEXT_FILE + ' gecersiz; oturum basi baglami context_chars ile sinirli.'
             import beyin_v3_releases as releases
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:

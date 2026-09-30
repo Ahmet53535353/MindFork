@@ -110,6 +110,54 @@ def save_limits(state, changes):
     return result
 
 
+# Budget for the companion opening context (SessionStart and continuity questions), #140.
+# The handoff limits alone (3000 + 8000) nearly fill the 12000 context_chars ceiling, so the
+# opening may use a larger, separate budget. Machine-local in <state>/companion-context.json,
+# never a .beyin-preferences.json field or range: an older release validates that file and a
+# rollback would otherwise break every hook, doctor and even `preferences` itself.
+CONTEXT_FILE = 'companion-context.json'
+CONTEXT_RANGE = (1000, 24000)
+
+
+def check_context(value):
+    if not isinstance(value, dict) or set(value) - {'schema', 'context_chars'} or value.get('schema', 1) != 1:
+        raise ValueError('companion context accepts only context_chars')
+    number = value.get('context_chars', 0)
+    if type(number) is not int or not (number == 0 or CONTEXT_RANGE[0] <= number <= CONTEXT_RANGE[1]):
+        raise ValueError('companion context_chars must be 0 (use context_chars) or an integer between '
+                         f'{CONTEXT_RANGE[0]} and {CONTEXT_RANGE[1]}')
+    return {'context_chars': number}
+
+
+def read_context(state):
+    """(settings, valid). A missing file means 0: the opening uses context_chars. A damaged
+    file falls back to 0 as well and is never silently rewritten."""
+    path = Path(state) / CONTEXT_FILE
+    if not path.exists() and not path.is_symlink():
+        return {'context_chars': 0}, True
+    try:
+        if path.is_symlink():
+            raise ValueError('symlink')
+        return check_context(json.loads(path.read_text(encoding='utf-8'))), True
+    except (ValueError, OSError):
+        return {'context_chars': 0}, False
+
+
+def save_context(state, context_chars):
+    current, valid = read_context(state)
+    if not valid:
+        raise ValueError(CONTEXT_FILE + ' in the runtime state is invalid; fix or remove it first')
+    result = check_context(dict(current, context_chars=context_chars))
+    from beyin_v3_sync import atomic
+    atomic(Path(state) / CONTEXT_FILE, json.dumps(dict(schema=1, **result), ensure_ascii=False, indent=2) + '\n')
+    return result
+
+
+def opening_budget(state, context_chars):
+    """Characters for the companion opening context; context_chars unless set separately."""
+    return read_context(state)[0]['context_chars'] or context_chars
+
+
 def size(path):
     """Unicode characters as stored: not bytes and not UTF-16 units, so a Turkish or
     emoji-rich file is not reported larger than it is. Line endings are not translated

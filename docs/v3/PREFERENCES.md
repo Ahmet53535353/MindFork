@@ -4,7 +4,7 @@ Kullanıcı ayarı `.beyin-preferences.json` içinde; yönetilen release dosyas�
 
 `python3 beyin.py preferences --profile economical` ile ekonomik, `--profile normal` ile normal, `--profile manual` ile manuel kullanım. Argüman verilmezse ayarlar okunur. Ajan bunları beyin skill'i üzerinden uygular. `--human` okunabilir çıktı sağlar.
 
-Alanlar: `auto_sync` boolean; `interval_minutes` 0–1440 (0 her olay); `context_mode` turn/session/off; `context_chars` 1000–24000. Karakter sınırı ek hook bağlamının tamamına uygulanır; token kotası değildir. Sayısal ve bilinmeyen alanlar doğrulanır, hatalı dosya sessizce ezilmez.
+Alanlar: `auto_sync` boolean; `interval_minutes` 0–1440 (0 her olay); `context_mode` turn/session/off; `context_chars` 1000–12000. Karakter sınırı ek hook bağlamının tamamına uygulanır; token kotası değildir. Sayısal ve bilinmeyen alanlar doğrulanır, hatalı dosya sessizce ezilmez.
 
 Ekonomik profil: auto_sync=true, interval_minutes=15, context_mode=session, context_chars=2000. Manuel: auto_sync=false ve context_mode=off. Mevcut ayarların yalnız bir alanını değiştirmek için örneğin `preferences --interval-minutes 30`; profil seçmek otomatik kontrol ve bağlam alanlarını o profile sıfırlar, bağımsız sır süzgeci tercihini korur. Aralık değiştirmek kapalı kontrolü açmaz.
 
@@ -19,6 +19,22 @@ makineye özeldir. Profil değişikliği sınırları sıfırlamaz. Hatalı değ
 dosyası hiçbir ayarı kaydettirmez. Sınır aşılınca oturum başındaki uyarı, `doctor` raporu
 ve kayıpsız `companion-compact` komutu [companion incelemesinde](COMPANION-PARITY.md)
 anlatılır.
+
+## Oturum başı hafıza bağlamı
+
+Oturum başındaki hafıza bağlamı (ve "nerede kaldık" gibi süreklilik soruları) `Core`, `Kurallar`,
+`Last-Session`, `Threads` ve `Journal` dosyalarını birlikte taşır. Yalnız iki handoff dosyasının
+sınırları 3.000 + 8.000 karakter olduğundan 12.000 tavanı dar kalabilir.
+`python3 beyin.py preferences --companion-context-chars 24000` bu açılış bağlamına 1.000 ile
+24.000 arasında ayrı bir bütçe verir; `0` yeniden `context_chars` değerini kullanır. Diğer
+turlardaki bağlam `context_chars` ile sınırlı kalır. Ayar vault tercih dosyasında değil,
+runtime klasöründeki `companion-context.json` dosyasında tutulur: eski sürümler tercih
+dosyasındaki bilinmeyen alanı ya da aralık dışı değeri reddettiği için rollback güvenli
+kalır. Bozuk dosya açılışı `context_chars` sınırına döndürür ve kendiliğinden ezilmez.
+
+Açılışta hafıza dosyaları kırpılıyorsa sorgusuz seçilen ilgisiz bir not eklenmez; kalan
+bütçe kırpılan dosyalara döner. Dosyalar tam sığıyorsa en fazla 1.500 karakterlik bir
+güncel not eklenebilir.
 
 ## Opt-in sır süzgeci
 

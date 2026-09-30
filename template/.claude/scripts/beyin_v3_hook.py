@@ -402,9 +402,12 @@ def main():
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
                     warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
-            from beyin_v3_companion import context as companion_context, relevant
+            from beyin_v3_companion import context as companion_context, relevant, opening_budget
+            limit = settings['context_chars']
             if event == 'SessionStart' or relevant(query):
-                text = companion_context(store, settings['context_chars'], session, args.harness,
+                # The opening may carry its own machine-local budget (#140); never a vault preference.
+                limit = opening_budget(state, limit)
+                text = companion_context(store, limit, session, args.harness,
                                          query, receipt_context(vault), warning)
             else:
                 # Per-turn automatic context is strict: only meaningful lexical matches are
@@ -441,7 +444,7 @@ def main():
                 if not delivered.get("records"):
                     print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
                     return
-            output = output_context(args.harness, event, (notice + text)[:settings['context_chars']])
+            output = output_context(args.harness, event, (notice + text)[:limit])
             print(json.dumps(output))
         else:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}")))
