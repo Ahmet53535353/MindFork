@@ -226,25 +226,62 @@ def refresh_gaps(engine, db):
     }))
 
 
-def project_receipts(engine, db):
+def _local_zone():
+    """Zone for the day a person reads in a view name; None is this machine's local zone. Tests patch this."""
+    return None
+
+
+def _receipt_instant(created_at):
+    """Aware UTC instant of a receipt stamp, or None when it cannot be read. A naive stamp is UTC, as in recap."""
+    try:
+        stamp = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(timezone.utc)
+    except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def receipt_day(created_at, zone=None):
+    """Local calendar day (YYYY-MM-DD) that names daily/v3 for this stamp; None for an unreadable stamp.
+
+    Stamps stay UTC in receipts and the database; only the human-read file name follows the local day,
+    the same day beyin_v3_bridge calls "today" (#149).
+    """
+    instant = _receipt_instant(created_at)
+    if instant is None:
+        return None
+    try:
+        return instant.astimezone(zone).date().isoformat()
+    except (ValueError, OverflowError, OSError):  # Windows localtime rejects some extreme instants
+        return None
+
+
+def project_receipts(engine, db, warnings=None):
     _hash, atomic, render = engine.projection_helpers()
     db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
     migration = engine.state/'v2-migration.json'
     previous = json.loads(migration.read_text(encoding='utf-8')) if migration.exists() else {}
     historical = set(previous.get('historical_receipts', []))
+    zone = _local_zone()
     grouped = defaultdict(list)
     for row in db.execute('SELECT payload FROM receipts ORDER BY id'):
         event = json.loads(row[0])
         source = 'receipts/' + _hash(event['event_id']) + '.md'
         if source in historical or not event.get('created_at'):
             continue
-        date = event['created_at'][:10]
-        grouped[date].append((event['created_at'], source, event['summary']))
+        day = receipt_day(event['created_at'], zone)
+        if day is None:
+            # Never invent a day from the raw text (2026-13-45); the receipt stays in recap's undated count.
+            if warnings is not None:
+                warnings.append({'source': source, 'reason': 'unreadable receipt created_at; omitted from daily/v3'})
+            continue
+        grouped[day].append((_receipt_instant(event['created_at']), event['created_at'], source, event['summary']))
     desired = {}
     outcomes = []
     for day, items in sorted(grouped.items()):
         entries = []
-        for at, source, summary in sorted(items):
+        for _, at, source, summary in sorted(items):
             entries.append(f'## {at}\n\n{summary}\n\nSource: [[{source}]]\n')
             outcomes.append(f'- {day}: {summary}\n  Source: [[{source}]]\n')
         desired[f'daily/v3/{day}.md'] = render({'generated': True, 'kind': 'receipt-index'}, '# Recorded outcomes\n\nAgent-authored claims, not independently verified facts.\n\n'+'\n'.join(entries))
@@ -266,7 +303,41 @@ def project_receipts(engine, db):
                 continue
             atomic(path, content)
         db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
+    conflicts.extend(_retire_stale_views(engine, db, desired, _hash))
     refresh_gaps(engine, db)
+    return conflicts
+
+
+def _retire_stale_views(engine, db, desired, _hash):
+    """Remove views this state wrote that are no longer projected, e.g. a UTC-named daily/v3 file after #149.
+
+    Only a file whose bytes still match the hash recorded when it was written is removed; an edited
+    file is never touched and stays a visible conflict until the person moves or deletes it.
+    """
+    conflicts = []
+    for relative, tracked in db.execute('SELECT path, hash FROM receipt_views ORDER BY path').fetchall():
+        if relative in desired:
+            continue
+        try:
+            path = engine._path(relative)
+            current = _hash(path.read_bytes()) if path.is_file() else None
+        except (ValueError, OSError):
+            conflicts.append({'source': relative, 'reason': 'stale receipt view unreadable; preserved'})
+            continue
+        if current is None and not path.exists():
+            db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
+            continue
+        if current != tracked:
+            conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved; view no longer generated'})
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            conflicts.append({'source': relative, 'reason': 'stale receipt view could not be removed'})
+            continue
+        db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
     return conflicts
 
 
