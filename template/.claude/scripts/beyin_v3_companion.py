@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 
 NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
 FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
@@ -160,8 +161,24 @@ def hygiene_notice(report):
             'afterwards rewrite in place, never append.\n')
 
 
+# Turkish letters that NFKD does not decompose; the rest (ş, ü, ç, â, ...) lose their marks there.
+FOLD = str.maketrans('ıİ', 'iI')
+# "We are back, what were we doing" in its common first-person forms, matched on folded
+# text so a keyboard without Turkish letters (donduk, yapmistik) reads the same (#151).
+RETURNING = re.compile(r'\b(?:ne(?:ler)? (?:yaptik|yapmistik|yapiyorduk)|nere?deydik|kaldigimiz (?:yer|konu)'
+                       r'|son durum(?:umuz)? (?:ne|nedir|neydi)\b|ne olmustu|(?:tatil|izin)den don(?:dum|duk)\b'
+                       r'|kisilig|what (?:did|have) we (?:do|done|work(?:ed)? on)|what were we (?:doing|working on)'
+                       r'|where were we|catch me up)')
+
+
+def fold(text):
+    """Lowercase ASCII-ish form for matching: ı/İ become i, combining marks drop."""
+    decomposed = unicodedata.normalize('NFKD', text.translate(FOLD))
+    return ''.join(c for c in decomposed if not unicodedata.combining(c)).lower()
+
+
 def relevant(query):
-    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|nerede kal|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query))
+    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|nerede kal|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query)) or bool(RETURNING.search(fold(query)))
 
 
 def stamp(header):
