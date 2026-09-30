@@ -33,6 +33,10 @@ HARNESS_SYNTHETIC_PROMPT_PREFIXES = (
     "<command-name>",
     "<local-command-stdout>",
 )
+# Claude Code turn origins that no human typed. Its hook payload carries no origin field today (2.1.285), so
+# the prefixes above do the work; if one appears, other kinds (channel, bridge, remote, ...) can be a person
+# typing elsewhere, so only these known kinds skip retrieval and anything else falls back to the prefix check.
+SYNTHETIC_ORIGIN_KINDS = frozenset({"task-notification", "peer", "coordinator"})
 
 
 def is_synthetic_prompt(payload):
@@ -47,12 +51,11 @@ def is_synthetic_prompt(payload):
     if os.environ.get("BEYIN_V3_FILTER_HARNESS_TURNS") == "0":
         return False
     origin = payload.get("origin")
-    if isinstance(origin, dict):
-        kind = origin.get("kind")
-        if isinstance(kind, str) and kind:
-            return kind != "human"
-    elif isinstance(origin, str) and origin:
-        return origin != "human"
+    kind = origin.get("kind") if isinstance(origin, dict) else origin
+    if kind == "human":
+        return False
+    if isinstance(kind, str) and kind in SYNTHETIC_ORIGIN_KINDS:
+        return True
     query = payload.get("prompt", "")
     return isinstance(query, str) and query.lstrip().startswith(HARNESS_SYNTHETIC_PROMPT_PREFIXES)
 

@@ -738,6 +738,23 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('hookSpecificOutput', resp)
         self.assertIn('Synthetic Reviewer', resp['hookSpecificOutput']['additionalContext'])
 
+    def test_unknown_origin_kinds_fall_back_to_the_prompt_prefix(self):
+        # Claude Code also tags turns a person typed elsewhere (channel, bridge, remote); only
+        # the known non-human kinds skip retrieval, anything else is judged by the prompt text.
+        for kind in ('channel', 'bridge', 'remote', 'cli', ''):
+            with self.subTest(kind=kind):
+                self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula calibration', 'origin': {'kind': kind}}))
+                self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula calibration', 'origin': kind}))
+                self.assertTrue(self.hook.is_synthetic_prompt({'prompt': '<task-notification>\n<task-id>x</task-id>',
+                                                               'origin': {'kind': kind}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'plain text', 'origin': {'kind': 'coordinator'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': '<task-notification>', 'origin': {'kind': 'human'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula', 'origin': {'kind': ['peer']}}))
+        self.seed()
+        resp = self.lifecycle('UserPromptSubmit', 'channel-sess', 'claude', prompt='Nebula calibration',
+                              origin={'kind': 'channel', 'server': 'telegram'})
+        self.assertIn('Synthetic Reviewer', resp['hookSpecificOutput']['additionalContext'])
+
 
 if __name__ == '__main__':
     unittest.main()
