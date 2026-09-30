@@ -227,6 +227,26 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn(summary, context)
         self.assertTrue(any(marker in context.casefold() for marker in ['historical', 'history', 'geçmiş', 'gecmis']))
 
+    def test_receipt_context_truncation_marker_when_exceeding_budget(self):
+        receipts_dir = self.vault / 'receipts'
+        receipts_dir.mkdir(parents=True, exist_ok=True)
+        short_body = '---\n{"kind": "receipt", "event_id": "short"}\n---\nShort summary.\n'
+        receipt_file = receipts_dir / 'short.md'
+        receipt_file.write_text(short_body, encoding='utf-8')
+        context = self.hook.receipt_context(str(self.vault))
+        self.assertIn(short_body, context)
+        self.assertNotIn('[truncated: read source]', context)
+
+        long_body = '---\n{"kind": "receipt", "event_id": "long", "refs": [' + ', '.join(f'"ref_{i:03d}.md"' for i in range(100)) + ']}\n---\nLong summary.\n'
+        self.assertGreater(len(long_body), 1200)
+        time.sleep(0.01)
+        receipt_file.write_text(long_body, encoding='utf-8')
+        context = self.hook.receipt_context(str(self.vault))
+        self.assertTrue(context.endswith('\n[truncated: read source]\n'))
+        header = '\nLatest receipt (historical agent claim, not independently verified):\n'
+        body = context[len(header):]
+        self.assertEqual(len(body), 1200)
+
     def test_stop_stdin_queues_and_explicit_worker_drains(self):
         self.seed()
         response = self.invoke(dict(self.payload, hook_event_name='Stop'), 'claude')
