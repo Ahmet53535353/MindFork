@@ -179,15 +179,49 @@ def locked(vault, state):
         for connection in reversed(connections): connection.close()
 
 
+def _is_link(path):
+    """A symlink, junction or other reparse point: a name that can lead out of its directory."""
+    info = os.lstat(path)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0))
+
+
+def _contained(root, path):
+    """Whether root/name stays inside root. update, recover and rollback all ask here.
+
+    Resolve both sides at write time: a root resolved before it existed gains a Windows
+    redirect (MSIX-virtualised AppData, junction) once created (#97). An MSIX package can
+    also see AppData through a merged view that redirects the children but not the root:
+    a directory that exists outside the package keeps its spelling, while files the package
+    wrote resolve under Packages\\<id>\\LocalCache (#139). That redirect is not a link in the
+    tree, so a diverging resolution is still accepted when the name is lexically below the
+    root and nothing between the root and the target is a link. Links that leave still fail.
+    """
+    if path.resolve().is_relative_to(root.resolve()):
+        return True
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False  # a drive or rooted name replaced the root while joining
+    current = root
+    for part in relative.parts:
+        current = current / part
+        try:
+            if _is_link(current): return False
+        except FileNotFoundError:
+            return True  # nothing below a missing component exists, so nothing can lead away
+        except OSError:
+            return False
+    return True
+
+
 def _destination(vault, state, operation):
     root = vault if operation['scope'] == 'vault' else state
     name = operation['name']
     if Path(name).is_absolute() or '..' in Path(name).parts:
         raise ValueError('unsafe transaction path')
     path = root / name
-    # Resolve both sides now: a root resolved before it existed gains a Windows redirect
-    # (MSIX-virtualised AppData, junction) once created. Links that leave it still fail.
-    if not path.resolve().is_relative_to(root.resolve()):
+    if not _contained(root, path):
         raise ValueError('transaction target escapes root')
     return path
 
