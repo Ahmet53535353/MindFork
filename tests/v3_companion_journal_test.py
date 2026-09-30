@@ -33,6 +33,15 @@ class JournalExcerptTest(unittest.TestCase):
                     self.assertNotIn('OLDER_ENTRY', excerpt)
                     self.assertNotIn('ANCIENT_ENTRY', excerpt)
 
+    def test_single_date_journal_picks_the_bottom_like_an_undated_one(self):
+        # Every heading on one date gives no direction; the bottom goes first (#163).
+        dated = '# Journal\n## 2026-09-30 (sabah)\nOLDER_ENTRY\n## 2026-09-30 (öğlen)\nLATEST_ENTRY\n'
+        undated = '# Journal\n## Sabah\nOLDER_ENTRY\n## Öğlen\nLATEST_ENTRY\n'
+        for text in (dated, undated):
+            excerpt = companion.excerpt('Journal.md', text)
+            self.assertIn('LATEST_ENTRY', excerpt)
+            self.assertNotIn('OLDER_ENTRY', excerpt)
+
     def test_distinct_dates_and_undated_journals_are_unchanged(self):
         newest_first = '# Journal\n## 2026-09-17\nLATEST_ENTRY\n## 2020-01-01\nANCIENT_ENTRY\n'
         appended = '# Journal\n## 2020-01-01\nANCIENT_ENTRY\n## 2026-09-17\nLATEST_ENTRY\n'

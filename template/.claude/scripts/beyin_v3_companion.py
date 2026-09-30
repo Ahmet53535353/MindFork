@@ -254,7 +254,11 @@ def excerpt(name, text):
         if entries:
             # Equal timestamps follow the file's own direction: a newest-first journal keeps
             # the latest entry at the top, an append-ordered one at the bottom.
-            newest_first = all(b <= a for (a, _), (b, _) in zip(dated, dated[1:]))
+            # Only distinct timestamps show a direction; when every dated entry shares one,
+            # the bottom goes first, as for an all-undated journal (#163).
+            moments = [moment for moment, _ in dated]
+            rising = any(a < b for a, b in zip(moments, moments[1:]))
+            newest_first = not rising and any(a > b for a, b in zip(moments, moments[1:]))
             index = max(dated, key=lambda item: (item[0], -item[1] if newest_first else item[1]))[1] if dated else len(entries) - 1
             # An undated entry at the end the newest writing lands on is the latest thought,
             # so it wins over dated ones instead of dropping out of the selection (#134).
