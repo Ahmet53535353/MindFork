@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import time
 
 import beyin_v3_jev_client as client
 from beyin_v3_secrets import redact
@@ -73,6 +74,52 @@ MANUAL_POOL = 16
 MANUAL_EXCERPT = 800
 
 
+def _packaged(store, query, cards, project, versions, facets, mode, transport):
+    """One advisor call, or up to client.PACKAGE_LIMIT when the pool is over one request's budget.
+
+    Sixteen ordinary notes with 800-character excerpts exceed the default 24,000-character
+    request, so the whole pool used to be refused before any network call and the command
+    silently kept local order. Packages are planned locally and sent once each, never
+    retried; if any package fails, the whole advice is degraded and local order stands, so
+    a partial ranking never reorders only part of the pool.
+    """
+    parts = client.packages(store.state_dir, query, cards, facets=facets)
+    if parts is None or len(parts) == 1:
+        # None: over the package limit; evaluate reports budget_exceeded before any call.
+        advice = client.evaluate(store.state_dir, query, cards, scope='project:' + project,
+                                 source_versions=versions, facets=facets, transport=transport)
+        return dict(advice, packages=0 if parts is None else 1)
+
+    def ask(part):
+        return client.evaluate(store.state_dir, query, part, scope='project:' + project,
+                               source_versions={c['id']: versions[c['id']] for c in part},
+                               facets=facets, transport=transport)
+    # A local single-worker server (laya) would only queue parallel requests.
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1 if mode.get('provider') == 'laya' else len(parts)) as pool:
+        advices = list(pool.map(ask, parts))
+    # Counters cover every package that was sent, including a failed one.
+    usage = {k: sum(a['usage'][k] for a in advices) for k in ('input_tokens', 'output_tokens')
+             if all(k in a.get('usage', {}) for a in advices)}
+    counters = dict(packages=len(parts), usage=usage,
+                    network_requests=sum(a['network_requests'] for a in advices),
+                    http_requests=sum(a['http_requests'] for a in advices),
+                    latency_ms=round((time.monotonic() - started) * 1000, 3),
+                    request_hash=None, request_hashes=[a['request_hash'] for a in advices])
+    failed = [a for a in advices if a['degraded']]
+    if failed:
+        return dict(failed[0], **counters)
+    advice = dict(advices[0], **counters,
+                  diagnostics=list(dict.fromkeys(d for a in advices for d in a['diagnostics'])),
+                  cache_hit=all(a['cache_hit'] for a in advices),
+                  scores={k: v for a in advices for k, v in a['scores'].items()},
+                  facet_scores={j: {k: v for a in advices for k, v in a['facet_scores'].get(j, {}).items()}
+                                for j in range(len(facets))})
+    if len({a['mode'] for a in advices}) != 1:
+        advice = _clear(advice, 'configuration_changed')
+    return advice
+
+
 def advise_context(store, query, *, project, audience='internal', statuses=None,
                    limit=5, budget_chars=8000, transport=None):
     """Retrieve a bounded pool, judge permitted cards, then pack final source records."""
@@ -105,8 +152,7 @@ def advise_context(store, query, *, project, audience='internal', statuses=None,
     # Semicolon-separated subrequests are independent facets, not fabricated topics.
     facets = [part.strip() for part in query.split(';') if part.strip()]
     facets = facets if 1 <= len(facets) <= 3 else [query]
-    advice = client.evaluate(store.state_dir, query, cards, scope='project:' + project,
-                             source_versions=before, facets=facets, transport=transport)
+    advice = _packaged(store, query, cards, project, before, facets, mode, transport)
     current = store.candidates(query, **params, limit=MANUAL_POOL)
     if before != _signature(current) or not _fresh(store, records):
         result = store.retrieve(query, **params, limit=limit, budget_chars=budget_chars)
