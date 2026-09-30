@@ -165,6 +165,28 @@ yeniden çalıştır; sabitleme yönlendirilmiş kanonik yola döner. Bu durumda
 gerekmez, ama adım 5'teki kural geçerlidir: bekleyen bir `update-journal.json` varsa önce
 `beyin.py recover` çalıştır, sonra adım 6'daki gibi önce `--plan` ile incele.
 
+#### `update` ve `recover` ikisi de `transaction target escapes root` veriyorsa (#139)
+
+Paket içinden bakıldığında state kökü eski yazımında kalıp içindeki dosyalar
+`Packages\<paket>\LocalCache\...` altına çözümlenebilir. Bu, kökün kendisi paket dışında da
+var olduğunda olur. Bu sürümden önceki güncelleyici iki yazımı farklı dizin sayıp işlemi
+durduruyordu; `recover` ve bekleyen journal'ı `recover`'a devreden kurucu da aynı kontrolden
+geçtiği için üçü de takılı kalıyordu. Artık hedef kökün altında adıyla duruyor ve arada kök
+dışına götüren bir link (symlink, junction) yoksa yazılıyor; kök dışına çıkan link hala
+reddedilir.
+
+Takılı bir vault kendi kurulu `recover`'ıyla bu duvarı aşamaz, çünkü kurulu güncelleyici
+eski kontrolü taşır. Düzeltmeyi içeren sürümün paketini indirip aç, sonra **paket içinden**
+(ajan kabuğundan) `.beyin-runtime.json`'daki `state` değeriyle kurucuyu çalıştır:
+
+```powershell
+py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim" --state "<.beyin-runtime.json'daki state>"
+```
+
+İlk çalıştırma bekleyen işlemi tamamlar (`install_resumed: true`). Aynı komutu bir kez daha
+çalıştır; bu sefer yeni sürüm kurulur ve vault düzeltilmiş güncelleyiciyi alır. Sonra
+`beyin.py doctor` ile doğrula. Sabitleme dosyasını elle değiştirme.
+
 ## `invalid legacy skill hashes` (#73)
 
 17–19 Eylül 2026 arasında `cad7953` (#35) sonrası `main` üzerinden kurulan
