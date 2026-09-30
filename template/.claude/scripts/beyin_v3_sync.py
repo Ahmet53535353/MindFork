@@ -459,7 +459,7 @@ class SyncEngine:
         event = {'event_id': event_id, 'summary': summary, 'refs': [Path(ref).as_posix() for ref in refs], 'harness': harness}
         created_at, session = metadata.get('created_at'), metadata.get('session')
         if created_at is not None:
-            # Projections derive daily/v3/<created_at[:10]>.md from this value.
+            # The stamp stays as written (UTC); projections name daily/v3 by its local day (#149).
             if not isinstance(created_at, str) or datetime.fromisoformat(created_at).date().isoformat() != created_at[:10]:
                 raise ValueError('invalid receipt created_at')
             event['created_at'] = created_at
@@ -538,7 +538,7 @@ class SyncEngine:
                     db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (id, payload))
                     db.execute('INSERT INTO events(event_type,record_id,revision,record) VALUES (?,?,?,?)', (event_type, id, record['revision'], payload))
                 db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
-            conflicts.extend(project_receipts(self, db))
+            conflicts.extend(project_receipts(self, db, warnings))
             if conflicts:
                 # A receipt hidden by a directory mtime that did not move surfaces as a view
                 # conflict; the next sync then rescans receipts/ in full.

@@ -97,7 +97,11 @@ V3 has no background model dependency. The active authorized agent writes short,
 source-linked semantic receipts and deliberate knowledge notes. The deterministic
 worker projects new structured receipt summaries into:
 
-- `daily/v3/YYYY-MM-DD.md`: new V3 recorded outcomes.
+- `daily/v3/YYYY-MM-DD.md`: new V3 recorded outcomes, named by this machine's
+  local day (the day the session-start project block calls today). Receipt
+  stamps inside stay UTC. Up to 3.5.1 the name was the UTC day; the first sync
+  after updating removes an old UTC-named view that was never edited, and an
+  edited one is kept and reported as a conflict until you move or delete it.
 - `knowledge/v3/outcomes.md`: an index linking those outcomes to their receipts.
 
 These are explicitly generated indexes of agent-authored claims, not automatic
