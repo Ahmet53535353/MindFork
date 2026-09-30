@@ -292,6 +292,16 @@ class HookInstallerTest(unittest.TestCase):
         engine.receipt('no-session-1', 'Edited the task note.', ['notes/task.md'], 'claude')
         self.assertEqual(self.lifecycle('Stop', 'no-session', 'claude')['decision'], 'block')
 
+    def test_user_prompt_submit_accepts_null_and_block_list_prompts(self):
+        self.seed()
+        for index, prompt in enumerate((None, [{'type': 'text', 'text': 'Nebula calibration owner'}], 42)):
+            output = self.lifecycle('UserPromptSubmit', 'non-string-' + str(index), 'claude', prompt=prompt)
+            self.assertFalse((self.state / 'hook-error.json').exists(), prompt)
+            self.assertNotIn('V3 source sync failed', json.dumps(output), prompt)
+        self.assertEqual(self.hook.prompt_text({'prompt': ['a', {'type': 'text', 'text': 'b'}, {'type': 'image'}]}), 'a\nb')
+        self.assertEqual(self.hook.prompt_text({'prompt': None}), '')
+        self.assertEqual(self.hook.prompt_text(None), '')
+
     def test_stop_receipt_reminder_session_closes_the_gap(self):
         engine = self.seed()
         self.lifecycle('UserPromptSubmit', 'gap-session', 'claude', prompt='update the calibration note')
