@@ -26,7 +26,9 @@ def _tree(path, vault):
 def _copy(source, target, expected, vault, source_root=None):
     if target.exists() and _tree(target, vault) != expected:
         raise ValueError('skill changed concurrently')
-    stage = Path(tempfile.mkdtemp(prefix='.v3-skill-', dir=target.parent))
+    backup_root = target.parent.parent / '.skill-backups'
+    backup_root.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix='.v3-skill-', dir=backup_root))
     try:
         shutil.copytree(source, stage, dirs_exist_ok=True)
         if _tree(stage, vault) != _tree(source, source_root or vault):
@@ -34,7 +36,7 @@ def _copy(source, target, expected, vault, source_root=None):
         if target.exists():
             if target.is_symlink() or _tree(target, vault) != expected:
                 raise ValueError('skill changed concurrently')
-            backup = target.parent / ('.v3-backup-' + target.name + '-' + uuid.uuid4().hex)
+            backup = backup_root / ('.v3-backup-' + target.name + '-' + uuid.uuid4().hex)
             target.rename(backup)  # Preserved reversible original, never discarded.
             try: stage.rename(target)
             except BaseException:

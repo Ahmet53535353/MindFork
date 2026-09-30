@@ -114,4 +114,26 @@ class SkillsTest(unittest.TestCase):
         module().sync_skills(self.vault,self.state,mode="copy")
         self.assertEqual((self.vault/".claude/skills/sample/scripts/a.py").read_text(),"pass")
 
+    def test_skill_backup_placed_outside_skills_root_and_leaves_skills_clean(self):
+        m = module()
+        old = self.write(".claude", "sample", "version 1")
+        m.sync_skills(self.vault, self.state, mode="copy")
+        canonical = self.vault / ".agents/skills/sample/SKILL.md"
+        self.assertEqual(canonical.read_text(), "version 1")
+
+        canonical.write_text("version 2")
+        m.sync_skills(self.vault, self.state, mode="copy")
+        self.assertEqual((self.vault / ".claude/skills/sample/SKILL.md").read_text(), "version 2")
+
+        # Verify .claude/skills contains no backup or staging folders
+        claude_skills = [p.name for p in (self.vault / ".claude/skills").iterdir()]
+        self.assertEqual(claude_skills, ["sample"])
+
+        # Verify backup was safely placed in .claude/.skill-backups/
+        backup_dir = self.vault / ".claude/.skill-backups"
+        self.assertTrue(backup_dir.is_dir())
+        backups = list(backup_dir.glob(".v3-backup-sample-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / "SKILL.md").read_text(), "version 1")
+
 if __name__ == "__main__":unittest.main()
