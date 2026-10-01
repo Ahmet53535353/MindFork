@@ -50,7 +50,11 @@ Last-Session.md ve Threads.md dosyalarında `## Previous`/`## Önceki` ve `## Cl
 bölümlerini, ardından en eski tarihli kayıtları kelimesi kelimesine companion klasöründeki
 `Arşiv/` altına, aylık ve `visibility: private` bir dosyaya taşır. Devir kartının ve her
 konunun en yeni tarihli kaydı yerinde kalır; hiçbir metin silinmez, özetlenmez, model
-çağrılmaz. Çıktı `needs_rewrite` derse dosyanın tam metni `Arşiv/` altına otomatik yedeklenmiştir; dosyayı sınır içinde kendin yeniden yaz, çıkardığın eski ayrıntı için arşive bağlantı ver. Arşivi
+çağrılmaz. Taşımadan sonra hala sınırı aşan dosyanın kalan tam metnini de aynı arşive
+kelimesi kelimesine yedekler; `--dry-run` hiçbir şey yazmaz. Çıktı `needs_rewrite` derse
+önce yedeği doğrula (`tam metin arsive yedeklendi`, JSON'da `backup: written` veya
+`exists`), sonra dosyayı sınır içinde kendin yeniden yaz ve çıkardığın ayrıntı için arşiv
+dosyasına bağlantı bırak. Yedek yoksa yeniden yazma. Arşivi
 bağlama yükleme; eski bir ayrıntı gerekirse yalnız ilgili arşiv dosyasını aç.
 
 Yalnız değişmesi gereken dosyaları güncelle; no-memory/no-tools istekleri bu protokolden
