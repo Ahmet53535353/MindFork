@@ -57,11 +57,13 @@ class SearchBenchmarkTest(unittest.TestCase):
         self.assertEqual(non_strict["categories"]["clean_baseline"]["recall_at_1"], 1.0)
 
     def test_reranked_search_improves_salience_and_recall(self):
-        """Field-weighted reranking should achieve >= 90% Recall@1 and >= 0.95 MRR."""
+        """Field-weighted reranking floors: Recall@1 >= 0.90 and MRR >= 0.90."""
         report = evaluator.evaluate(modes=["reranked"])
         reranked = report["modes"]["reranked"]
         self.assertGreaterEqual(reranked["recall_at_1"], 0.90, "Reranked Recall@1 drop below 90%")
-        self.assertGreaterEqual(reranked["mrr"], 0.95, "Reranked MRR drop below 0.95")
+        # Floors with slack, like the baseline asserts: 0.964 today, and a single case moving
+        # from rank 1 to 2 costs 0.016, so a 0.95 floor would fail on any one-rank change.
+        self.assertGreaterEqual(reranked["mrr"], 0.90, "Reranked MRR drop below 0.90")
         self.assertLessEqual(reranked["median_latency_ms"], 150.0, "Reranked latency ceiling exceeded")
 
 

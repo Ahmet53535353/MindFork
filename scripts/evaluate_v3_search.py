@@ -253,6 +253,7 @@ def evaluate(fixture_path: Optional[Path] = None, limit: int = 10, modes: Option
             "fixture_digest": digest,
             "corpus_records": len(fixture.get("records", [])),
             "benchmark_cases": len(fixture.get("cases", [])),
+            "benchmark_categories": len({case.get("category", "unclassified") for case in fixture.get("cases", [])}),
             "cold_index_ms": cold_index_ms,
             "modes": {}
         }
@@ -269,11 +270,9 @@ def format_markdown(report: Dict[str, Any]) -> str:
     lines.append("# V3 Search Benchmark Report (Issue #94)")
     lines.append("")
     lines.append(f"- **Corpus**: {report['corpus_records']} sanitized technical records")
-    cat_count = 7
-    for m in report.get("modes", {}).values():
-        if "categories" in m and m["categories"]:
-            cat_count = len(m["categories"])
-            break
+    cat_count = report.get("benchmark_categories")
+    if cat_count is None:
+        cat_count = max((len(m.get("categories", {})) for m in report.get("modes", {}).values()), default=0)
     lines.append(f"- **Test Cases**: {report['benchmark_cases']} queries across {cat_count} failure/salience categories")
     lines.append(f"- **Cold Ingestion Time**: `{report['cold_index_ms']} ms` (SQLite store init & tokenization)")
     lines.append(f"- **Fixture SHA-256**: `{report['fixture_digest'][:16]}...`")
