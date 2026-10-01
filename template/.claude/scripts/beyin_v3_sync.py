@@ -131,6 +131,22 @@ def _parse_yaml_value(value):
             return _plain_scalar(value)
 
 
+# Keys that narrow what context may show. Nested under another key they would be
+# silently ignored (only top-level metadata reaches the gates), so such a source
+# stays excluded with a warning, as before nested mappings were read (#179).
+GATE_KEYS = ('visibility', 'trust', 'trusted', 'remote_allowed')
+
+
+def _mapping_value(sub_key, value):
+    """One `key: value` line of a single-level nested mapping."""
+    parsed = _parse_yaml_value(value)
+    if isinstance(parsed, dict):
+        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    if sub_key in GATE_KEYS or (sub_key in ('status', 'kind') and parsed == 'untrusted'):
+        raise ValueError(f'nested {sub_key} is not applied; move it to top-level frontmatter')
+    return parsed
+
+
 def parse(text):
     """JSON frontmatter or deliberately bounded flat scalar/list YAML with single-level mapping."""
     lines = text.splitlines(keepends=True)
@@ -179,11 +195,7 @@ def parse(text):
                     elif map_match:
                         mode = 'mapping'
                         indent = map_match[1]
-                        sub_key, sub_val = map_match[2], map_match[3]
-                        parsed_val = _parse_yaml_value(sub_val)
-                        if isinstance(parsed_val, dict):
-                            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
-                        mapping[sub_key] = parsed_val
+                        mapping[map_match[2]] = _mapping_value(map_match[2], map_match[3])
                     else:
                         raise ValueError('unsupported YAML metadata; use JSON frontmatter')
                 elif mode == 'list':
@@ -198,11 +210,7 @@ def parse(text):
                     map_match = re.fullmatch(r'([^\W\d][\w-]*):[ \t]*(.*)', cur[len(indent):])
                     if not map_match or map_match[1] in mapping:
                         raise ValueError('unsupported YAML metadata; use JSON frontmatter')
-                    sub_key, sub_val = map_match.groups()
-                    parsed_val = _parse_yaml_value(sub_val)
-                    if isinstance(parsed_val, dict):
-                        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
-                    mapping[sub_key] = parsed_val
+                    mapping[map_match[1]] = _mapping_value(*map_match.groups())
                 index += 1
             if mode == 'list':
                 metadata[key] = items

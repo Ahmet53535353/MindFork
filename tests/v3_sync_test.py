@@ -303,6 +303,43 @@ class SourceSyncTest(unittest.TestCase):
                     self.assertEqual(record[key], value)
                 self.assertEqual(self.module.parse(self.module.render(metadata, body)), (metadata, body))
 
+    def test_nested_gate_keys_keep_source_excluded(self):
+        """#179: a privacy or trust key nested under a mapping is never applied, so the
+        source stays out of the index (as before nested mappings were read) instead of
+        being served with the default internal visibility."""
+        cases = [
+            ('metadata:\n  visibility: private', 'visibility'),
+            ('metadata:\n  type: project\n  visibility: public', 'visibility'),
+            ('metadata:\n  trust: untrusted', 'trust'),
+            ('metadata:\n  trusted: false', 'trusted'),
+            ('metadata:\n  remote_allowed: false', 'remote_allowed'),
+            ('metadata:\n  status: untrusted', 'status'),
+            ('metadata:\n  kind: untrusted', 'kind'),
+        ]
+        source = self.vault / 'nested-gate.md'
+        for header, key in cases:
+            with self.subTest(header=header):
+                source.write_text('---\nid: nested-gate\nproject: nebula\n' + header +
+                                  '\n---\nNebula calibration nested gate fixture.\n', encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'nested ' + key + ' is not applied'):
+                    self.module.parse(source.read_text(encoding='utf-8'))
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'degraded', report)
+                self.assertEqual([w['source'] for w in report['warnings']], ['nested-gate.md'])
+                self.assertEqual(self.records(), [])
+        # Ordinary values under the same names stay readable.
+        source.write_text('---\nid: nested-gate\nproject: nebula\nmetadata:\n  status: draft\n  kind: memory\n'
+                          '---\nNebula calibration nested gate fixture.\n', encoding='utf-8')
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        self.assertEqual(self.records()[0]['metadata'], {'status': 'draft', 'kind': 'memory'})
+
+    def test_nested_mapping_crlf_and_turkish_keys(self):
+        source = self.vault / 'crlf.md'
+        source.write_bytes('---\r\nid: crlf-map\r\nproject: nebula\r\nmetadata:\r\n  öncelik: yüksek\r\n'
+                           '  Şifre_notu: "yok"\r\n  boş:\r\n---\r\nNebula calibration Arşiv fixture.\r\n'.encode('utf-8'))
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+        self.assertEqual(self.records()[0]['metadata'], {'öncelik': 'yüksek', 'Şifre_notu': 'yok', 'boş': None})
+
     def test_inline_json_and_plain_values_keep_existing_behaviour(self):
         body = 'Nebula calibration inline JSON fixture.\n'
         header = ('id: inline-json\nfacts: {"nested": [1, true]}\ntags: [["a"], {"b": "c"}]\n'
