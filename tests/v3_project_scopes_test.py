@@ -7,6 +7,7 @@ import tempfile
 import unicodedata
 import unittest
 from unittest.mock import patch
+from v3_package_helpers import clean_environ
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
@@ -24,7 +25,7 @@ class ProjectScopesTest(unittest.TestCase):
         self.vault = Path(self.tmp.name) / 'vault'
         self.vault.mkdir()
         self.store = runtime.MemoryStore(Path(self.tmp.name) / 'state', self.vault)
-        self.env = patch.dict(os.environ, {'TYPESAFE_API_KEY': 'synthetic-test-key'})
+        self.env = clean_environ(TYPESAFE_API_KEY='synthetic-test-key')
         self.env.start()
         self.addCleanup(self.env.stop)
 

@@ -15,6 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
+from v3_package_helpers import clean_environ
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
@@ -54,6 +55,10 @@ class HookInstallerTest(unittest.TestCase):
         for key in ('SYSTEMROOT', 'WINDIR'):
             if key in os.environ:
                 self.env[key] = os.environ[key]
+        # In-process calls (is_synthetic_prompt, receipt_reminder) read os.environ directly.
+        environment = clean_environ()
+        environment.start()
+        self.addCleanup(environment.stop)
         sys.path.insert(0, str(SCRIPTS))
         self.addCleanup(lambda: sys.path.remove(str(SCRIPTS)))
         self.hook = load_hook()
