@@ -56,6 +56,14 @@ class SearchBenchmarkTest(unittest.TestCase):
         self.assertEqual(strict["categories"]["clean_baseline"]["recall_at_1"], 1.0)
         self.assertEqual(non_strict["categories"]["clean_baseline"]["recall_at_1"], 1.0)
 
+    def test_reranked_search_improves_salience_and_recall(self):
+        """Field-weighted reranking should achieve >= 90% Recall@1 and >= 0.95 MRR."""
+        report = evaluator.evaluate(modes=["reranked"])
+        reranked = report["modes"]["reranked"]
+        self.assertGreaterEqual(reranked["recall_at_1"], 0.90, "Reranked Recall@1 drop below 90%")
+        self.assertGreaterEqual(reranked["mrr"], 0.95, "Reranked MRR drop below 0.95")
+        self.assertLessEqual(reranked["median_latency_ms"], 150.0, "Reranked latency ceiling exceeded")
+
 
 def main():
     report = evaluator.evaluate()

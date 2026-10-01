@@ -90,8 +90,47 @@ def percentile(values: List[float], fraction: float) -> Optional[float]:
     return round(sorted_vals[idx], 2)
 
 
-def evaluate_mode(store, cases: List[Dict[str, Any]], mode: str, limit: int = 10) -> Dict[str, Any]:
+def score_candidate(query: str, record: Dict[str, Any], runtime: Any) -> float:
+    """Compute field-weighted relevance score for a candidate record."""
+    query_tokens = runtime._tokens(query) - runtime.STOPWORDS
+    if not query_tokens:
+        return 0.0
+
+    title_tokens = runtime._tokens(str(record.get("title", ""))) - runtime.STOPWORDS
+    aliases = record.get("aliases", [])
+    aliases = aliases if isinstance(aliases, list) else []
+    alias_tokens = runtime._tokens(" ".join(a for a in aliases if isinstance(a, str))) - runtime.STOPWORDS
+    facts_tokens = runtime._tokens(runtime._json(record.get("facts", {}))) - runtime.STOPWORDS
+    body_tokens = runtime._tokens(record.get("text", "")) - runtime.STOPWORDS
+
+    title_matches = len(query_tokens & (title_tokens | alias_tokens))
+    facts_matches = len(query_tokens & facts_tokens)
+    body_matches = len(query_tokens & body_tokens)
+
+    # Field weights (BM25F inspired)
+    score = (title_matches * 3.0) + (facts_matches * 1.5) + (body_matches * 1.0)
+
+    # Distractor penalty for logs / daily notes if there is no title match
+    source = str(record.get("source", ""))
+    if source.startswith("daily/") and title_matches == 0:
+        score *= 0.5
+
+    return score
+
+
+def rerank_candidates(query: str, candidates: List[Dict[str, Any]], runtime: Any) -> List[Dict[str, Any]]:
+    """Rerank candidates using field-weighted salience and source freshness tie-breaking."""
+    scored = []
+    for r in candidates:
+        s = score_candidate(query, r, runtime)
+        scored.append((s, r.get("updated_at", ""), r["id"], r))
+    scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    return [x[3] for x in scored]
+
+
+def evaluate_mode(store, cases: List[Dict[str, Any]], mode: str, limit: int = 10, runtime: Any = None) -> Dict[str, Any]:
     """Evaluate a set of benchmark cases under a specific retrieval mode."""
+    runtime = runtime or load_runtime()
     timings: List[float] = []
     case_results: List[Dict[str, Any]] = []
 
@@ -120,6 +159,9 @@ def evaluate_mode(store, cases: List[Dict[str, Any]], mode: str, limit: int = 10
         elif mode == "strict":
             res = store._retrieve(query, limit=limit, strict=True)
             records = res.get("records", [])
+        elif mode == "reranked":
+            candidates = store.candidates(query, limit=32, strict=False)
+            records = rerank_candidates(query, candidates, runtime)[:limit]
         elif mode == "context":
             ctx = store.context_for("claude", query, strict=True, budget_chars=8000)
             records = ctx.get("records", [])
@@ -147,6 +189,7 @@ def evaluate_mode(store, cases: List[Dict[str, Any]], mode: str, limit: int = 10
 
         top_id = retrieved_ids[0] if retrieved_ids else None
         top_title = records[0].get("title", "") if records else None
+        top_source = records[0].get("source", "") if records else None
 
         case_res = {
             "case_id": case["id"],
@@ -157,6 +200,7 @@ def evaluate_mode(store, cases: List[Dict[str, Any]], mode: str, limit: int = 10
             "reciprocal_rank": round(reciprocal_rank, 4),
             "top_retrieved_id": top_id,
             "top_retrieved_title": top_title,
+            "top_retrieved_source": top_source,
             "elapsed_ms": round(elapsed_ms, 2)
         }
         case_results.append(case_res)
@@ -200,7 +244,7 @@ def evaluate(fixture_path: Optional[Path] = None, limit: int = 10, modes: Option
     """Execute complete benchmark across requested modes."""
     fixture, digest = read_fixture(fixture_path)
     runtime = load_runtime()
-    modes = modes or ["non_strict", "strict", "context"]
+    modes = modes or ["non_strict", "strict", "reranked", "context"]
 
     with tempfile.TemporaryDirectory(prefix="beyin-search-bench-") as tmp:
         store, cold_index_ms = seed_store(runtime, Path(tmp), fixture)
@@ -214,7 +258,7 @@ def evaluate(fixture_path: Optional[Path] = None, limit: int = 10, modes: Option
         }
 
         for m in modes:
-            results["modes"][m] = evaluate_mode(store, fixture.get("cases", []), mode=m, limit=limit)
+            results["modes"][m] = evaluate_mode(store, fixture.get("cases", []), mode=m, limit=limit, runtime=runtime)
 
         return results
 
@@ -225,7 +269,12 @@ def format_markdown(report: Dict[str, Any]) -> str:
     lines.append("# V3 Search Benchmark Report (Issue #94)")
     lines.append("")
     lines.append(f"- **Corpus**: {report['corpus_records']} sanitized technical records")
-    lines.append(f"- **Test Cases**: {report['benchmark_cases']} queries across 7 failure/salience categories")
+    cat_count = 7
+    for m in report.get("modes", {}).values():
+        if "categories" in m and m["categories"]:
+            cat_count = len(m["categories"])
+            break
+    lines.append(f"- **Test Cases**: {report['benchmark_cases']} queries across {cat_count} failure/salience categories")
     lines.append(f"- **Cold Ingestion Time**: `{report['cold_index_ms']} ms` (SQLite store init & tokenization)")
     lines.append(f"- **Fixture SHA-256**: `{report['fixture_digest'][:16]}...`")
     lines.append("")
@@ -235,22 +284,27 @@ def format_markdown(report: Dict[str, Any]) -> str:
     lines.append("| Retrieval Mode | Recall@1 | Recall@3 | Recall@5 | MRR | Median Latency | p95 Latency |")
     lines.append("|---|:---:|:---:|:---:|:---:|:---:|:---:|")
 
+    mode_labels = {
+        "non_strict": "Standard Search (`strict=False`)",
+        "strict": "Strict Retrieval (`strict=True`)",
+        "reranked": "Field-Weighted Reranked (`reranked`)",
+        "context": "Per-Turn Context Delivery"
+    }
+
     for mode, data in report["modes"].items():
-        mode_label = {
-            "non_strict": "Standard Search (`strict=False`)",
-            "strict": "Strict Retrieval (`strict=True`)",
-            "context": "Per-Turn Context Delivery"
-        }.get(mode, mode)
+        mode_label = mode_labels.get(mode, mode)
         lines.append(f"| {mode_label} | **{data['recall_at_1']:.1%}** | {data['recall_at_3']:.1%} | {data['recall_at_5']:.1%} | **{data['mrr']:.3f}** | {data['median_latency_ms']} ms | {data['p95_latency_ms']} ms |")
     lines.append("")
 
-    # Category breakdown for non-strict and strict
-    for mode in ["non_strict", "strict"]:
+    # Category breakdown for non-strict, strict, and reranked
+    section_idx = 2
+    for mode in ["non_strict", "strict", "reranked"]:
         if mode not in report["modes"]:
             continue
         data = report["modes"][mode]
-        title = "Standard Search (`strict=False`)" if mode == "non_strict" else "Strict Retrieval (`strict=True`)"
-        lines.append(f"## 2. Category Breakdown: {title}")
+        title = mode_labels.get(mode, mode)
+        lines.append(f"## {section_idx}. Category Breakdown: {title}")
+        section_idx += 1
         lines.append("")
         lines.append("| Category | Cases | Recall@1 | Recall@3 | Recall@5 | MRR | Misses | Description |")
         lines.append("|---|:---:|:---:|:---:|:---:|:---:|:---:|---|")
@@ -274,14 +328,32 @@ def format_markdown(report: Dict[str, Any]) -> str:
     if "non_strict" in report["modes"]:
         non_strict_data = report["modes"]["non_strict"]
         misses = [c for c in non_strict_data["case_results"] if c["rank"] != 1]
-        lines.append("## 3. Standard Search (`strict=False`) Sub-optimal Rankings (Where current search fails)")
+        lines.append(f"## {section_idx}. Standard Search (`strict=False`) Sub-optimal Rankings (Where current search fails)")
+        section_idx += 1
         lines.append("")
-        lines.append("| Case ID | Category | Query | Target Doc | Actual Rank | Top Returned Doc (Winner) |")
-        lines.append("|---|---|---|---|:---:|---|")
+        lines.append("| Case ID | Category | Query | Target Doc | Actual Rank | Top Returned Doc (Winner) | Distractor Source |")
+        lines.append("|---|---|---|---|:---:|---|---|")
         for m in misses:
             rank_str = str(m["rank"]) if m["rank"] else "Not Found"
-            lines.append(f"| `{m['case_id']}` | `{m['category']}` | *{m['query']}* | `{m['target_id']}` | **{rank_str}** | `{m['top_retrieved_id']}` ({m['top_retrieved_title']}) |")
+            source_str = f"`{m['top_retrieved_source']}`" if m.get("top_retrieved_source") else "-"
+            lines.append(f"| `{m['case_id']}` | `{m['category']}` | *{m['query']}* | `{m['target_id']}` | **{rank_str}** | `{m['top_retrieved_id']}` ({m['top_retrieved_title']}) | {source_str} |")
         lines.append("")
+
+    # Detailed Misses Section for reranked if present
+    if "reranked" in report["modes"]:
+        reranked_data = report["modes"]["reranked"]
+        reranked_misses = [c for c in reranked_data["case_results"] if c["rank"] != 1]
+        if reranked_misses:
+            lines.append(f"## {section_idx}. Field-Weighted Reranked Sub-optimal Rankings")
+            section_idx += 1
+            lines.append("")
+            lines.append("| Case ID | Category | Query | Target Doc | Actual Rank | Top Returned Doc (Winner) | Winner Source |")
+            lines.append("|---|---|---|---|:---:|---|---|")
+            for m in reranked_misses:
+                rank_str = str(m["rank"]) if m["rank"] else "Not Found"
+                source_str = f"`{m['top_retrieved_source']}`" if m.get("top_retrieved_source") else "-"
+                lines.append(f"| `{m['case_id']}` | `{m['category']}` | *{m['query']}* | `{m['target_id']}` | **{rank_str}** | `{m['top_retrieved_id']}` ({m['top_retrieved_title']}) | {source_str} |")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -290,7 +362,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE, help="Path to benchmark fixture JSON")
     parser.add_argument("--limit", type=int, default=10, help="Retrieval candidate limit")
-    parser.add_argument("--modes", nargs="+", default=["non_strict", "strict", "context"], help="Modes to evaluate")
+    parser.add_argument("--modes", nargs="+", default=["non_strict", "strict", "reranked", "context"], help="Modes to evaluate")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     args = parser.parse_args()
 
