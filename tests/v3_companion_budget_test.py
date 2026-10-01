@@ -142,8 +142,88 @@ class CompanionBudgetTest(unittest.TestCase):
         self.assertIn('[Related source: Notlar/Plan.md]', text)
         self.assertIn('FIRST_RULE_CANARY', text)
         self.assertIn('HANDOFF_CANARY', text)
-        self.assertGreaterEqual(len(text), .95 * 5000)
+    def test_knowledge_index_tight_budget_bounds_with_full_companion(self):
+        # Issue #146: knowledge/index.md under tight budgets (1000, 2000, 3000)
+        # with full companion files must strictly stay within budget (len <= budget).
+        index_source = 'knowledge/index.md'
+        index_body = '# Knowledge Map\n' + ''.join(
+            f'- [[concept-{i:03d}]]: summary of concept {i} with cross links.\n' for i in range(1, 150)
+        )
+        (self.vault / 'knowledge').mkdir(exist_ok=True)
+        (self.vault / index_source).write_text(index_body, encoding='utf-8')
+        self.store.ingest({'id': 'knowledge-index', 'kind': 'note', 'status': 'active',
+                           'text': index_body, 'source': index_source,
+                           'updated_at': '2026-09-18T10:00:00Z'})
+
+        for budget in (1000, 2000, 3000, 5000, 12000, 24000):
+            with self.subTest(budget=budget):
+                text = self.context(budget)
+                self.assertLessEqual(len(text), budget)
+                self.assertIn('FIRST_RULE_CANARY', text)
+                self.assertIn('CORRECTION_CANARY', text)
+                self.assertIn('HANDOFF_CANARY', text)
+                if budget <= 12000:
+                    self.assertGreaterEqual(len(text), .90 * budget)
+
+        # On large budget (24000), knowledge map reaches max cap (1500 chars)
+        text_24k = self.context(24000)
+        self.assertIn('[Knowledge map: knowledge/index.md]', text_24k)
+        map_section = text_24k.split('[Knowledge map: knowledge/index.md]\n')[1]
+        map_body = map_section.split('\n[')[0] if '\n[' in map_section else map_section
+        self.assertGreaterEqual(len(map_body), 1400)
+
+    def test_knowledge_index_scales_with_room_on_larger_budgets(self):
+        # Issue #146: with standard companion sizes, allowance expands beyond
+        # the legacy 600 cap proportionally with room (up to 1500 chars).
+        tmp = tempfile.TemporaryDirectory(prefix='companion-index-scale-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        vault = root / 'vault'
+        (vault / COMPANION).mkdir(parents=True)
+        (vault / 'knowledge').mkdir(parents=True)
+        store = evaluator.load_runtime().MemoryStore(root / 'runtime', vault)
+        self.addCleanup(lambda: evaluator.close_store(store))
+
+        small_bodies = {
+            'Core.md': '# Kimlik\nKullanicinin dusunme ortagiyim.\n',
+            'Soul.md': '# Uslup\nKisa cumleler.\n',
+            'Kurallar.md': '# Kurallar\n- Temel calisma kurali.\n- Ikinci kural.\n',
+            'Last-Session.md': '# Son oturum\nOturum ozeti burada.\n',
+            'Threads.md': '# Konular\n## Active Threads\nAktif baslik.\n## Closed Threads\n',
+            'Journal.md': '# Journal\n## 2026-09-17\nGunluk notu.\n',
+        }
+        for name, body in small_bodies.items():
+            source = f'{COMPANION}/{name}'
+            (vault / source).write_text(body, encoding='utf-8')
+            store.ingest({'id': name, 'kind': 'note', 'status': 'active', 'text': body,
+                          'source': source, 'updated_at': '2026-09-18T10:00:00Z'})
+
+        index_source = 'knowledge/index.md'
+        index_body = '# Knowledge Map\n' + ''.join(
+            f'- [[concept-{i:03d}]]: summary of concept {i} with cross links.\n' for i in range(1, 150)
+        )
+        (vault / index_source).write_text(index_body, encoding='utf-8')
+        store.ingest({'id': 'knowledge-index', 'kind': 'note', 'status': 'active',
+                      'text': index_body, 'source': index_source,
+                      'updated_at': '2026-09-18T10:00:00Z'})
+
+        for budget in (1000, 2000, 3000, 5000, 12000, 24000):
+            with self.subTest(budget=budget):
+                text = companion.context(store, budget, 'synthetic-session', 'codex')
+                self.assertLessEqual(len(text), budget)
+                self.assertIn('[Knowledge map: knowledge/index.md]', text)
+                map_section = text.split('[Knowledge map: knowledge/index.md]\n')[1]
+                map_body = map_section.split('\n[')[0] if '\n[' in map_section else map_section
+
+                # Room-based scaling checks
+                if budget == 5000:
+                    # Expands beyond legacy 600 limit
+                    self.assertGreater(len(map_body), 600)
+                elif budget >= 12000:
+                    # Reaches full 1500 allowance ceiling
+                    self.assertGreaterEqual(len(map_body), 1400)
 
 
 if __name__ == '__main__':
     unittest.main()
+
