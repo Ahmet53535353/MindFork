@@ -378,7 +378,12 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
     index = store.source_snapshot(['index.md'], source_directory='knowledge', budget_chars=4000)
     if index['records']:
         label = '\n[Knowledge map: knowledge/index.md]\n'
-        allowance = min(600, (budget - len(text)) // 3)
+        room = budget - len(text)
+        allowance = min(600, room // 3)
+        if not companion_clipped:
+            # The map grows with spare room (#146), but not while companion sources are clipped:
+            # there each extra character would come out of what #140/#143 give back to them.
+            allowance = min(1500, max(allowance, room // 4))
         if allowance > len(label) + 40:
             extra += label + clip(index['records'][0]['text'], allowance - len(label))
     remaining = budget - len(text) - len(extra)
