@@ -84,8 +84,9 @@ def _one_line(value, limit):
 def project_context(vault, state, project_id, project_name, budget=1200, today_iso=None):
     """Scoped, read-only project block for an opted-in external SessionStart.
 
-    - Latest receipt of this project_id (receipt_checkpoints session match); skipped when its
-      source file is gone or it or any ref is private/untrusted (same gate as recap refs).
+    - Latest receipt of this project_id (receipt_checkpoints session match) by created_at;
+      skipped when its source file is gone or it or any ref is private/untrusted. The gate is
+      beyin_v3_projections.latest_receipts, shared with the vault SessionStart hook.
     - Due tasks (due_at <= local today, active/waiting) of this project, after the retrieval
       visibility/trust, supersession and source-freshness gates; sorted by due date, title.
     - Other due tasks: count only, never titles.
@@ -95,7 +96,7 @@ def project_context(vault, state, project_id, project_name, budget=1200, today_i
         return ''
     import sqlite3
     from datetime import date
-    from beyin_v3_projections import _hidden_ref_sources
+    from beyin_v3_projections import latest_receipts
     vault = Path(vault).resolve()
     today = str(today_iso or date.today().isoformat())[:10]
     database = Path(state) / 'memory.sqlite3'
@@ -109,23 +110,9 @@ def project_context(vault, state, project_id, project_name, budget=1200, today_i
         summary = ''
         if {'receipt_checkpoints', 'receipts'} <= tables:
             sessions = {row[0] for row in db.execute('SELECT session FROM receipt_checkpoints WHERE project_id=?', (project_id,))}
-            candidates = []
-            if sessions:
-                for (payload,) in db.execute('SELECT payload FROM receipts'):
-                    try:
-                        event = json.loads(payload)
-                    except ValueError:
-                        continue
-                    if (isinstance(event, dict) and event.get('session') in sessions and isinstance(event.get('event_id'), str) and
-                            isinstance(event.get('summary'), str) and isinstance(event.get('created_at'), str)):
-                        candidates.append((event['created_at'], event['event_id'], event))
-            for _, ident, event in sorted(candidates, key=lambda item: item[:2], reverse=True):
-                source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
-                refs = [ref for ref in event.get('refs') or [] if isinstance(ref, str)] if isinstance(event.get('refs'), list) else []
-                if not (vault / source).is_file() or _hidden_ref_sources(db, [source, *refs]):
-                    continue
-                summary = _one_line(event['summary'], 600)
-                break
+            found = next(latest_receipts(db, vault, sessions), None) if sessions else None
+            if found:
+                summary = _one_line(found[1]['summary'], 600)
         current, other_due = [], 0
         wanted = (project_name or '').strip().casefold()
         if 'records' in tables:

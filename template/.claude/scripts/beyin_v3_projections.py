@@ -39,11 +39,13 @@ def _vault_file(vault, relative):
 
 
 def latest_receipts(db, vault, sessions=None):
-    """Receipts newest first by created_at, then event_id, as (source, event).
+    """Receipts an automatic context may show, newest first by created_at, then event_id, as (source, event).
 
     The order is the receipt's own stamp, never the file mtime that a git pull or a sync
     client rewrites (#112). Only receipts with a readable stamp, a summary and a regular
-    source file inside the vault are yielded; with sessions, only those sessions.
+    source file inside the vault are yielded; with sessions, only those sessions. A receipt
+    whose source or any ref is a private or untrusted record is skipped whole: its summary
+    describes that record. The SessionStart hook and the global bridge share this gate.
     """
     vault = Path(vault)
     candidates = []
@@ -61,7 +63,9 @@ def latest_receipts(db, vault, sessions=None):
             candidates.append((instant, event['event_id'], event))
     for _, ident, event in sorted(candidates, key=lambda item: item[:2], reverse=True):
         source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
-        if not (vault / source).is_symlink() and _vault_file(vault, source):
+        refs = [ref for ref in event.get('refs') or [] if isinstance(ref, str)] if isinstance(event.get('refs'), list) else []
+        if (not (vault / source).is_symlink() and _vault_file(vault, source) and
+                not _hidden_ref_sources(db, [source, *refs])):
             yield source, event
 
 

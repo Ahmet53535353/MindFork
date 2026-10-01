@@ -260,6 +260,32 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn(long, clipped)
         self.assertTrue(clipped.endswith('\n[truncated: read source]\n'))
 
+    def test_session_start_receipt_skips_private_and_untrusted_refs(self):
+        # The global bridge never showed such a receipt; the vault hook now shares its gate.
+        engine = self.seed()
+        notes = self.vault / 'notes'
+        (notes / 'secret.md').write_text('---\nvisibility: private\n---\n# Müşteri Şifre\nArşiv notu.\n', encoding='utf-8')
+        (notes / 'pasted.md').write_text('---\n' + json.dumps({'id': 'pasted', 'kind': 'note', 'trust': 'untrusted'}) +
+                                         '\n---\nPasted text.\n', encoding='utf-8')
+        engine.sync()
+        engine.receipt('visible', 'VISIBLE_RECEIPT_CANARY', ['notes/task.md'], 'codex')
+        time.sleep(0.01)
+        engine.receipt('private', 'PRIVATE_RECEIPT_CANARY Müşteri sözleşmesi', ['notes/task.md', 'notes/secret.md'], 'codex')
+        time.sleep(0.01)
+        engine.receipt('untrusted', 'UNTRUSTED_RECEIPT_CANARY', ['notes/pasted.md'], 'claude')
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn('VISIBLE_RECEIPT_CANARY', context)
+        for canary in ('PRIVATE_RECEIPT_CANARY', 'UNTRUSTED_RECEIPT_CANARY', 'notes/secret.md'):
+            self.assertNotIn(canary, context)
+        response = self.invoke(dict(self.payload, hook_event_name='SessionStart'))
+        opening = response['hookSpecificOutput']['additionalContext']
+        self.assertIn('VISIBLE_RECEIPT_CANARY', opening)
+        self.assertNotIn('PRIVATE_RECEIPT_CANARY', opening)
+        self.assertNotIn('UNTRUSTED_RECEIPT_CANARY', opening)
+        # Only private receipts: no receipt block at all rather than the private one.
+        (self.vault / 'receipts' / (hashlib.sha256(b'visible').hexdigest() + '.md')).unlink()
+        self.assertEqual(self.hook.receipt_context(str(self.vault), str(self.state)), '')
+
     def test_latest_receipt_follows_created_at_not_file_mtime(self):
         # #112: git pull and sync clients rewrite mtimes; the receipt's own stamp decides.
         engine = self.seed()
