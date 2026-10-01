@@ -21,14 +21,16 @@ def windows_runtime_env():
 
 # Every BEYIN_* variable is a user setting or a hook flag (BEYIN_V3_SKIP, BEYIN_JEV_DISABLE,
 # BEYIN_V3_FILTER_HARNESS_TURNS, BEYIN_V3_NO_RECEIPT_REMINDER, BEYIN_UPDATES_OFF, ...). A suite run
-# from a configured shell or an agent session must not inherit them; a test that exercises one
-# passes it explicitly.
+# from a configured shell or an agent session must not inherit them. Only the values the suite
+# itself inherited are dropped: one a test sets in os.environ (BEYIN_PYTHON for a missing
+# interpreter) still reaches its child, as does one passed explicitly.
 USER_ENV_PREFIX = 'BEYIN_'
+_INHERITED = {key: value for key, value in os.environ.items() if key.upper().startswith(USER_ENV_PREFIX)}
 
 
 def inherited_env(**extra):
-    """The parent environment without user Beyin settings, plus the given values."""
-    env = {key: value for key, value in os.environ.items() if not key.upper().startswith(USER_ENV_PREFIX)}
+    """The current environment without the user Beyin settings the suite inherited, plus extra."""
+    env = {key: value for key, value in os.environ.items() if _INHERITED.get(key) != value}
     env.update(extra)
     return env
 
