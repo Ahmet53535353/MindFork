@@ -142,6 +142,8 @@ class CompanionBudgetTest(unittest.TestCase):
         self.assertIn('[Related source: Notlar/Plan.md]', text)
         self.assertIn('FIRST_RULE_CANARY', text)
         self.assertIn('HANDOFF_CANARY', text)
+        self.assertGreaterEqual(len(text), .95 * 5000)
+
     def test_knowledge_index_tight_budget_bounds_with_full_companion(self):
         # Issue #146: knowledge/index.md under tight budgets (1000, 2000, 3000)
         # with full companion files must strictly stay within budget (len <= budget).
@@ -223,7 +225,33 @@ class CompanionBudgetTest(unittest.TestCase):
                     # Reaches full 1500 allowance ceiling
                     self.assertGreaterEqual(len(map_body), 1400)
 
+    def test_knowledge_index_does_not_grow_while_companion_is_clipped(self):
+        # #146 kept the map at its old share while companion sources are clipped; only the
+        # separate opening budget (up to 24000) has room//4 above 600 in that state.
+        tmp = tempfile.TemporaryDirectory(prefix='companion-index-clipped-')
+        self.addCleanup(tmp.cleanup)
+        vault = Path(tmp.name) / 'vault'
+        (vault / COMPANION).mkdir(parents=True)
+        (vault / 'knowledge').mkdir()
+        store = evaluator.load_runtime().MemoryStore(Path(tmp.name) / 'runtime', vault)
+        self.addCleanup(lambda: evaluator.close_store(store))
+        rules = '# Kurallar\n' + ''.join(f'- kural {i}: uzun bir calisma kuralinin tam metni burada durur.\n'
+                                         for i in range(600))
+        index_body = '# Knowledge Map\n' + ''.join(f'- [[concept-{i:03d}]]: summary {i}.\n' for i in range(1, 150))
+        for source, body in [(f'{COMPANION}/{name}', rules if name == 'Kurallar.md' else body)
+                             for name, body in BODIES.items()] + [('knowledge/index.md', index_body)]:
+            (vault / source).write_text(body, encoding='utf-8')
+            store.ingest({'id': source, 'kind': 'note', 'status': 'active', 'text': body,
+                          'source': source, 'updated_at': '2026-09-18T10:00:00Z'})
+        for budget in (16000, 20000, 24000):
+            with self.subTest(budget=budget):
+                text = companion.context(store, budget, 'synthetic-budget', 'codex')
+                self.assertLessEqual(len(text), budget)
+                self.assertGreaterEqual(len(text), .95 * budget)
+                self.assertRegex(text, r'\[truncated: \d+ characters omitted')
+                map_body = text.split('[Knowledge map: knowledge/index.md]\n')[1].split('\n[')[0]
+                self.assertLessEqual(len(map_body), 600)
+
 
 if __name__ == '__main__':
     unittest.main()
-
