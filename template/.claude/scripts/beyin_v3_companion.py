@@ -404,7 +404,10 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
             addition = label + clip(record['text'], room)
             extra += addition
             retrieval_used += len(addition)
-    if receipt and len(text) + len(extra) + 80 < budget:
+    # The receipt comes with its whole header, which names the source and calls it a historical
+    # claim (#147), plus some body; a narrower room goes back to the companion sources instead.
+    receipt_head = receipt.find('):\n') + 3 if receipt else 0
+    if receipt and len(text) + len(extra) + receipt_head + 80 < budget:
         extra += clip(receipt, budget - len(text) - len(extra))
     # Retrieval takes its share first; every character it did not use goes back to the
     # clipped companion sources instead of being dropped.
