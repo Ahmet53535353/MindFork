@@ -230,7 +230,37 @@ class HygieneCliTest(unittest.TestCase):
         self.assertEqual(result['status'], 'needs_rewrite')
         self.assertEqual(result['files']['Last-Session.md']['status'], 'needs_rewrite')
         self.assertEqual(path.read_bytes(), before)
+        # Issue #168: full file is backed up verbatim to Arşiv before rewriting
+        archive = self.directory / 'Arşiv' / f'Last-Session-{datetime.now(timezone.utc).strftime("%Y-%m")}.md'
+        self.assertTrue(archive.exists())
+        archive_text = archive.read_text(encoding='utf-8')
+        self.assertIn(FILLER, archive_text)
+        self.assertIn('tam metin yedeği (needs_rewrite)', archive_text)
+        self.assertEqual(result['files']['Last-Session.md'].get('archive'),
+                         f'{COMPANION}/Arşiv/{archive.name}')
+
+    def test_dry_run_undated_prose_does_not_create_archive(self):
+        path = self.write('Last-Session.md', '# Son oturum\n\n' + FILLER * 60)
+        before = path.read_bytes()
+        result = self.run_cli('companion-compact', '--dry-run')
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(result['files']['Last-Session.md']['status'], 'needs_rewrite')
+        self.assertEqual(path.read_bytes(), before)
         self.assertFalse((self.directory / 'Arşiv').exists())
+
+    def test_needs_rewrite_avoids_duplicate_snapshots_on_repeated_runs(self):
+        body = '# Threads\n\n## Active Threads\n' + ('### Thread\nAktif konu detay metni.\n' * 300)
+        path = self.write('Threads.md', body)
+        first = self.run_cli('companion-compact')
+        self.assertEqual(first['files']['Threads.md']['status'], 'needs_rewrite')
+        archive = self.directory / 'Arşiv' / f'Threads-{datetime.now(timezone.utc).strftime("%Y-%m")}.md'
+        self.assertTrue(archive.exists())
+        first_size = len(archive.read_text(encoding='utf-8'))
+        # Second run without changes should not duplicate the snapshot
+        second = self.run_cli('companion-compact')
+        self.assertEqual(second['files']['Threads.md']['status'], 'needs_rewrite')
+        second_size = len(archive.read_text(encoding='utf-8'))
+        self.assertEqual(first_size, second_size)
 
     def test_symlinked_archive_directory_is_refused(self):
         self.write('Last-Session.md', oversized_last_session(8))

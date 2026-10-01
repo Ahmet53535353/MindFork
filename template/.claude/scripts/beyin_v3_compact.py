@@ -263,8 +263,45 @@ def compact(vault, state, dry_run=False, now=None):
         archive_relative = f'{relative}/{ARCHIVE_DIRECTORY}/{archive_name}'
         result = plan(text, name, limit, POINTER.format(archive_relative))
         if result is None:
+            report.update(archive=archive_relative)
+            if dry_run:
+                files[name] = dict(report, status='needs_rewrite',
+                                   reason='No Previous/Closed section and no older dated entry to move; rewrite the file within the limit.')
+                continue
+            archive = target / ARCHIVE_DIRECTORY / archive_name
+            _inside(archive, vault)
+            previous = archive.read_bytes() if archive.exists() else None
+            try:
+                existing = previous.decode('utf-8') if previous is not None else None
+            except UnicodeDecodeError:
+                files[name] = dict(report, status='needs_attention', reason='existing archive is not UTF-8; nothing moved')
+                continue
+            newline = '\r\n' if '\r\n' in text else '\n'
+            backup_marker = f'{len(text)} karakter tam metin yedeği (needs_rewrite)'
+            if existing is None or backup_marker not in existing or text not in existing:
+                if existing is None:
+                    existing = newline.join([
+                        '---', '{"kind": "note", "visibility": "private", "title": "' + name + ' arşivi ' + month + '"}', '---',
+                        '# ' + name + ' arşivi: ' + month, '',
+                        '`beyin.py companion-compact` bu dosyaya yalnız ekleme yapar. Taşınan metin kelimesi kelimesine '
+                        'korunur, hiçbir şey silinmez. `visibility: private` olduğu için otomatik bağlama girmez; '
+                        'gerektiğinde bu dosyayı doğrudan aç.', ''])
+                elif not existing.endswith('\n'):
+                    existing += newline
+                block = (newline + '## ' + now.strftime('%Y-%m-%d %H:%M UTC') + ', ' + name + ', ' +
+                         backup_marker + newline + newline + text)
+                if not block.endswith('\n'):
+                    block += newline
+                _write(archive, existing + block)
+                if path.read_bytes() != raw:
+                    if previous is None:
+                        archive.unlink()
+                    else:
+                        _write(archive, previous.decode('utf-8'))
+                    files[name] = dict(report, status='conflict', reason='file changed during compaction; nothing moved, retry')
+                    continue
             files[name] = dict(report, status='needs_rewrite',
-                               reason='No Previous/Closed section and no older dated entry to move; rewrite the file within the limit.')
+                               reason='No Previous/Closed section and no older dated entry to move; full file backed up to archive. Rewrite the file within the limit.')
             continue
         report.update(chars_after=len(result['live']), moved_chars=result['moved_chars'],
                       moved_entries=result['moved_entries'], moved_history=result['moved_history'],

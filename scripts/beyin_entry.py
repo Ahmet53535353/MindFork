@@ -204,7 +204,8 @@ def human_result(result, command, installed_version=None):
                 if not entry.get('within_limit_after'):
                     lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde; dosyayi sinir icinde yeniden yaz.')
             elif entry.get('status') == 'needs_rewrite':
-                lines.append(name + ': tasinacak tarihli eski kayit yok; dosyayi sinir icinde yeniden yaz.')
+                backup_note = ' (tam metin arsive yedeklendi: ' + str(entry.get('archive')) + ')' if entry.get('archive') else ''
+                lines.append(name + ': tasinacak tarihli eski kayit yok' + backup_note + '; dosyayi sinir icinde yeniden yaz.')
             elif entry.get('status') == 'conflict':
                 lines.append(name + ': islem sirasinda dosya degisti; hicbir sey tasinmadi, tekrar dene.')
             elif entry.get('status') == 'needs_attention':
