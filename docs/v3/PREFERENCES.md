@@ -90,6 +90,20 @@ python3 beyin.py preferences --promotion on
 
 Companion klasörü, kasa sınıfı adlar (`Kasa`, `Şifreler`, `Müşteriler`, `Özel`, `Private` gibi, emoji ya da numara önekli yazımlar dahil), arşiv, şablon ve kod klasörleri bu sinyallerin hepsinden muaftır. Ayarlar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `hygiene.json` dosyasında tutulur; makineye özeldir, profil değişimi onlara dokunmaz ve rollback güvenlidir. Kapatmak için aynı seçeneği `off` ile ver.
 
+## Paralel oturum bildirimi
+
+Aynı vault'ta birden çok oturum açıkken ajanlar ortak git index'ine, ortak geçici dosyalara ya da aynı nota dokunabilir. Kart tarafı companion protokolüyle çözülü; bu bildirim kartın dışında kalan ortak şeyler içindir (#170). Varsayılan kapalıdır:
+
+```bash
+python3 beyin.py preferences --parallel-sessions on
+```
+
+- Açıkken her gerçek kullanıcı isteminde (UserPromptSubmit; ilk istemi SessionStart olarak gönderen Hermes, OpenCode ve Antigravity'de SessionStart) oturum kendi işaretini yazar. Son 45 dakikada etkin olan ve bu oturumda henüz duyurulmamış başka oturum varsa bağlamın başına tek satır eklenir: `[Paralel oturum] Bu vault'ta 2 oturum daha acik: #3f9a1c2b (3 dk once), #e5f6a7b8 (14 dk once). Ayni dosyaya dokunmadan once diskten yeniden oku; commit oncesi git status.`
+- Kimlik, o oturumun `Receipt session=` değerinin ilk 8 karakteridir; öbür oturumun Last-Session kartı başlığından bulunur. Satırda en fazla iki oturum adıyla yazılır, fazlası sayılır. Aynı oturum bir oturumda bir kez duyurulur; sonradan açılan bir oturum bir sonraki istemde bir kez söylenir. Alt ajan bildirimleri gibi sentetik turlar ne işaret yazar ne satır alır.
+- İşaret runtime klasöründe `session-markers/<sha256(harness + "\0" + session_id)>.json` dosyasıdır ve yalnız `schema, harness, session, first_at, last_at, announced` taşır: istem metni ve çalışma klasörü yazılmaz. Runtime klasörü vault başına ve makineye özel olduğundan başka vault'taki ya da başka makinedeki oturumlar sayılmaz.
+- SessionEnd kendi işaretini siler (`/clear` sonrası hayalet oturum kalmaz). Her yazımda 24 saatten eski işaretler silinir ve en fazla 128 işaret tutulur. Okunamayan işaret yok sayılır; işaret hatası hook'u düşürmez, yalnız satır düşer.
+- Ayar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `parallel-sessions.json` dosyasında tutulur; rollback güvenlidir. Kapalıyken hook çıktısı değişmez ve işaret yazılmaz. `doctor` açıkken etkin işaret sayısını salt okunur olarak yazar. Kapatmak için `--parallel-sessions off`.
+
 ## Stop'ta receipt hatırlatması
 
 Kurulum, Claude ve Codex için PostToolUse hook'unu yalnız dosya düzenleyen araçlara bağlar (`Edit|Write|apply_patch`). Bu olay geldiğinde hook, vault dışındaki runtime klasörüne oturum kimliğinin hash'iyle adlandırılmış küçük bir düzenleme işareti yazar; transcript okunmaz. Kabuk komutuyla yapılan düzenlemeler bu olayı tetiklemez. Stop'ta runtime kaydında aynı istemci ve aynı `session` değeriyle, düzenlemelerden sonra yazılmış bir receipt yoksa hook oturum başına bir kez Stop'u engeller ve `python3 beyin.py receipt --file RECEIPT_JSON --harness claude` komutunu (Codex için `--harness codex`, Windows'ta `py -3`) `Receipt session=<değer>` bilgisiyle birlikte hatırlatır. Bu değer receipt JSON'undaki `session` alanına yazılmazsa receipt bu checkpoint'i kapatmaz. Receipt'ten sonra yapılan yeni düzenlemeler yeni bir pencere açar.

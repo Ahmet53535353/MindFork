@@ -171,6 +171,10 @@ def human_result(result, command, installed_version=None):
                          ', terfi raporu ' + ('acik' if hygiene.get('promotion') else 'kapali'))
         if result.get('hygiene_notice'):
             lines.append(result['hygiene_notice'])
+        if result.get('parallel_sessions'):
+            lines.append('Paralel oturum bildirimi: ' + ('acik' if result['parallel_sessions'] == 'on' else 'kapali'))
+        if result.get('parallel_sessions_notice'):
+            lines.append(result['parallel_sessions_notice'])
         if result.get('excluded_components'):
             lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']))
         if result.get('exclusion_notice'):
@@ -326,6 +330,11 @@ def human_result(result, command, installed_version=None):
         if promo.get('cold'):
             lines.append('Soguk klasorler (terfi karari senin): ' +
                          ', '.join(plain_text(entry['folder']) + ' (' + str(entry['days_quiet']) + ' gun)' for entry in promo['cold'][:3]))
+        parallel = result.get('parallel_sessions') or {}
+        if parallel.get('enabled'):
+            lines.append('Paralel oturum bildirimi: acik (son 45 dakikada etkin ' + str(parallel.get('active', 0)) + ' oturum isareti)')
+        elif parallel.get('valid') is False:
+            lines.append('parallel-sessions.json gecersiz; paralel oturum bildirimi kapali sayiliyor.')
         lines += state_location_lines(result.get('state_location'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
