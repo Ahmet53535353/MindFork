@@ -404,6 +404,11 @@ def main(argv=None):
                 result['companion_context'], context_valid = companion.read_context(state)
                 if not context_valid:
                     result['companion_context_notice'] = companion.CONTEXT_FILE + ' gecersiz; oturum basi baglami context_chars ile sinirli.'
+            widest = max(result['companion_context']['context_chars'], settings['context_chars'])
+            if companion.client_budget('claude', widest) < widest:  # #175: say so instead of silently using less
+                result['client_context_notice'] = (f"Claude Code oturumlarinda otomatik baglam {companion.client_budget('claude', widest)} "
+                                                   'karakterde tutulur: Claude Code 10.000 karakteri asan hook baglamini dosyaya '
+                                                   'tasiyip modele yalniz ilk ~2.000 karakteri gosterir.')
             import beyin_v3_releases as releases
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:

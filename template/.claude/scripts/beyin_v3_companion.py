@@ -159,6 +159,31 @@ def opening_budget(state, context_chars):
     return read_context(state)[0]['context_chars'] or context_chars
 
 
+# Claude Code moves a hook's additionalContext longer than 10,000 characters (JavaScript string
+# length, so UTF-16 units) to a file and shows the model only a ~2,000 character preview; no
+# setting raises it (#175). A larger budget there would hide Last-Session and Threads, so its
+# automatic context stays under the line. Clients without a known cap here keep their budget.
+CLIENT_TEXT_LIMITS = {'claude': 10000}
+CLIENT_HEADROOM = 500
+
+
+def client_budget(harness, chars):
+    """The part of a character budget the client shows in full."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    return min(chars, limit - CLIENT_HEADROOM) if limit else chars
+
+
+def fit_client(harness, text):
+    """Last guard after client_budget: an astral character (the companion folder's emoji) counts
+    twice in UTF-16, so trim the tail until the client's own measure fits."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    over = len(text.encode('utf-16-le')) // 2 - limit if limit else 0
+    while over > 0:
+        text = text[:len(text) - (over + 1) // 2]  # a character is one or two units
+        over = len(text.encode('utf-16-le')) // 2 - limit
+    return text
+
+
 def size(path):
     """Unicode characters as stored: not bytes and not UTF-16 units, so a Turkish or
     emoji-rich file is not reported larger than it is. Line endings are not translated
