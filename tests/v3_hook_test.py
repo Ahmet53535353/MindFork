@@ -124,7 +124,7 @@ class HookInstallerTest(unittest.TestCase):
     def test_degraded_sync_acknowledges_event_and_keeps_explicit_health_warning(self):
         self.seed()
         broken = self.vault / 'notes/broken.md'
-        broken.write_text('---\nunsupported:\n  nested: metadata\n---\nExcluded synthetic note.\n', encoding='utf-8')
+        broken.write_text('---\nunsupported:\n  nested:\n    deeper: metadata\n---\nExcluded synthetic note.\n', encoding='utf-8')
         self.hook.enqueue_event(self.vault, self.state, self.payload, 'codex')
         result = self.hook.drain_queue(self.vault, self.state)
         self.assertEqual(result['processed'], 1)
