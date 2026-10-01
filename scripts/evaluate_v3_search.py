@@ -159,6 +159,12 @@ def evaluate_mode(store, cases: List[Dict[str, Any]], mode: str, limit: int = 10
         elif mode == "strict":
             res = store._retrieve(query, limit=limit, strict=True)
             records = res.get("records", [])
+        elif mode == "non_strict_no_daily":
+            # Control for the reranker: the same candidate pool minus the sources the hook's
+            # strict path already drops (MemoryStore.STRICT_EXCLUDE, i.e. daily/), no reweighting.
+            candidates = store.candidates(query, limit=32, strict=False)
+            records = [r for r in candidates
+                       if not str(r.get("source", "")).startswith(store.STRICT_EXCLUDE)][:limit]
         elif mode == "reranked":
             candidates = store.candidates(query, limit=32, strict=False)
             records = rerank_candidates(query, candidates, runtime)[:limit]
@@ -244,7 +250,7 @@ def evaluate(fixture_path: Optional[Path] = None, limit: int = 10, modes: Option
     """Execute complete benchmark across requested modes."""
     fixture, digest = read_fixture(fixture_path)
     runtime = load_runtime()
-    modes = modes or ["non_strict", "strict", "reranked", "context"]
+    modes = modes or ["non_strict", "non_strict_no_daily", "strict", "reranked", "context"]
 
     with tempfile.TemporaryDirectory(prefix="beyin-search-bench-") as tmp:
         store, cold_index_ms = seed_store(runtime, Path(tmp), fixture)
@@ -285,6 +291,7 @@ def format_markdown(report: Dict[str, Any]) -> str:
 
     mode_labels = {
         "non_strict": "Standard Search (`strict=False`)",
+        "non_strict_no_daily": "Standard Search minus `daily/` (control)",
         "strict": "Strict Retrieval (`strict=True`)",
         "reranked": "Field-Weighted Reranked (`reranked`)",
         "context": "Per-Turn Context Delivery"
@@ -361,7 +368,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE, help="Path to benchmark fixture JSON")
     parser.add_argument("--limit", type=int, default=10, help="Retrieval candidate limit")
-    parser.add_argument("--modes", nargs="+", default=["non_strict", "strict", "reranked", "context"], help="Modes to evaluate")
+    parser.add_argument("--modes", nargs="+", default=["non_strict", "non_strict_no_daily", "strict", "reranked", "context"], help="Modes to evaluate")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     args = parser.parse_args()
 
