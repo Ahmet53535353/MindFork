@@ -77,7 +77,7 @@ class ContextRefreshTest(unittest.TestCase):
     def test_context_serves_fresh_healthy_subset_with_explicit_degraded_warning(self):
         healthy = self.vault/'notes/healthy.md'
         healthy.write_text('Current healthy nebula calibration note.\n', encoding='utf-8')
-        self.source.write_text('---\nunsupported:\n  nested: metadata\n---\nChanged source',encoding='utf-8')
+        self.source.write_text('---\nunsupported:\n  nested:\n    deeper: metadata\n---\nChanged source', encoding='utf-8')
         result=self.run_cli('context','nebula calibration')
         self.assertEqual(result.returncode,0,result.stderr)
         output=json.loads(result.stdout)

@@ -225,7 +225,7 @@ class SourceSyncTest(unittest.TestCase):
 
     def test_unsupported_metadata_reports_degraded_not_succeeded(self):
         source = self.vault / 'unsupported.md'
-        source.write_text('---\nid: unsupported\nfacts:\n  owner: Synthetic Reviewer\n---\nNebula calibration metadata fixture.\n', encoding='utf-8')
+        source.write_text('---\nid: unsupported\nfacts:\n  owner:\n    name: Synthetic Reviewer\n---\nNebula calibration metadata fixture.\n', encoding='utf-8')
         report = self.engine.sync()
         self.assertTrue(report['warnings'])
         self.assertEqual(report['status'], 'degraded')
@@ -269,6 +269,35 @@ class SourceSyncTest(unittest.TestCase):
                 self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
                 report = self.engine.sync()
                 self.assertEqual(report['status'], 'succeeded', report)
+                record = self.records()[0]
+                for key, value in expected.items():
+                    self.assertEqual(record[key], value)
+                self.assertEqual(self.module.parse(self.module.render(metadata, body)), (metadata, body))
+
+    def test_yaml_single_level_mapping_round_trip(self):
+        """#179: Single-level nested mapping (e.g. Claude Code metadata: with type/modified) indexes cleanly."""
+        cases = [
+            ('metadata:\n  type: project\n  modified: 2026-09-26T12:00:00.000Z',
+             {'metadata': {'type': 'project', 'modified': '2026-09-26T12:00:00.000Z'}}),
+            ('facts:\n  owner: Synthetic Reviewer\n  priority: 1\n  verified: true\n  notes: null',
+             {'facts': {'owner': 'Synthetic Reviewer', 'priority': 1, 'verified': True, 'notes': None}}),
+            ('custom:\n  quoted: "value with spaces"\n  single: \'another value\'\n  tags: [a, b]',
+             {'custom': {'quoted': 'value with spaces', 'single': 'another value', 'tags': ['a', 'b']}}),
+            ('metadata:\n  empty:\n  active: true',
+             {'metadata': {'empty': None, 'active': True}}),
+            ('info:\n    indented_4_spaces: value\n    another: 123',
+             {'info': {'indented_4_spaces': 'value', 'another': 123}}),
+        ]
+        source = self.vault / 'mapping.md'
+        body = 'Nebula calibration nested mapping fixture.\n'
+        for header, expected in cases:
+            with self.subTest(header=header):
+                metadata = dict(expected, id='mapping-note', project='nebula')
+                source.write_text('---\nid: mapping-note\nproject: nebula\n' + header + '\n---\n' + body, encoding='utf-8')
+                self.assertEqual(self.module.parse(source.read_text(encoding='utf-8')), (metadata, body))
+                report = self.engine.sync()
+                self.assertEqual(report['status'], 'succeeded', report)
+                self.assertEqual(report['warnings'], [])
                 record = self.records()[0]
                 for key, value in expected.items():
                     self.assertEqual(record[key], value)
@@ -347,7 +376,10 @@ class SourceSyncTest(unittest.TestCase):
 
     def test_unsupported_yaml_forms_warn_and_exclude_source(self):
         headers = [
-            'field:\n  nested: value', 'field: {nested: value}', 'field: [a, [b]]',
+            'field:\n  nested:\n    deeper: value', 'field:\n  nested: value\n  - item',
+            'field:\n  nested: value\n    extra: value', 'field:\n\tnested: value',
+            'field:\n  nested: value\n  nested: duplicate',
+            'field: {nested: value}', 'field: [a, [b]]',
             'field:\n  - [nested]', 'field:\n  - {nested: value}',
             'field:\n  - - nested', 'field:\n  - nested: value',
             'field:\n  - a\n    - b', 'field:\n    - a\n  - b',

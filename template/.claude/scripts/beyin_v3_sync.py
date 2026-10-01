@@ -108,8 +108,31 @@ def _yaml_sequence(value):
     return items
 
 
+def _parse_yaml_value(value):
+    if not value.strip():
+        return None
+    if value[0] in '|>&*!':
+        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        if value.startswith("'") and value.endswith("'"):
+            return value[1:-1].replace("''", "'")
+        elif value.startswith('['):
+            return _yaml_sequence(value.rstrip())
+        elif re.fullmatch(r'\{\{[^{}\n]*\}\}', value.rstrip()):
+            # A Templater placeholder is literal text until Obsidian expands it.
+            return value.rstrip()
+        elif value[0] == '{':
+            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+        elif value[0] in '"\'':
+            return _quoted_scalar(value)
+        else:
+            return _plain_scalar(value)
+
+
 def parse(text):
-    """JSON frontmatter or deliberately bounded flat scalar/list YAML."""
+    """JSON frontmatter or deliberately bounded flat scalar/list YAML with single-level mapping."""
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != '---':
         return {}, text
@@ -139,34 +162,56 @@ def parse(text):
         key, value = match.groups()
         if not value.strip():
             # Obsidian writes empty properties as `key:` and lists as indented `- item` blocks.
-            items, indent = [], None
+            # Single-level nested mapping (e.g. Claude Code auto-memory `metadata:`) writes indented `key: val` lines.
+            items, mapping = [], {}
+            indent, mode = None, None
             while index < len(header_lines) and header_lines[index].startswith((' ', '\t')):
-                item = re.fullmatch(r'( +)-[ ]+(.+)', header_lines[index])
-                if not item or (indent is not None and item[1] != indent):
+                cur = header_lines[index]
+                if cur.startswith('\t'):
                     raise ValueError('unsupported YAML metadata; use JSON frontmatter')
-                indent = item[1]
-                items.append(_yaml_scalar(item[2]))
+                if mode is None:
+                    list_match = re.fullmatch(r'( +)-[ ]+(.+)', cur)
+                    map_match = re.fullmatch(r'( +)([^\W\d][\w-]*):[ \t]*(.*)', cur)
+                    if list_match:
+                        mode = 'list'
+                        indent = list_match[1]
+                        items.append(_yaml_scalar(list_match[2]))
+                    elif map_match:
+                        mode = 'mapping'
+                        indent = map_match[1]
+                        sub_key, sub_val = map_match[2], map_match[3]
+                        parsed_val = _parse_yaml_value(sub_val)
+                        if isinstance(parsed_val, dict):
+                            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                        mapping[sub_key] = parsed_val
+                    else:
+                        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                elif mode == 'list':
+                    list_match = re.fullmatch(r'( +)-[ ]+(.+)', cur)
+                    if not list_match or list_match[1] != indent:
+                        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                    items.append(_yaml_scalar(list_match[2]))
+                elif mode == 'mapping':
+                    if not cur.startswith(indent) or cur.startswith(indent + ' ') or cur.startswith(indent + '\t'):
+                        # Mismatched, deeper or tabbed indentation is rejected.
+                        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                    map_match = re.fullmatch(r'([^\W\d][\w-]*):[ \t]*(.*)', cur[len(indent):])
+                    if not map_match or map_match[1] in mapping:
+                        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                    sub_key, sub_val = map_match.groups()
+                    parsed_val = _parse_yaml_value(sub_val)
+                    if isinstance(parsed_val, dict):
+                        raise ValueError('unsupported YAML metadata; use JSON frontmatter')
+                    mapping[sub_key] = parsed_val
                 index += 1
-            metadata[key] = items if items else None
-            continue
-        if value[0] in '|>&*!':
-            raise ValueError('unsupported YAML metadata; use JSON frontmatter')
-        try:
-            metadata[key] = json.loads(value)
-        except json.JSONDecodeError:
-            if value.startswith("'") and value.endswith("'"):
-                metadata[key] = value[1:-1].replace("''", "'")
-            elif value.startswith('['):
-                metadata[key] = _yaml_sequence(value.rstrip())
-            elif re.fullmatch(r'\{\{[^{}\n]*\}\}', value.rstrip()):
-                # A Templater placeholder is literal text until Obsidian expands it.
-                metadata[key] = value.rstrip()
-            elif value[0] == '{':
-                raise ValueError('unsupported YAML metadata; use JSON frontmatter')
-            elif value[0] in '"\'':
-                metadata[key] = _quoted_scalar(value)
+            if mode == 'list':
+                metadata[key] = items
+            elif mode == 'mapping':
+                metadata[key] = mapping
             else:
-                metadata[key] = _plain_scalar(value)
+                metadata[key] = None
+            continue
+        metadata[key] = _parse_yaml_value(value)
     return metadata, body
 
 
