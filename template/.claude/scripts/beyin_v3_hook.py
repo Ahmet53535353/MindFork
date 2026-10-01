@@ -402,6 +402,21 @@ def main():
                                                    harness=args.harness, state=state)
             except Exception:
                 pass
+        if not args.metadata_only:
+            # Opt-in parallel-session notice (#170), machine-local in state/parallel-sessions.json.
+            # Without that file a prompt costs one stat; SessionEnd still removes its own marker.
+            try:
+                if event == 'SessionEnd':
+                    if (state / 'session-markers').is_dir():
+                        from beyin_v3_parallel import end
+                        end(state, args.harness, payload.get('session_id'))
+                elif (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity'))) \
+                        and (state / 'parallel-sessions.json').is_file() and not is_synthetic_prompt(payload):
+                    from beyin_v3_parallel import enabled, touch
+                    if enabled(state):
+                        notice += touch(state, args.harness, payload.get('session_id'))
+            except Exception:
+                pass  # a marker can never cost the turn
         if not settings['auto_sync']:
             print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return

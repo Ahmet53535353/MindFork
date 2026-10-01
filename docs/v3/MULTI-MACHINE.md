@@ -93,6 +93,11 @@ göre sıralar, en yenisini korur.
 - **Git adımları:** çalışmaya başlamadan önce `pull`; bitince `commit`, `pull --rebase`,
   `push`. Aynı vault'ta birden çok oturum açıksa git komutlarını aynı anda birden çok
   oturumdan çalıştırma; bir oturumdan ya da günün sonunda tek seferde gönder.
+- **Aynı makinede paralel oturumlar:** `preferences --parallel-sessions on` açıkken ajan,
+  aynı vault'ta son 45 dakikada etkin başka bir oturum varsa ilk isteminde tek satırlık bir
+  uyarı alır ([PREFERENCES.md](PREFERENCES.md#paralel-oturum-bildirimi)). İşaretler makineye
+  özel runtime klasöründe durur; öbür makinedeki oturumları görmez, onlar için yukarıdaki git
+  adımları geçerlidir.
 - **Çakışma çözülmeden oturum açma:** `pull --rebase` çakışmada durduğunda dosyada
   `<<<<<<<`, `=======`, `>>>>>>>` işaretleri kalır. Bu halde açılan oturumda `sync` dosyayı
   olduğu gibi indeksler ve işaretler sonraki bağlama girer; ajan onları içerik sanabilir.
