@@ -137,7 +137,7 @@ class PreferencesTest(unittest.TestCase):
             r = subprocess.run([sys.executable, str(ROOT / 'template/.claude/scripts/beyin_v3_hook.py'),
                                 '--vault', str(self.vault), '--state', str(self.state), '--harness', harness],
                                input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8',
-                               env=dict(os.environ, BEYIN_V3_NO_SPAWN='1'), timeout=20)
+                               env=inherited_env(BEYIN_V3_NO_SPAWN='1'), timeout=20)
             self.assertEqual(r.returncode, 0, r.stderr)
             return json.loads(r.stdout)['hookSpecificOutput']['additionalContext']
         for event, prompt in (('SessionStart', None), ('UserPromptSubmit', 'nerede kalmıştık')):
