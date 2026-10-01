@@ -235,7 +235,8 @@ class HookInstallerTest(unittest.TestCase):
         receipt_file.write_text(short_body, encoding='utf-8')
         context = self.hook.receipt_context(str(self.vault))
         self.assertIn(short_body, context)
-        self.assertNotIn('[truncated: read source]', context)
+        self.assertNotIn('[truncated:', context)
+        self.assertIn('Latest receipt (receipts/short.md; ', context)
 
         long_body = '---\n{"kind": "receipt", "event_id": "long", "refs": [' + ', '.join(f'"ref_{i:03d}.md"' for i in range(100)) + ']}\n---\nLong summary.\n'
         self.assertGreater(len(long_body), 1200)
@@ -243,9 +244,16 @@ class HookInstallerTest(unittest.TestCase):
         receipt_file.write_text(long_body, encoding='utf-8')
         context = self.hook.receipt_context(str(self.vault))
         self.assertTrue(context.endswith('\n[truncated: read source]\n'))
-        header = '\nLatest receipt (historical agent claim, not independently verified):\n'
+        header = '\nLatest receipt (receipts/short.md; historical agent claim, not independently verified):\n'
+        self.assertTrue(context.startswith(header))
+        self.assertTrue((self.vault / 'receipts/short.md').is_file())
         body = context[len(header):]
         self.assertEqual(len(body), 1200)
+        # SessionStart clips this block from the end; the source must survive that (#147).
+        import beyin_v3_companion as companion
+        clipped = companion.clip(context, 400)
+        self.assertIn('receipts/short.md', clipped)
+        self.assertTrue(clipped.endswith('\n[truncated: read source]\n'))
 
     def test_stop_stdin_queues_and_explicit_worker_drains(self):
         self.seed()

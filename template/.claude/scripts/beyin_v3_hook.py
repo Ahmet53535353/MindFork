@@ -100,7 +100,10 @@ def receipt_context(vault):
         content = source.read(budget + 1)
     if len(content) > budget:
         content = content[:budget - len(marker)] + marker
-    return "\nLatest receipt (historical agent claim, not independently verified):\n" + content
+    # Name the source in the header: callers clip this block from the end, which would
+    # replace a path carried in the tail marker with a generic one (#147).
+    source = path.relative_to(Path(vault)).as_posix()
+    return f"\nLatest receipt ({source}; historical agent claim, not independently verified):\n" + content
 
 
 def _get_session_receipt(database, harness, session, since):

@@ -69,6 +69,22 @@ class CompanionBudgetTest(unittest.TestCase):
                 text = self.context(budget)
                 self.assertGreaterEqual(len(text), .95 * budget)
 
+    def test_receipt_block_keeps_its_whole_header_or_stays_out(self):
+        # #147/#174: the header names the source and labels the receipt a historical claim.
+        # A clipped receipt must never show half of that header with no body under it.
+        name = 'receipts/' + '3f' * 32 + '.md'
+        receipt = (f'\nLatest receipt ({name}; historical agent claim, not independently verified):\n'
+                   + 'R' * 1174 + '\n[truncated: read source]\n')
+        header = receipt[:receipt.index('):\n') + 3]
+        shown = 0
+        for budget in range(1000, 6000, 7):
+            text = companion.context(self.store, budget, 'synthetic-budget', 'codex', '', receipt)
+            self.assertLessEqual(len(text), budget)
+            if '\nLatest receipt' in text:
+                shown += 1
+                self.assertIn(header, text, budget)
+        self.assertGreater(shown, 0)
+
     def test_session_start_snapshot_does_not_starve_clipped_companion_sources(self):
         # When an unqueried snapshot note exists in the vault, SessionStart must not
         # allocate budget to it while companion files are clipped (#140).
