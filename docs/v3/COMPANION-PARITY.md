@@ -102,8 +102,11 @@ Düzeltme dört parçadır:
   `Arşiv/<Dosya>-YYYY-MM.md` dosyasına eklenir. Arşiv `visibility: private` işaretlidir;
   otomatik bağlama ve olağan aramaya girmez, gerektiğinde doğrudan açılır. Canlı dosyada
   arşiv yolunu gösteren tek bir satır kalır. Frontmatter, kod blokları, CRLF satır sonları
-  ve tarihsiz yapı korunur. Taşınacak tarihli kayıt yoksa komut dosyaya dokunmaz ve
-  `needs_rewrite` döner; o durumda ajan dosyayı sınır içinde yeniden yazar. Arşiv
+  ve tarihsiz yapı korunur. Taşınacak tarihli kayıt yoksa ya da taşımadan sonra dosya
+  hala sınırı aşıyorsa komut dosyanın kalan tam metnini aynı aylık arşive kelimesi
+  kelimesine yedekler (`backup: written`; dosya değişmemişse yeniden kopyalamaz,
+  `backup: exists`) ve `needs_rewrite` döner; ajan dosyayı ancak bundan sonra sınır içinde
+  yeniden yazar, böylece özetleme hiçbir metnin tek kopyası olmaz (#168). Arşiv
   yazıldıktan sonra canlı dosya değişmişse arşiv eski baytlarına döner ve `conflict`
   raporlanır. `--dry-run` hiçbir şey yazmadan planı gösterir. Komut model çağırmaz ve
   bitince yeni boyutları indekslemek için `sync` çalıştırır.

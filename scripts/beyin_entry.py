@@ -115,6 +115,15 @@ def state_location_lines(location):
     return lines
 
 
+def rewrite_note(entry):
+    """#168: the rewrite instruction, said only once the full text is safe in the archive."""
+    if entry.get('backup') in ('written', 'exists'):
+        return ' (tam metin arsive yedeklendi: ' + str(entry.get('archive')) + '); dosyayi sinir icinde yeniden yaz.'
+    if entry.get('backup') == 'planned':
+        return '; once --dry-run olmadan calistir, tam metin arsive yedeklenir; sonra dosyayi sinir icinde yeniden yaz.'
+    return '; dosyayi sinir icinde yeniden yaz.'
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
@@ -202,9 +211,9 @@ def human_result(result, command, installed_version=None):
                              (' olacak' if entry['status'] == 'planned' else '') + ', ' + str(entry.get('moved_chars')) +
                              ' karakter arsive ' + ('tasinacak' if entry['status'] == 'planned' else 'tasindi') + '.')
                 if not entry.get('within_limit_after'):
-                    lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde; dosyayi sinir icinde yeniden yaz.')
+                    lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde' + rewrite_note(entry))
             elif entry.get('status') == 'needs_rewrite':
-                lines.append(name + ': tasinacak tarihli eski kayit yok; dosyayi sinir icinde yeniden yaz.')
+                lines.append(name + ': tasinacak tarihli eski kayit yok' + rewrite_note(entry))
             elif entry.get('status') == 'conflict':
                 lines.append(name + ': islem sirasinda dosya degisti; hicbir sey tasinmadi, tekrar dene.')
             elif entry.get('status') == 'needs_attention':
