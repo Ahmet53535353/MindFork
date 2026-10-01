@@ -8,6 +8,8 @@ import tempfile
 import unittest
 import zipfile
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 COMPANION = '🔮 850-Companion'
 
@@ -19,7 +21,7 @@ class CompanionTest(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.vault = self.base / 'Örnek Beyin'; self.vault.mkdir()
         self.state = self.base / 'state'
-        self.env = dict(os.environ, BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
+        self.env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
 
     def run_cli(self, script, *args, payload=None):
         result = subprocess.run([sys.executable, str(script), *map(str, args)],

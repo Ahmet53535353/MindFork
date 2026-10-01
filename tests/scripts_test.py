@@ -18,6 +18,8 @@ import time
 import unittest
 import uuid
 
+from v3_package_helpers import inherited_env
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE_SCRIPTS = Path(
@@ -155,7 +157,7 @@ raise SystemExit(int(os.environ.get("BEYIN_TEST_EXIT", "0")))
         stub.chmod(0o755)
 
     def _environment(self, **overrides: str) -> dict[str, str]:
-        environment = os.environ.copy()
+        environment = inherited_env()
         environment.pop("BEYIN_INVOKED_BY", None)
         environment["PATH"] = f"{self.bin_dir}{os.pathsep}{environment['PATH']}"
         environment["BEYIN_TEST_LOG"] = str(self.stub_log)

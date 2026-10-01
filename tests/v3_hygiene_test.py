@@ -15,6 +15,8 @@ import time
 import unittest
 import unicodedata
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 MODULE = ROOT / 'template/.claude/scripts' / 'beyin_v3_hygiene.py'
 spec = importlib.util.spec_from_file_location('hygiene', MODULE)
@@ -101,7 +103,7 @@ class ClosedTasksTest(unittest.TestCase):
         # line pattern never matched a task created or updated through the CLI.
         state = Path(tempfile.mkdtemp(prefix='v3-hygiene-state-'))
         self.addCleanup(shutil.rmtree, state, True)
-        env = dict(os.environ, BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1')
+        env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1')
         for name, status in (('bitti', 'done'), ('iptal', 'cancelled'), ('suren', 'active')):
             record = {'source': 'tasks/alt/' + name + '.md', 'text': '# ' + name + '\nstatus: done\n',
                       'metadata': {'id': name, 'status': status, 'owner': 'synthetic'}}
@@ -371,7 +373,7 @@ class SettingsAndDoctorTest(unittest.TestCase):
     def doctor(self):
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
                                  '--state', str(self.state), 'doctor'], capture_output=True, text=True,
-                                encoding='utf-8', env=dict(os.environ, BEYIN_V3_NO_SPAWN='1'), timeout=60)
+                                encoding='utf-8', env=inherited_env(BEYIN_V3_NO_SPAWN='1'), timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 

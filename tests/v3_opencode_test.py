@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which('node')
 
@@ -153,8 +155,8 @@ class OpenCodeHarnessTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         home = Path(self.temp.name) / 'home'
         home.mkdir()
-        environment = patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home),
-                                              'BEYIN_V3_NO_SPAWN': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+        environment = patch.dict(os.environ, inherited_env(HOME=str(home), USERPROFILE=str(home),
+                                              BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1'), clear=True)
         environment.start()
         self.addCleanup(environment.stop)
         self.vault = Path(self.temp.name) / 'Beyin Ölçüm & Vault'

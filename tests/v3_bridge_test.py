@@ -8,6 +8,8 @@ import tempfile
 import unittest
 import zipfile
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -25,7 +27,7 @@ class BridgeTest(unittest.TestCase):
         self.state = self.root / 'state'
         self.project = self.root / 'Projects' / 'Örnek Space'; self.project.mkdir(parents=True)
         self.home = self.root / 'home'; self.home.mkdir()
-        self.env = dict(os.environ, HOME=str(self.home), USERPROFILE=str(self.home),
+        self.env = inherited_env(HOME=str(self.home), USERPROFILE=str(self.home),
                         BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
         self.payload = dict(hook_event_name='SessionStart', session_id='one-session', event_id='start',
                             cwd=str(self.project), prompt='TRANSCRIPT_CANARY')

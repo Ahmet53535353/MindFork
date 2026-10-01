@@ -18,6 +18,15 @@ def windows_runtime_env():
     return {key: os.environ[key] for key in ('SYSTEMROOT', 'WINDIR') if key in os.environ}
 
 
+def inherited_env(**extra):
+    """Agent-run suites inherit the parent's hook mute flags; keep them out of child envs."""
+    env = os.environ.copy()
+    env.pop('BEYIN_V3_SKIP', None)
+    env.pop('BEYIN_V3_INTERNAL', None)
+    env.update(extra)
+    return env
+
+
 def isolated_env(home):
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
