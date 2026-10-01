@@ -115,6 +115,23 @@ class OfflineUpdateTest(unittest.TestCase):
         self.module.recover(self.vault, self.state)
         self.assertEqual(snapshot(self.vault), before)
 
+    def test_recover_completes_after_a_user_note_changes_following_the_interruption(self):
+        # The cutover receipt from the first install is already on disk, so recovery has no
+        # migration left to prove; an edited note must not make it impossible.
+        def crash(phase, index=None):
+            if phase == 'after_replace' and index == 0:
+                raise OSError('Synthetic interruption after first managed replacement')
+        with patch.object(self.module, 'transaction_hook', side_effect=crash):
+            with self.assertRaises(OSError):
+                self.module.update(self.vault, self.state, self.package)
+        self.assertTrue((self.state / 'update-journal.json').exists())
+        self.note.write_text('User edit after the interruption.\n')
+        recovered = self.module.recover(self.vault, self.state)
+        self.assertEqual(recovered['status'], 'recovered')
+        self.assertEqual(self.version(), '3.0.1')
+        self.assertEqual(self.note.read_text(), 'User edit after the interruption.\n')
+        self.assertFalse((self.state / 'update-journal.json').exists())
+
 
     def test_builder_manifest_contains_matching_allowlisted_file_hashes(self):
         with zipfile.ZipFile(self.package) as archive:
