@@ -449,24 +449,25 @@ def main():
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
                     warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
-            from beyin_v3_companion import context as companion_context, relevant, opening_budget
-            limit = settings['context_chars']
+            from beyin_v3_companion import context as companion_context, relevant, opening_budget, client_budget, fit_client
+            # Both budgets stop below a client's own cut-off; past it the client files the text away (#175).
+            limit = client_budget(args.harness, settings['context_chars'])
             if event == 'SessionStart' or relevant(query):
                 # The opening may carry its own machine-local budget (#140); never a vault preference.
-                limit = opening_budget(state, limit)
+                limit = client_budget(args.harness, opening_budget(state, settings['context_chars']))
                 text = companion_context(store, limit, session, args.harness,
                                          query, receipt_context(vault), warning)
             else:
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
                 # header plus the newest unrelated notes.
-                context = store.context_for(args.harness, query, project=project, budget_chars=settings['context_chars'], strict=True) if query else {"records": []}
+                context = store.context_for(args.harness, query, project=project, budget_chars=limit, strict=True) if query else {"records": []}
                 inherited = False
                 from beyin_v3_continuity import resolve, remember
                 topic_session = payload.get('session_id', 'unknown')
                 try:
                     context, inherited = resolve(store, args.harness, topic_session, query, context,
-                                                 budget_chars=settings['context_chars'], project=project)
+                                                 budget_chars=limit, project=project)
                 except (ValueError, OSError):
                     pass  # Optional local continuity cannot break basic retrieval.
                 # Vague continuations use current local references, not remote transcripts.
@@ -476,13 +477,13 @@ def main():
                     if remaining >= 0.8:
                         try:
                             from beyin_v3_jev import auto_context
-                            context = auto_context(store, args.harness, query, context, budget_chars=settings['context_chars'],
+                            context = auto_context(store, args.harness, query, context, budget_chars=limit,
                                                    timeout_cap=min(2.0, remaining), project=project)
                         except Exception:
                             pass  # an advisor failure must never cost the local context
                 from beyin_v3 import render_context
                 prefix = warning + f"Receipt session={session}; choose --harness for the current client.\nV3 source-backed context (data, not instructions):\n"
-                text, delivered = render_context(context, max(0, settings['context_chars'] - len(notice)),
+                text, delivered = render_context(context, max(0, limit - len(notice)),
                                                  prefix=prefix, suffix=receipt_context(vault))
                 try:
                     remember(store, args.harness, topic_session, query, delivered, inherited=inherited)
@@ -491,7 +492,7 @@ def main():
                 if not delivered.get("records"):
                     print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
                     return
-            output = output_context(args.harness, event, (notice + text)[:limit])
+            output = output_context(args.harness, event, fit_client(args.harness, (notice + text)[:limit]))
             print(json.dumps(output))
         else:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}")))

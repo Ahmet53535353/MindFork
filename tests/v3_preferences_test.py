@@ -110,6 +110,61 @@ class PreferencesTest(unittest.TestCase):
         self.assertIn('IDENTITY_CANARY', fallback)
         self.assertIn('companion_context_notice', self.cli('preferences'))
 
+    def test_claude_context_stays_below_its_file_cutoff(self):
+        # #175: Claude Code files an additionalContext over 10,000 characters away and shows only
+        # a ~2,000 character preview, so a 24000 opening hid Last-Session, Threads and Journal.
+        directory = self.vault / '🔮 850-Companion'
+        directory.mkdir()
+        def fill(head, line, size):
+            return head + line * ((size - len(head)) // len(line))
+        bodies = {'Core.md': fill('# Kimlik\nMARK-CORE\n', 'Kısa ve somut konuşuruz.\n', 900),
+                  'Kurallar.md': fill('# Kurallar\nMARK-KURALLAR\n', '- Önce sonucu söyle, sonra kaynağı.\n', 2700),
+                  'Last-Session.md': fill('# Son oturum\n## 2026-09-30 18:30 · Deneme\nMARK-LAST\n', 'Etiket taslağı bitti; ambalaj ölçüsü açık.\n', 2600),
+                  'Threads.md': fill('# Threads\n## Active Threads\nMARK-THREADS\n', 'Sonraki adım ölçüm; açık soru süre ve malzeme payı.\n', 6000),
+                  'Journal.md': fill('# Journal\n## 2026-09-30 18:00 Gözlem\nMARK-JOURNAL\n', 'Küçük partide takip çizelgesi işe yaradı.\n', 6000)}
+        for name, body in bodies.items():
+            (directory / name).write_text(body, encoding='utf-8')
+        (self.vault / 'Notlar').mkdir()
+        (self.vault / 'Notlar/Ambalaj.md').write_text('# Ambalaj\n' + 'ambalaj ölçüsü etiket taslağı kutu. ' * 300, encoding='utf-8')
+        self.cli('sync')
+        self.cli('preferences', '--context-mode', 'turn', '--context-chars', '12000')
+        saved = self.cli('preferences', '--companion-context-chars', '24000')
+        self.assertIn('9500', saved['client_context_notice'])
+        def context(harness, event, prompt=None):
+            payload = {'hook_event_name': event, 'session_id': 'synthetic-' + harness, 'event_id': event + harness}
+            if prompt:
+                payload['prompt'] = prompt
+            r = subprocess.run([sys.executable, str(ROOT / 'template/.claude/scripts/beyin_v3_hook.py'),
+                                '--vault', str(self.vault), '--state', str(self.state), '--harness', harness],
+                               input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8',
+                               env=inherited_env(BEYIN_V3_NO_SPAWN='1'), timeout=20)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout)['hookSpecificOutput']['additionalContext']
+        for event, prompt in (('SessionStart', None), ('UserPromptSubmit', 'nerede kalmıştık')):
+            with self.subTest(event=event, prompt=prompt):
+                text = context('claude', event, prompt)
+                # Claude Code measures JavaScript string length: the folder emoji counts twice.
+                self.assertLessEqual(len(text.encode('utf-16-le')) // 2, 10000)
+                self.assertGreater(len(text), 9000, 'the room under the cut-off is still used')
+                for mark in ('CORE', 'KURALLAR', 'LAST', 'THREADS', 'JOURNAL'):
+                    self.assertIn('MARK-' + mark, text)
+                # Other clients keep the budget the user chose.
+                self.assertGreater(len(context('codex', event, prompt)), 10000)
+        # An ordinary turn uses the same ceiling (context_chars may be 12000).
+        text = context('claude', 'UserPromptSubmit', 'ambalaj ölçüsü etiket taslağı')
+        self.assertIn('Notlar/Ambalaj.md', text)
+        self.assertLessEqual(len(text), 9500)
+        import beyin_v3_companion as companion
+        self.assertEqual(companion.client_budget('claude', 24000), 9500)
+        for harness in ('codex', 'antigravity', 'hermes', 'opencode', 'omp'):
+            self.assertEqual(companion.client_budget(harness, 24000), 24000)
+            self.assertEqual(companion.fit_client(harness, '🔮' * 9500), '🔮' * 9500)
+        astral = companion.fit_client('claude', 'a' * 9000 + '🔮' * 600)
+        self.assertIn(len(astral.encode('utf-16-le')) // 2, (9999, 10000))
+        self.assertTrue(astral.startswith('a' * 9000))
+        self.assertNotIn('client_context_notice', self.cli('preferences', '--context-chars', '5000',
+                                                           '--companion-context-chars', '9000'))
+
     def test_manual_hooks_do_not_enqueue_or_inject_across_clients(self):
         prefs.save(self.vault, {}, 'manual')
         for harness in ('codex', 'claude', 'antigravity'):
