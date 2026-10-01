@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 SCRIPTS = ROOT / 'template/.claude/scripts'
 if str(SCRIPTS) not in sys.path:
@@ -60,7 +62,7 @@ class HygieneCliTest(unittest.TestCase):
         self.directory = self.vault / COMPANION
         self.directory.mkdir(parents=True)
         self.state = self.base / 'state'
-        self.env = dict(os.environ, BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
+        self.env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
         self.write('Core.md', '# Kimlik\nIDENTITY_CANARY: düşünme ortağı.\n')
         self.write('Journal.md', '# Journal\n## 2026-09-20\nJOURNAL_CANARY\n' + ('## 2026-08-01\neski gözlem\n' * 900))
 

@@ -10,6 +10,8 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 import beyin_v3 as runtime
@@ -221,7 +223,8 @@ class HookWiringTest(unittest.TestCase):
         output = io.StringIO()
         argv = ['hook', '--vault', str(vault), '--state', str(state), '--harness', 'claude']
         with patch.object(sys, 'argv', argv), patch.object(sys, 'stdin', io.StringIO(payload)), \
-                patch.dict(os.environ, {'BEYIN_V3_NO_SPAWN': '1', 'TYPESAFE_API_KEY': 'synthetic-key'}), redirect_stdout(output):
+                patch.dict(os.environ, inherited_env(BEYIN_V3_NO_SPAWN='1', TYPESAFE_API_KEY='synthetic-key'), clear=True), \
+                redirect_stdout(output):
             hook.main()
         return json.loads(output.getvalue())
 

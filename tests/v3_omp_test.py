@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(__file__).resolve().parents[1]
 BUN = shutil.which('bun')
 
@@ -65,8 +67,8 @@ class OMPHarnessTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         home = Path(self.temp.name) / 'home'
         home.mkdir()
-        environment = patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home),
-                                              'BEYIN_V3_NO_SPAWN': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
+        environment = patch.dict(os.environ, inherited_env(HOME=str(home), USERPROFILE=str(home),
+                                              BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1'), clear=True)
         environment.start()
         self.addCleanup(environment.stop)
         self.vault = Path(self.temp.name) / 'Beyin Ölçüm & Vault'
@@ -96,7 +98,7 @@ class OMPHarnessTest(unittest.TestCase):
                               input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8')
 
     def drive(self, cwd=None):
-        env = dict(os.environ, PLUGIN_PATH=str(self.hook_file), OMP_CWD=str(cwd or self.vault),
+        env = inherited_env(PLUGIN_PATH=str(self.hook_file), OMP_CWD=str(cwd or self.vault),
                    OMP_OUTSIDE=str(Path(self.temp.name) / 'elsewhere'))
         result = subprocess.run([BUN, 'run', str(self.driver)], env=env,
                                 capture_output=True, text=True, encoding='utf-8', cwd=self.vault)
