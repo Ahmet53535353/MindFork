@@ -33,6 +33,8 @@ Kurucu ortak motoru, `beyin`, `beyin-doktor`, `beyin-guncelle` skill'lerini, kur
 
 Önceden sabitlenen [semantik sözleşme](SEMANTIC-TEST-CONTRACT.md) küçük, sentetik bir kaynak bulma/durum testidir. Motor kelime tabanlı arama kullanır; embedding veya genel doğal dil anlama başarısı iddia edilmez. Fixture'a göre kodlama yapılmaz; development ve holdout sonuçları ayrı kaydedilir. [Temel karşılaştırma](BASELINE.md).
 
+Gerçek kullanımda kancanın enjekte ettiği kaynakların sonradan açılıp açılmadığını Claude Code transkriptlerinden salt okunur sayan geliştirici aracı: [kullanım raporu](USAGE-REPORT.md). Yayın paketine girmez.
+
 ## Teknik ve tarihsel kayıt
 
 [Ürünleştirme durumu](PRODUCTIZATION-PLAN.md) · [Komut detayları](QUICKSTART.md) · [Serai desenleri](SERAI-PATTERNS.md).
