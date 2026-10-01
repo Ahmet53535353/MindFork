@@ -233,32 +233,53 @@ class HookInstallerTest(unittest.TestCase):
         self.assertTrue(any(marker in context.casefold() for marker in ['historical', 'history', 'geçmiş', 'gecmis']))
 
     def test_receipt_context_truncation_marker_when_exceeding_budget(self):
-        receipts_dir = self.vault / 'receipts'
-        receipts_dir.mkdir(parents=True, exist_ok=True)
-        short_body = '---\n{"kind": "receipt", "event_id": "short"}\n---\nShort summary.\n'
-        receipt_file = receipts_dir / 'short.md'
-        receipt_file.write_text(short_body, encoding='utf-8')
-        context = self.hook.receipt_context(str(self.vault))
-        self.assertIn(short_body, context)
+        engine = self.seed()
+        engine.receipt('short', 'Short summary.', ['notes/task.md'], 'codex')
+        short = 'receipts/' + hashlib.sha256(b'short').hexdigest() + '.md'
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn((self.vault / short).read_text(encoding='utf-8'), context)
         self.assertNotIn('[truncated:', context)
-        self.assertIn('Latest receipt (receipts/short.md; ', context)
+        self.assertIn(f'Latest receipt ({short}; ', context)
 
-        long_body = '---\n{"kind": "receipt", "event_id": "long", "refs": [' + ', '.join(f'"ref_{i:03d}.md"' for i in range(100)) + ']}\n---\nLong summary.\n'
-        self.assertGreater(len(long_body), 1200)
-        time.sleep(0.01)
-        receipt_file.write_text(long_body, encoding='utf-8')
-        context = self.hook.receipt_context(str(self.vault))
+        refs = []
+        for i in range(60):
+            (self.vault / f'notes/ref_{i:03d}.md').write_text(f'Ref {i}.\n', encoding='utf-8')
+            refs.append(f'notes/ref_{i:03d}.md')
+        engine.receipt('long', 'Long summary.', refs, 'codex')
+        long = 'receipts/' + hashlib.sha256(b'long').hexdigest() + '.md'
+        self.assertGreater(len((self.vault / long).read_text(encoding='utf-8')), 1200)
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
         self.assertTrue(context.endswith('\n[truncated: read source]\n'))
-        header = '\nLatest receipt (receipts/short.md; historical agent claim, not independently verified):\n'
+        header = f'\nLatest receipt ({long}; historical agent claim, not independently verified):\n'
         self.assertTrue(context.startswith(header))
-        self.assertTrue((self.vault / 'receipts/short.md').is_file())
         body = context[len(header):]
         self.assertEqual(len(body), 1200)
         # SessionStart clips this block from the end; the source must survive that (#147).
         import beyin_v3_companion as companion
         clipped = companion.clip(context, 400)
-        self.assertIn('receipts/short.md', clipped)
+        self.assertIn(long, clipped)
         self.assertTrue(clipped.endswith('\n[truncated: read source]\n'))
+
+    def test_latest_receipt_follows_created_at_not_file_mtime(self):
+        # #112: git pull and sync clients rewrite mtimes; the receipt's own stamp decides.
+        engine = self.seed()
+        engine.receipt('older', 'OLDER_RECEIPT_CANARY', ['notes/task.md'], 'codex')
+        time.sleep(0.01)
+        engine.receipt('newer', 'NEWER_RECEIPT_CANARY', ['notes/task.md'], 'codex')
+        older = self.vault / 'receipts' / (hashlib.sha256(b'older').hexdigest() + '.md')
+        future = time.time() + 3600
+        os.utime(older, (future, future))
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn('NEWER_RECEIPT_CANARY', context)
+        self.assertNotIn('OLDER_RECEIPT_CANARY', context)
+        # A receipt whose source file is gone, or a hand-made file the index never adopted, is not offered.
+        (self.vault / 'receipts' / (hashlib.sha256(b'newer').hexdigest() + '.md')).unlink()
+        (self.vault / 'receipts/hand-made.md').write_text('HAND_MADE_CANARY\n', encoding='utf-8')
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn('OLDER_RECEIPT_CANARY', context)
+        self.assertNotIn('HAND_MADE_CANARY', context)
+        # No runtime index yet: no receipt block, never an error.
+        self.assertEqual(self.hook.receipt_context(str(self.vault), str(self.root / 'empty-state')), '')
 
     def test_stop_stdin_queues_and_explicit_worker_drains(self):
         self.seed()

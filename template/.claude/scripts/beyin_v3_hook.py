@@ -87,22 +87,31 @@ def prompt_text(payload):
     return ""
 
 
-def receipt_context(vault):
-    directory = Path(vault) / "receipts"
-    if not directory.exists() or not directory.resolve().is_relative_to(Path(vault).resolve()):
+def receipt_context(vault, state):
+    """The newest receipt by its created_at stamp (#112), read from the runtime index."""
+    import sqlite3
+    from beyin_v3_projections import latest_receipts
+    database = Path(state) / "memory.sqlite3"
+    if database.is_symlink() or not database.is_file():
         return ""
-    candidates = [p for p in directory.glob("*.md") if not p.is_symlink()]
-    if not candidates:
+    # Short read-only timeout: a busy worker must not push SessionStart past the host limit.
+    db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+    try:
+        source = next((found for found, _ in latest_receipts(db, vault)), None)
+    except sqlite3.Error:
+        source = None
+    finally:
+        db.close()
+    if source is None:
         return ""
-    path = max(candidates, key=lambda p: (p.stat().st_mtime_ns, p.name))
+    path = Path(vault) / source
     budget, marker = 1200, "\n[truncated: read source]\n"
-    with path.open(encoding="utf-8") as source:
-        content = source.read(budget + 1)
+    with path.open(encoding="utf-8") as reader:
+        content = reader.read(budget + 1)
     if len(content) > budget:
         content = content[:budget - len(marker)] + marker
     # Name the source in the header: callers clip this block from the end, which would
     # replace a path carried in the tail marker with a generic one (#147).
-    source = path.relative_to(Path(vault)).as_posix()
     return f"\nLatest receipt ({source}; historical agent claim, not independently verified):\n" + content
 
 
@@ -457,7 +466,7 @@ def main():
             # Both budgets stop below a client's own cut-off; past it the client files the text away (#175).
             # A text over the client's own measure is rendered once more with a scaled budget.
             limit = client_budget(args.harness, settings['context_chars'])
-            receipt = receipt_context(vault)
+            receipt = receipt_context(vault, state)
             if event == 'SessionStart' or relevant(query):
                 # The opening may carry its own machine-local budget (#140); never a vault preference.
                 limit = client_budget(args.harness, opening_budget(state, settings['context_chars']))

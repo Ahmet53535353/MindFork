@@ -38,6 +38,33 @@ def _vault_file(vault, relative):
         return False
 
 
+def latest_receipts(db, vault, sessions=None):
+    """Receipts newest first by created_at, then event_id, as (source, event).
+
+    The order is the receipt's own stamp, never the file mtime that a git pull or a sync
+    client rewrites (#112). Only receipts with a readable stamp, a summary and a regular
+    source file inside the vault are yielded; with sessions, only those sessions.
+    """
+    vault = Path(vault)
+    candidates = []
+    for (payload,) in db.execute('SELECT payload FROM receipts'):
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get('event_id'), str) or not isinstance(event.get('summary'), str):
+            continue
+        if sessions is not None and event.get('session') not in sessions:
+            continue
+        instant = _receipt_instant(event.get('created_at'))
+        if instant is not None:
+            candidates.append((instant, event['event_id'], event))
+    for _, ident, event in sorted(candidates, key=lambda item: item[:2], reverse=True):
+        source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
+        if not (vault / source).is_symlink() and _vault_file(vault, source):
+            yield source, event
+
+
 def recent_receipts(db, days=7, limit=20, today=None, vault=None):
     """A bounded, source-linked activity view; summaries remain agent claims.
 
