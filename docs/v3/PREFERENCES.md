@@ -38,11 +38,14 @@ yolu ile ilk ~2.000 karakterlik önizlemeyi verir; bu sınırı yükselten bir a
 companion'da önizlemeye yalnız `Core` ve `Kurallar` sığar, `Last-Session`, `Threads` ve
 `Journal` otomatik bağlamdan düşer (#175). Bu yüzden Claude Code oturumlarında hem açılış hem
 tur bağlamı en fazla 9.500 karakterle üretilir (`context_chars` 12.000 olsa da); `preferences`
-çıktısı bunu `client_context_notice` ile söyler. Codex de varsayılan olarak yaklaşık 10.000
-UTF-8 baytı (2.500 yaklaşık token) aşan hook bağlamını dosyaya taşır ve baş/son önizleme verir;
-Türkçe harfler 2 bayt tuttuğu için 9.000 karakter bile taşabilir. Bu sürüm Codex bütçesini
-değiştirmez; Codex'te 8.000 ve altı güvenlidir. Antigravity, OpenCode, Hermes ve OMP için böyle
-bir sınır ölçülmedi.
+çıktısı bunu `client_context_notice` ile söyler. Codex de varsayılan olarak 10.000 UTF-8 baytı
+(4 baytlık 2.500 yaklaşık token) aşan hook bağlamını dosyaya taşır ve modele yalnız baş ve son
+önizlemeyi verir; ortası düşer (`codex-rs/hooks/src/output_spill.rs`). Türkçe harfler 2 bayt
+tuttuğu için Codex oturumlarında bağlam aynı 9.500 karakter bütçesiyle üretilir, metin 10.000
+baytı geçerse bütçe orantılı küçültülüp yeniden üretilir; bölümler sondan kesilmez. Codex'in
+hook başına `additionalContextLimit` ayarı `.codex/hooks.json` içindedir ve bu dosyayı
+değiştirmek hook güvenini düşürdüğü için Beyin onu kullanmaz. Antigravity, OpenCode, Hermes ve
+OMP için böyle bir sınır ölçülmedi.
 
 Açılışta hafıza dosyaları kırpılıyorsa sorgusuz seçilen ilgisiz bir not eklenmez; kalan
 bütçe kırpılan dosyalara döner. Dosyalar tam sığıyorsa en fazla 1.500 karakterlik bir
