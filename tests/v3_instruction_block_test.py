@@ -288,6 +288,18 @@ class InstructionBlockTest(unittest.TestCase):
         self.assertIn('Reinstall conflict: managed file changed CLAUDE.md', self.install_conflict())
         self.assertEqual(path.read_bytes(), importing)
 
+    def test_managed_file_matching_planned_content_survives_reinstall(self):
+        self.install()
+        script_path = self.vault / '.claude/scripts/beyin_v3_hook.py'
+        planned_bytes = (ROOT / 'template/.claude/scripts/beyin_v3_hook.py').read_bytes()
+        manifest = self.manifest()
+        manifest['files']['.claude/scripts/beyin_v3_hook.py']['installed_hash'] = '0' * 64
+        (self.state / 'v3-install.json').write_text(json.dumps(manifest), encoding='utf-8')
+        script_path.write_bytes(planned_bytes)
+        self.install()
+        script_path.write_bytes(planned_bytes + b'\n# custom user edit\n')
+        self.assertIn('Reinstall conflict: managed file changed .claude/scripts/beyin_v3_hook.py', self.install_conflict())
+
 
 if __name__ == '__main__':
     unittest.main()
