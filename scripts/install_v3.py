@@ -434,7 +434,8 @@ protokolünü uygula: Last-Session'da oturum kartını en üste
 session kimliğinin ilk 8 karakteri), sonra yalnız kendi kartını baştan yeniden yaz
 (dosyanın tamamını yeniden yazma, başka oturumların kartını ezme, önceki oturumlar
 bölümüne dokunma), açık konuyu Threads'te yerinde güncelle, açık kullanıcı düzeltmesini
-kapsamıyla Kurallar'a, kalıcı öğrenimi kaynak bağlantılı knowledge notuna kaydet.
+kapsamıyla bir iki satırlık kural olarak Kurallar'a, kalıcı öğrenimi kaynak bağlantılı
+knowledge notuna kaydet.
 Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; istenmesini
 beklemeden kaydedilir. Core ve Journal'ı yalnız yeni ve dayanaklı bir şey olduğunda
 güncelle. Bunlar kullanıcı notlarıdır; güncellemelerde korunur. Ardından kaynak

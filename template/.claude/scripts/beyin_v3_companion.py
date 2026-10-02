@@ -15,7 +15,7 @@ LIMIT_RANGE = (1000, 200000)
 DEFAULT_DIRECTORY = '🔮 850-Companion'
 STARTERS = {
     'Core.md': '# Düşünme ortağı\n\nKullanıcının düşünme ortağı ve ikinci beyniyim. Kimliğimi ve çalışma biçimimi birlikte belirleriz.\n\n## Kullanıcı ve ortak çalışma biçimi\nHenüz kişiselleştirilmedi. Kullanıcının adı, tercih ettiği hitap, çalışma alanı ve beklentilerini konuşarak öğren. Bilinmeyen geçmişi uydurma.\n\n## Kalıcı tercihler\nKullanıcının açıkça belirttiği tercihleri ve dayandıkları kaynağı burada tut.\n',
-    'Kurallar.md': '# Kullanıcının düzeltmeleri\n\nHenüz kaydedilmiş bir düzeltme yok. Açık kullanıcı düzeltmelerini tarih ve kapsamıyla kaydet; geçici istekleri kalıcı kurala dönüştürme.\n',
+    'Kurallar.md': '# Kullanıcının düzeltmeleri\n\nHenüz kaydedilmiş bir düzeltme yok. Açık kullanıcı düzeltmelerini tarih ve kapsamıyla, her kuralı bir iki satırda kaydet; uzun gerekçe ve olayın anlatımı ayrı bir nota gider. Geçici istekleri kalıcı kurala dönüştürme.\n',
     'Last-Session.md': '# Son oturum\n\nHenüz bir çalışma sonucu kaydedilmedi. Anlamlı çalışma sonunda sonuç, gerekçe, açık kalan adım ve kaynak bağlantılarını `## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla buraya yaz. Paralel oturumlarda yalnız kendi kartını düzenle, başka oturumların kartlarını ezme.\n',
     'Threads.md': '# Threads\n\n## Active Threads\nHenüz açık bir konu kaydedilmedi.\n\n## Closed Threads\n',
     'Journal.md': '# Journal\n\nOrtak çalışmadan doğan gözlemler, öğrenimler ve açık sorular. Çıkarımları kesin kullanıcı bilgisi olarak sunma.\n',
@@ -326,7 +326,61 @@ def excerpt(name, text):
         previous = re.search(r'(?im)^## (?:Previous|Önceki)', text)
         if previous:
             return text[:previous.start()]
+    if name == 'Kurallar.md':
+        return without_v2_window(text)
     return text
+
+
+# The V2 seed of Kurallar.md says its "first 60 lines" are injected. V3 shows the start and
+# end of the file within a character budget (#45), so that text sends the agent the wrong
+# model: rules were moved to the top "out of the 60-line window" (#177). The opening context
+# names the omission instead; the user's file is never changed.
+V2_WINDOW = re.compile(r'(?i)\bilk 60 sat[ıi]r')
+V2_WINDOW_NOTE = ('[V2 template note about "the first 60 lines" omitted: V3 shows the start and end of this '
+                  'file within a character budget; read source]')
+
+
+def _level(paragraph):
+    """Heading level of a one-line heading paragraph, else 0."""
+    match = re.fullmatch(r'(#{1,6}) [^\n]*\n?', paragraph)
+    return len(match[1]) if match else 0
+
+
+def without_v2_window(text):
+    pieces = re.split(r'(\n(?:[ \t]*\n)+)', text)
+    paragraphs, gaps = pieces[0::2], [''] + pieces[1::2]
+    drop = {i for i, item in enumerate(paragraphs)
+            if V2_WINDOW.search(item) and '**kural' not in item.casefold()}
+    if not drop:
+        return text
+    for i in sorted(drop):
+        # A section heading left with nothing under it (`## Nasıl büyür`) goes with its paragraph.
+        after = next((j for j in range(i + 1, len(paragraphs)) if j not in drop), None)
+        if i and _level(paragraphs[i - 1]) and (after is None or 0 < _level(paragraphs[after].split('\n', 1)[0]) <= _level(paragraphs[i - 1])):
+            drop.add(i - 1)
+    out, noted = '', False
+    for i, item in enumerate(paragraphs):
+        if i in drop:
+            if not noted:
+                out += gaps[i] + V2_WINDOW_NOTE
+                noted = True
+            continue
+        out += gaps[i] + item
+    return out.lstrip('\n') if not text.startswith('\n') else out
+
+
+# A rule and the story of why it exists share one list item in the V2 format
+# (`- **kural:** ... **neden:** ...`). When the rules do not fit their share of the opening,
+# the reasons go first so more rules arrive whole (#177); the rule sentences stay verbatim.
+REASON = re.compile(r'(?:\n[ \t]*|[ \t]*)\*\*(?:neden|gerekçe|gerekce|why|reason)(?::\*\*|\*\*:)'
+                    r'.*?(?=\n[ \t]*(?:[-*+][ \t]|\d+[.)][ \t]|#)|\n[ \t]*\n|\n?\Z)', re.S | re.I)
+
+
+def without_reasons(text):
+    stripped, count = REASON.subn('', text)
+    if not count:
+        return text
+    return stripped.rstrip('\n') + f'\n[{count} rule reasons (**neden:**) omitted to fit the opening; read source]\n'
 
 
 def ends(text, budget):
@@ -404,19 +458,29 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
     if fixed > budget:
         return clip(header + notice + 'Read companion files: ' + ', '.join(r['source'] for r in records), budget)
 
-    def companion(available):
+    def share(available, parts):
         # Rules and the handoff get a floor first: an even split leaves the two continuity
         # sources the same share as a one-line style note. The rest water-fills, so small
         # identity files still return their unused share to long histories.
-        lengths = [min(len(body), int(available * FLOORS.get(name, 0))) for _, body, name in sections]
+        lengths = [min(len(body), int(available * FLOORS.get(name, 0))) for _, body, name in parts]
         spare = available - sum(lengths)
-        while spare and any(lengths[i] < len(item[1]) for i, item in enumerate(sections)):
-            for i, (_, body, _) in enumerate(sections):
+        while spare and any(lengths[i] < len(item[1]) for i, item in enumerate(parts)):
+            for i, (_, body, _) in enumerate(parts):
                 if spare and lengths[i] < len(body):
                     lengths[i] += 1
                     spare -= 1
+        return lengths
+
+    def companion(available):
+        parts = sections
+        lengths = share(available, parts)
+        if any(name == 'Kurallar.md' and lengths[i] < len(body) for i, (_, body, name) in enumerate(parts)):
+            # Rules that do not fit drop their reasons before any rule is cut (#177).
+            parts = [(label, without_reasons(body) if name == 'Kurallar.md' else body, name)
+                     for label, body, name in parts]
+            lengths = share(available, parts)
         rendered = header + notice
-        for i, (label, body, name) in enumerate(sections):
+        for i, (label, body, name) in enumerate(parts):
             rendered += label + clip(body, lengths[i], both=name == 'Kurallar.md',
                                      tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
         return rendered

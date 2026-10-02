@@ -36,7 +36,10 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
   güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
   al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.
-- Kurallar.md: kullanıcı açıkça düzelttiğinde tarih, kapsam ve mümkünse kaynakla kaydet.
+- Kurallar.md: kullanıcı açıkça düzelttiğinde kuralı bir iki satırda, tarih ve kapsamıyla kaydet.
+  Bu dosya her oturum başında karakter bütçesiyle yüklenir; uzun dosyada önce gerekçeler, sonra
+  ortadaki kurallar kırpılır. Gerekçe, kullanıcının cümlesi ve olayın anlatımı gerekiyorsa
+  companion klasöründe ayrı bir nota (ör. `Kurallar-Detay.md`) gider; kurala bağlantısını bırak.
   Tek seferlik biçim isteğini evrensel kişilik kuralı yapma. Çelişen eski kuralı açıklayarak düzelt.
 - Core.md / Soul.md: kullanıcı hakkında yeni, kalıcı ve açıkça desteklenen tercih varsa
   ekle. Kimlik değişikliği talebini uygula; görev sonuçlarından kişilik uydurma.

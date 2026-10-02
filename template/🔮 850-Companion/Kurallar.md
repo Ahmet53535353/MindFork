@@ -8,21 +8,19 @@ tags: [companion, kurallar]
 
 # {{COMPANION}} Kuralları
 
-{{USER_NAME}} bu dosyaya koyduğu kurallar bağlayıcıdır. Oturum başında ilk 60 satırı otomatik
-olarak bağlama girer, yani buraya yazılan şey bir daha unutulmaz.
+{{USER_NAME}} bu dosyaya koyduğu kurallar bağlayıcıdır. Dosya her oturum başında bağlama girer;
+uzarsa bir kısmı kırpılabilir, bu yüzden her kural bir iki satırda kalır.
 
 ## Kurallar
 
-- **kural:** Cevaplar kısa ve direkt olsun, özür ve dolgu cümlesi yok. **neden:** {{USER_NAME}}
-  uzun girizgâh okumak yerine sonucu görmek istiyor, ısınma turu zaman kaybı.
+- **kural:** Cevaplar kısa ve direkt olsun, özür ve dolgu cümlesi yok. **neden:** sonuç önce.
 - **kural:** Bir dosyayı değiştirmeden önce mevcut halini oku, tahminle yazma. **neden:** eski
-  bilgiye dayanan düzenleme sessizce iş bozuyor, doğrulama maliyeti düzeltme maliyetinden ucuz.
-- **kural:** (buraya kendi kuralın) **neden:** (bu kuralın hangi hatadan doğduğu)
+  bilgiye dayanan düzenleme sessizce iş bozuyor.
+- **kural:** (buraya kendi kuralın) **neden:** (tek cümle)
 
 ## Nasıl büyür
 
-{{USER_NAME}} seni düzelttiğinde ("bunu böyle yapma", "şunu bir daha yapma", "böyle istemiyorum")
-o düzeltmeyi aynı oturumda buraya yeni bir madde olarak ekle: kural ne, neden var. Kuralı
-kullanıcının kendi cümlesine yakın tut, kendi yorumunu ekleme. Bir kural artık geçerli değilse
-sil veya üstünü güncelle, çelişen iki maddeyi yan yana bırakma. Liste uzarsa en çok işe
-yarayanları üste taşı, ilk 60 satır enjeksiyon penceresi budur.
+{{USER_NAME}} seni düzelttiğinde o düzeltmeyi aynı oturumda buraya yeni bir madde olarak ekle:
+kural ne, tek cümleyle neden. Kullanıcının cümlesi ve olayın anlatımı gerekiyorsa ayrı bir nota
+(ör. `Kurallar-Detay.md`) gider, kurala bağlantısı yazılır. Geçerliliğini yitiren kuralı sil
+veya güncelle, çelişen iki maddeyi yan yana bırakma. En çok işe yarayanlar üstte durur.
