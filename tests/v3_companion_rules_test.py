@@ -75,7 +75,7 @@ class CompanionRulesTest(unittest.TestCase):
             with self.subTest(budget=budget):
                 text = companion.context(self.store, budget, 'synthetic-rules', 'claude')
                 self.assertLessEqual(len(text), budget)
-                self.assertLessEqual(len(text.encode('utf-16-le')) // 2, companion.CLIENT_TEXT_LIMITS['claude'])
+                self.assertLessEqual(companion.client_size('claude', text), companion.CLIENT_TEXT_LIMITS['claude'][0])
                 section = self.rules_section(text)
                 for rule in RULES:
                     self.assertIn(norm(rule.split('**neden:**')[0]), norm(section))
