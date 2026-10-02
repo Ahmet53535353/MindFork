@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -135,9 +136,9 @@ def validate_package(package):
         return manifest, files
 
 
-def _download(directory):
+def _download(directory, with_metadata=False):
     import beyin_v3_releases as releases
-    metadata, _ = releases.fetch_metadata()
+    metadata, tag = releases.fetch_metadata()
     if metadata is None: raise ValueError('release metadata missing')
     data, _ = releases.request_bytes(metadata['asset_url'], MAX_PACKAGE)
     if data is None or len(data) != metadata['asset_size']:
@@ -159,6 +160,8 @@ def _download(directory):
         raise ValueError('release package has no external checksum')
     path = Path(directory) / metadata['asset_name']
     path.write_bytes(data)
+    if with_metadata:
+        return path, metadata['version'], metadata, tag
     return path, metadata['version']
 
 
@@ -306,6 +309,10 @@ def _recover_locked(vault, state):
                 (directory / Path(operation['name']).name).write_bytes(decode(operation['new']))
         with _migration_guard(vault, state, directory, journal.get('migration_plan')) as migration:
             _apply(vault, state, journal, migration)
+            try:
+                (state / 'release-cache.json').unlink(missing_ok=True)
+            except Exception:
+                pass
     return {'status': 'recovered', 'version': current_version(vault)}
 
 
@@ -345,7 +352,9 @@ def update(vault, state, package=None, check=False):
     vault, state = roots(vault, state)
     with tempfile.TemporaryDirectory(prefix='beyin-release-') as temporary:
         expected = None
-        if package is None: package, expected = _download(temporary)
+        release_meta = None
+        release_tag = None
+        if package is None: package, expected, release_meta, release_tag = _download(temporary, with_metadata=True)
         manifest, files = validate_package(package)
         if expected and manifest['version'] != expected: raise ValueError('release tag/package mismatch')
         stage = Path(temporary) / 'package'
@@ -387,6 +396,23 @@ def update(vault, state, package=None, check=False):
                 journal = {'schema': 1, 'vault': str(vault), 'direction': 'update', 'from_version': old, 'to_version': new, 'operations': operations, 'migration_plan': migration[1] if migration else None, 'migration_backup': encode((state/'v2-migration.json').read_bytes() if (state/'v2-migration.json').exists() else None)}
                 atomic(state / 'update-journal.json', jbytes(journal))
                 _apply(vault, state, journal, migration)
+                try:
+                    import beyin_v3_releases as releases
+                    if release_meta is not None:
+                        now = time.time()
+                        releases.atomic_json(state / 'release-cache.json', {
+                            'schema': 1,
+                            'checked_at': now,
+                            'attempted_at': now,
+                            'next_check_at': now + 86400,
+                            'etag': release_tag,
+                            'release': release_meta,
+                            'failures': 0,
+                        })
+                    else:
+                        (state / 'release-cache.json').unlink(missing_ok=True)
+                except Exception:
+                    pass
         result = {'status': 'updated', 'from_version': old, 'version': new, 'trust_review_required': trust_review}
         if plan.get('removed'):
             result['removed'] = plan['removed']
@@ -448,4 +474,8 @@ def rollback(vault, state):
         journal = {'schema': 1, 'vault': str(vault), 'direction': 'rollback', 'operations': operations}
         atomic(pending, jbytes(journal))
         _apply(vault, state, journal)
+        try:
+            (state / 'release-cache.json').unlink(missing_ok=True)
+        except Exception:
+            pass
         return {'status': 'rolled_back' if (vault/'.beyin-version').exists() else 'uninstalled', 'version': current_version(vault) if (vault/'.beyin-version').exists() else None}
