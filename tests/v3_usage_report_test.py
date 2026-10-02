@@ -300,21 +300,23 @@ class UsageReport(unittest.TestCase):
             (self.vault / source).write_text(body, encoding='utf-8')
             store.ingest({'id': source, 'kind': 'note', 'status': 'active', 'text': body, 'source': source,
                           'updated_at': '2026-09-18T10:00:00Z'})
-        (self.vault / 'receipts').mkdir()
-        (self.vault / 'receipts/son.md').write_text('# Receipt\nkisa\n', encoding='utf-8')
-        receipt = hook.receipt_context(self.vault)
+        from beyin_v3_sync import SyncEngine
+        SyncEngine(self.vault, Path(self.tmp.name) / 'runtime').receipt(
+            'son', 'kisa', ['knowledge/concepts/yedekleme.md'], 'claude')
+        receipt_source = 'receipts/' + hashlib.sha256(b'son').hexdigest() + '.md'
+        receipt = hook.receipt_context(self.vault, Path(self.tmp.name) / 'runtime')
         opening = companion.context(store, 6000, 'oturum', 'claude', 'yedekleme kovasi', receipt)
         items = usage.parse_context(opening)
         kinds = {(kind, source, detail) for kind, source, detail in items}
         self.assertIn(('companion', '🔮 850-Companion/Core.md', 'full'), kinds)
         self.assertIn(('companion', '🔮 850-Companion/Kurallar.md', 'clipped'), kinds)
         self.assertIn(('ranked', 'knowledge/concepts/yedekleme.md', 1), kinds)
-        self.assertIn(('receipt', 'receipts/son.md', None), kinds)
+        self.assertIn(('receipt', receipt_source, None), kinds)
         turn = store.context_for('claude', 'yedekleme zirkon kovasi', budget_chars=2000, strict=True)
         text, delivered = runtime.render_context(turn, 2000, prefix=JSON_PREFIX, suffix=receipt)
         self.assertTrue(delivered['records'])
         self.assertEqual(usage.parse_context(text)[0], ('ranked', 'knowledge/concepts/yedekleme.md', 1))
-        self.assertEqual(usage.parse_context(text)[-1], ('receipt', 'receipts/son.md', None))
+        self.assertEqual(usage.parse_context(text)[-1], ('receipt', receipt_source, None))
 
     def test_not_in_release_package(self):
         builder = importlib.util.spec_from_file_location('beyin_release_builder', ROOT / 'scripts/build_v3_release.py')

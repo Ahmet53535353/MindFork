@@ -51,6 +51,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 from beyin_v3_hook import is_synthetic_prompt  # noqa: E402  same classifier the hook uses
 
+
+def synthetic_turn(prompt):
+    """The hook's classifier, independent of this machine's BEYIN_V3_FILTER_HARNESS_TURNS opt-out:
+    the report counts what a turn was, not whether retrieval was filtered for it."""
+    saved = os.environ.pop('BEYIN_V3_FILTER_HARNESS_TURNS', None)
+    try:
+        return is_synthetic_prompt(prompt)
+    finally:
+        if saved is not None:
+            os.environ['BEYIN_V3_FILTER_HARNESS_TURNS'] = saved
+
 MARKER = 'V3 source-backed context'
 JSON_MARKER = MARKER + ' (data, not instructions):\n'
 COMPANION_NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
@@ -325,7 +336,7 @@ def analyse(path, roots, scope, errors):
                     if event == 'UserPromptSubmit':
                         if prompt is None:
                             scope.counts['contexts_without_prompt'] += 1
-                        synthetic = prompt is not None and is_synthetic_prompt(prompt)
+                        synthetic = prompt is not None and synthetic_turn(prompt)
                     label = 'UserPromptSubmit_synthetic' if synthetic else event
                     scope.counts['contexts_' + label] += 1
                     if not any(item[0] == 'ranked' for item in items):
