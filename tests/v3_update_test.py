@@ -319,6 +319,57 @@ class OfflineUpdateTest(unittest.TestCase):
         self.assertEqual(canonical.read_bytes(), original)
         self.assertEqual(mirror.read_bytes(), original)
 
+    def test_update_refreshes_release_cache_and_avoids_stale_ahead_status(self):
+        spec = importlib.util.spec_from_file_location('beyin_v3_releases', ROOT / 'template/.claude/scripts/beyin_v3_releases.py')
+        releases = importlib.util.module_from_spec(spec); spec.loader.exec_module(releases)
+        cache_file = self.state / 'release-cache.json'
+        old_cache = {
+            'schema': 1,
+            'checked_at': 1000,
+            'attempted_at': 1000,
+            'next_check_at': 1000 + 86400,
+            'etag': '"old-etag"',
+            'release': {
+                'release_id': 1,
+                'version': '3.0.0',
+                'published_at': '2026-09-01T00:00:00Z',
+                'release_url': 'https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0',
+                'asset_id': 1,
+                'asset_name': 'beyin-v3-3.0.0.zip',
+                'asset_url': 'https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip',
+                'asset_size': 1000,
+                'asset_sha256': '00' * 32,
+                'checksum_url': None,
+            },
+            'failures': 0,
+        }
+        releases.atomic_json(cache_file, old_cache)
+        self.module.update(self.vault, self.state, self.package)
+        self.assertFalse(cache_file.exists())
+        self.assertEqual(releases.status(self.vault, self.state)['status'], 'unknown')
+        releases.atomic_json(cache_file, old_cache)
+        self.module.rollback(self.vault, self.state)
+        self.assertFalse(cache_file.exists())
+        fake_meta = {
+            'release_id': 2,
+            'version': '3.0.1',
+            'published_at': '2026-09-10T00:00:00Z',
+            'release_url': 'https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.1',
+            'asset_id': 2,
+            'asset_name': 'beyin-v3-3.0.1.zip',
+            'asset_url': 'https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.1/beyin-v3-3.0.1.zip',
+            'asset_size': 1000,
+            'asset_sha256': '11' * 32,
+            'checksum_url': None,
+        }
+        with patch.object(self.module, '_download', return_value=(self.package, '3.0.1', fake_meta, '"etag-301"')):
+            self.module.update(self.vault, self.state)
+        self.assertTrue(cache_file.exists())
+        st = releases.status(self.vault, self.state)
+        self.assertEqual(st['status'], 'up_to_date')
+        self.assertEqual(st['version'], '3.0.1')
+        self.assertEqual(st['current_version'], '3.0.1')
+
 
 if __name__ == '__main__':
     unittest.main()
