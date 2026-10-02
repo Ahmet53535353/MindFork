@@ -215,6 +215,26 @@ def cache(state):
     return value
 
 
+def predates_install(vault, value, now, key='checked_at'):
+    """A cached latest older than the installed version, checked before that version was stamped.
+
+    An update or rollback run by an older updater leaves the cache it found (#188): the cached
+    latest then describes the release before the update, and the installed version reads as
+    ahead of it until the cache expires. Only that case is set aside; a dev install ahead of a
+    check made after it, and every other status, keep the cache. A stamp dated in the future
+    (clock skew, a synced vault) never counts, so a refresh always settles it. The worker gate
+    asks with key='attempted_at': one attempt per install, an offline failure keeps its backoff.
+    """
+    try:
+        release = value.get('release')
+        if not release or version(installed_version(vault)) <= version(release.get('version')):
+            return False
+        stamped = (Path(vault) / '.beyin-version').stat().st_mtime
+        return value.get(key, value.get('checked_at', 0)) < stamped <= now
+    except (ValueError, OSError, TypeError, AttributeError):
+        return False
+
+
 def status(vault, state, now=None):
     now = time.time() if now is None else now
     try:
@@ -224,6 +244,7 @@ def status(vault, state, now=None):
         checked = value.get('checked_at', 0)
         if not value.get('release') or value.get('last_error_code') or not 0 <= now - checked <= FRESH:
             return {'status': 'unavailable', 'checked_at': checked, 'reason': value.get('last_error_code') or 'stale_cache'}
+        if predates_install(vault, value, now): return {'status': 'unknown'}
         # Do not leak or display arbitrary extra fields from a user-edited cache.
         m = value['release']
         return dict(compare(installed_version(vault), {'version': m['version'], 'release_url': m['release_url']}), checked_at=checked)
@@ -247,14 +268,15 @@ def coordination(state):
         db.close()
 
 
-def claim_worker(state, now=None):
+def claim_worker(state, now=None, vault=None):
     now = time.time() if now is None else now
     try:
         if not preferences(state)['effective']: return False
         value = cache(state)
         # Clock reversal resets cadence, never suppresses checks indefinitely.
         due = value.get('next_check_at', 0)
-        if value.get('attempted_at', value.get('checked_at', 0)) <= now < due:
+        if (value.get('attempted_at', value.get('checked_at', 0)) <= now < due
+                and not (vault is not None and predates_install(vault, value, now, 'attempted_at'))):
             return False
         with coordination(state) as db:
             db.execute('BEGIN IMMEDIATE')
@@ -315,7 +337,7 @@ def session_start(vault, state):
     """No network on the hook path; an independent short-lived process handles discovery."""
     try:
         text = notification(vault, state)
-        if os.environ.get('BEYIN_V3_NO_SPAWN') != '1' and claim_worker(state):
+        if os.environ.get('BEYIN_V3_NO_SPAWN') != '1' and claim_worker(state, vault=vault):
             options = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL,
                        'stderr': subprocess.DEVNULL, 'close_fds': True}
             if os.name == 'nt': options['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS

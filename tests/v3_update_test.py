@@ -7,12 +7,13 @@ import stat
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-from v3_package_helpers import ROOT, build_package, install, isolated_env, rewrite_zip, snapshot, run_python
+from v3_package_helpers import ROOT, build_package, clean_environ, install, isolated_env, rewrite_zip, snapshot, run_python
 
 MODULE = ROOT / 'template/.claude/scripts/beyin_v3_update.py'
 
@@ -320,6 +321,11 @@ class OfflineUpdateTest(unittest.TestCase):
         self.assertEqual(mirror.read_bytes(), original)
 
     def test_update_refreshes_release_cache_and_avoids_stale_ahead_status(self):
+        # status() honours BEYIN_UPDATES_OFF; a suite run from a configured shell must not inherit it.
+        with clean_environ():
+            self._update_refreshes_release_cache()
+
+    def _update_refreshes_release_cache(self):
         spec = importlib.util.spec_from_file_location('beyin_v3_releases', ROOT / 'template/.claude/scripts/beyin_v3_releases.py')
         releases = importlib.util.module_from_spec(spec); spec.loader.exec_module(releases)
         cache_file = self.state / 'release-cache.json'
@@ -369,6 +375,32 @@ class OfflineUpdateTest(unittest.TestCase):
         self.assertEqual(st['status'], 'up_to_date')
         self.assertEqual(st['version'], '3.0.1')
         self.assertEqual(st['current_version'], '3.0.1')
+
+    def test_cache_left_by_an_older_updater_is_not_reported_as_ahead(self):
+        # 3.6.0 and 3.7.0 run their own updater, which never touches the cache (#188). The
+        # first fixed release must still read the cache it inherits correctly: installed doctor.
+        self.module.update(self.vault, self.state, self.package)
+        stamped = (self.vault / '.beyin-version').stat().st_mtime
+        release = {'release_id': 1, 'version': '3.0.0', 'published_at': '2026-09-01T00:00:00Z',
+                   'release_url': 'https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0',
+                   'asset_id': 1, 'asset_name': 'beyin-v3-3.0.0.zip',
+                   'asset_url': 'https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip',
+                   'asset_size': 1000, 'asset_sha256': '00' * 32, 'checksum_url': None}
+        cache = self.state / 'release-cache.json'
+        def doctor():
+            result = run_python(self.vault / 'beyin.py', ['doctor', '--json'], self.vault, self.env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+            return json.loads(result.stdout)['updates']
+        checked = stamped - 60
+        cache.write_text(json.dumps({'schema': 1, 'checked_at': checked, 'attempted_at': checked,
+                                     'next_check_at': checked + 86400, 'etag': '"old"', 'release': release, 'failures': 0}))
+        self.assertEqual(doctor(), {'status': 'unknown'})
+        # A check made after the install that still finds 3.0.0 is a genuine dev install ahead.
+        checked = time.time()
+        self.assertGreater(checked, stamped)
+        cache.write_text(json.dumps({'schema': 1, 'checked_at': checked, 'attempted_at': checked,
+                                     'next_check_at': checked + 86400, 'etag': '"old"', 'release': release, 'failures': 0}))
+        self.assertEqual(doctor()['status'], 'ahead')
 
 
 if __name__ == '__main__':
