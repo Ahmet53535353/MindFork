@@ -89,10 +89,12 @@ class PreferencesTest(unittest.TestCase):
         stored = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
         self.assertEqual(set(stored), set(prefs.PROFILES['normal']), 'no new vault preference field')
         self.assertEqual(stored['context_chars'], 12000, 'vault range unchanged for older releases')
-        text = self.hook('SessionStart')['hookSpecificOutput']['additionalContext']
+        # A client without a known cut-off receives the larger opening; Codex stays below its own (#175).
+        text = self.hook('SessionStart', harness='opencode')['hookSpecificOutput']['additionalContext']
         self.assertGreater(len(text), 12000)
         self.assertLessEqual(len(text), 24000)
         self.assertIn('THREADS_TAIL_CANARY', text)
+        self.assertLessEqual(len(self.hook('SessionStart')['hookSpecificOutput']['additionalContext'].encode('utf-8')), 10000)
         before = (self.state / 'companion-context.json').read_bytes()
         for value in ('999', '24001'):
             r = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
@@ -141,27 +143,37 @@ class PreferencesTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             return json.loads(r.stdout)['hookSpecificOutput']['additionalContext']
         for event, prompt in (('SessionStart', None), ('UserPromptSubmit', 'nerede kalmıştık')):
-            with self.subTest(event=event, prompt=prompt):
-                text = context('claude', event, prompt)
-                # Claude Code measures JavaScript string length: the folder emoji counts twice.
-                self.assertLessEqual(len(text.encode('utf-16-le')) // 2, 10000)
-                self.assertGreater(len(text), 9000, 'the room under the cut-off is still used')
-                for mark in ('CORE', 'KURALLAR', 'LAST', 'THREADS', 'JOURNAL'):
-                    self.assertIn('MARK-' + mark, text)
-                # Other clients keep the budget the user chose.
-                self.assertGreater(len(context('codex', event, prompt)), 10000)
+            # Claude Code measures JavaScript string length (the folder emoji counts twice);
+            # Codex measures UTF-8 bytes (2,500 tokens of 4 bytes), where ş and ı take two.
+            for harness, measure in (('claude', lambda t: len(t.encode('utf-16-le')) // 2),
+                                     ('codex', lambda t: len(t.encode('utf-8')))):
+                with self.subTest(event=event, prompt=prompt, harness=harness):
+                    text = context(harness, event, prompt)
+                    self.assertLessEqual(measure(text), 10000)
+                    self.assertGreater(measure(text), 9000, 'the room under the cut-off is still used')
+                    for mark in ('CORE', 'KURALLAR', 'LAST', 'THREADS', 'JOURNAL'):
+                        self.assertIn('MARK-' + mark, text)
+            # Other clients keep the budget the user chose.
+            self.assertGreater(len(context('opencode', event, prompt)), 10000)
         # An ordinary turn uses the same ceiling (context_chars may be 12000).
         text = context('claude', 'UserPromptSubmit', 'ambalaj ölçüsü etiket taslağı')
         self.assertIn('Notlar/Ambalaj.md', text)
         self.assertLessEqual(len(text), 9500)
         import beyin_v3_companion as companion
         self.assertEqual(companion.client_budget('claude', 24000), 9500)
-        for harness in ('codex', 'antigravity', 'hermes', 'opencode', 'omp'):
+        self.assertEqual(companion.client_budget('codex', 24000), 9500)
+        self.assertEqual(companion.client_budget('codex', 5000), 5000)
+        for harness in ('antigravity', 'hermes', 'opencode', 'omp'):
             self.assertEqual(companion.client_budget(harness, 24000), 24000)
             self.assertEqual(companion.fit_client(harness, '🔮' * 9500), '🔮' * 9500)
         astral = companion.fit_client('claude', 'a' * 9000 + '🔮' * 600)
         self.assertIn(len(astral.encode('utf-16-le')) // 2, (9999, 10000))
         self.assertTrue(astral.startswith('a' * 9000))
+        for tail in ('🔮' * 600, 'ş' * 1200, 'ı' * 501):
+            fitted = companion.fit_client('codex', 'a' * 9000 + tail)
+            self.assertIn(len(fitted.encode('utf-8')), range(9997, 10001))
+            self.assertTrue(fitted.startswith('a' * 9000))
+        self.assertEqual(companion.fit_client('codex', 'ş' * 5000), 'ş' * 5000)
         self.assertNotIn('client_context_notice', self.cli('preferences', '--context-chars', '5000',
                                                            '--companion-context-chars', '9000'))
 

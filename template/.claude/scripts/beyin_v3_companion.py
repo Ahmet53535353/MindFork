@@ -159,28 +159,54 @@ def opening_budget(state, context_chars):
     return read_context(state)[0]['context_chars'] or context_chars
 
 
-# Claude Code moves a hook's additionalContext longer than 10,000 characters (JavaScript string
-# length, so UTF-16 units) to a file and shows the model only a ~2,000 character preview; no
-# setting raises it (#175). A larger budget there would hide Last-Session and Threads, so its
-# automatic context stays under the line. Clients without a known cap here keep their budget.
-CLIENT_TEXT_LIMITS = {'claude': 10000}
+# A client that moves a long hook additionalContext to a file shows the model only part of it,
+# so the automatic context stays under that client's line. Each entry is (limit, measure):
+# - Claude Code: over 10,000 characters (JavaScript string length, so UTF-16 units) it shows
+#   only a ~2,000 character preview; no setting raises it (#175).
+# - Codex: over 2,500 approximate tokens, ceil(UTF-8 bytes / 4), so 10,000 bytes, it shows a
+#   head and tail preview with the middle cut out (codex-rs/hooks/src/output_spill.rs). Its own
+#   per-hook additionalContextLimit lives in .codex/hooks.json, and editing that file drops the
+#   user's hook trust, so the hook keeps its text under the default instead.
+# Clients without a known cap here keep their budget.
+CLIENT_TEXT_LIMITS = {'claude': (10000, 'utf-16'), 'codex': (10000, 'utf-8')}
 CLIENT_HEADROOM = 500
 
 
-def client_budget(harness, chars):
-    """The part of a character budget the client shows in full."""
+def client_size(harness, text):
+    """Length of text in the client's own measure; None for a client without a known cap."""
     limit = CLIENT_TEXT_LIMITS.get(harness)
-    return min(chars, limit - CLIENT_HEADROOM) if limit else chars
+    if not limit:
+        return None
+    return len(text.encode('utf-16-le')) // 2 if limit[1] == 'utf-16' else len(text.encode('utf-8'))
+
+
+def client_budget(harness, chars):
+    """The part of a character budget the client shows in full. For a byte-measured client the
+    headroom also absorbs the multi-byte letters of an ordinary Turkish text."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    return min(chars, limit[0] - CLIENT_HEADROOM) if limit else chars
+
+
+def client_rebudget(harness, budget, text):
+    """A smaller character budget for text that was rendered with budget but is over the client's
+    own measure (a Turkish letter is two UTF-8 bytes for Codex), so a second render keeps every
+    section instead of losing the tail; None when it already fits."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    size = client_size(harness, text) if limit else None
+    if size is None or size <= limit[0]:
+        return None
+    return budget * limit[0] // size
 
 
 def fit_client(harness, text):
     """Last guard after client_budget: an astral character (the companion folder's emoji) counts
-    twice in UTF-16, so trim the tail until the client's own measure fits."""
+    twice in UTF-16 and four times in UTF-8, so trim the tail until the client's own measure fits."""
     limit = CLIENT_TEXT_LIMITS.get(harness)
-    over = len(text.encode('utf-16-le')) // 2 - limit if limit else 0
+    over = client_size(harness, text) - limit[0] if limit else 0
     while over > 0:
-        text = text[:len(text) - (over + 1) // 2]  # a character is one or two units
-        over = len(text.encode('utf-16-le')) // 2 - limit
+        # A character is one to four units: cut at least one, at most what is over.
+        text = text[:len(text) - max(1, over // (2 if limit[1] == 'utf-16' else 4))]
+        over = client_size(harness, text) - limit[0]
     return text
 
 

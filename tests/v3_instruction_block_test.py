@@ -97,6 +97,19 @@ class InstructionBlockTest(unittest.TestCase):
             path.write_text(text + NOTE if name == 'AGENTS.md' else text, encoding='utf-8')
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
+    def downgrade_record_only(self):
+        """Point the install record at the older block without touching the files."""
+        manifest_path = self.state / 'v3-install.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        for name in ('AGENTS.md', 'CLAUDE.md'):
+            text = (self.vault / name).read_text(encoding='utf-8')
+            for sentence in (ENGLISH, TURKISH):
+                text = re.sub(r'\s*' + r'\s+'.join(map(re.escape, sentence.split())), '', text, count=1)
+            data = text.encode()
+            manifest['files'][name] = dict(manifest['files'][name], installed_hash=hashlib.sha256(data).hexdigest(),
+                                           installed_content=base64.b64encode(data).decode())
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
     def test_generated_block_records_direct_user_statements_in_both_languages(self):
         self.seed('CLAUDE.md', CLAUDE)
         self.install()
@@ -105,6 +118,39 @@ class InstructionBlockTest(unittest.TestCase):
                 block = self.block(name)
                 self.assertIn(' '.join(ENGLISH.split()), ' '.join(block.split()))
                 self.assertIn(' '.join(TURKISH.split()), ' '.join(block.split()))
+
+    def test_block_carries_no_machine_path(self):
+        # #112: AGENTS.md may be synced between machines; the block must read the same on each.
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        other_vault, other_state = self.base / 'İkinci Makine' / 'Beyin', self.base / 'other-state'
+        other_vault.mkdir(parents=True)
+        (other_vault / 'CLAUDE.md').write_bytes(CLAUDE.encode())
+        self.run_cli(ROOT / 'scripts/install_v3.py', '--vault', other_vault, '--state', other_state)
+        for name in ('AGENTS.md', 'CLAUDE.md'):
+            with self.subTest(file=name):
+                self.assertEqual(self.block(name), (other_vault / name).read_text(encoding='utf-8').split(START)[1].split(END)[0])
+                for machine in (str(self.vault), str(self.state), str(other_vault), sys.executable,
+                                self.vault.as_posix(), '.claude/scripts/beyin_v3_cli.py'):
+                    self.assertNotIn(machine, self.block(name))
+                self.assertIn('beyin.py sync', self.block(name))
+
+    def test_router_synced_from_a_machine_already_updated_does_not_conflict(self):
+        # Machine A updated and pushed its routers; machine B pulled them before its own update.
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        current = {name: (self.vault / name).read_bytes() for name in ('AGENTS.md', 'CLAUDE.md')}
+        self.downgrade()  # B's own install record is the older block
+        for name, data in current.items():
+            (self.vault / name).write_bytes(data + (NOTE.encode() if name == 'AGENTS.md' else b''))
+        self.install()
+        self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
+        self.assertEqual((self.vault / 'CLAUDE.md').read_bytes(), current['CLAUDE.md'])
+        # An edit inside the block is still the user's and still stops the installer.
+        path = self.vault / 'AGENTS.md'
+        path.write_text(path.read_text(encoding='utf-8').replace('beyin.py sync', 'beyin.py sync # benim'), encoding='utf-8')
+        self.downgrade_record_only()
+        self.assertIn('managed file changed', self.install_conflict())
 
     def test_reinstall_over_previous_block_adopts_the_clause_and_keeps_user_text(self):
         self.seed('CLAUDE.md', CLAUDE)
