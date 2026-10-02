@@ -288,6 +288,36 @@ class InstructionBlockTest(unittest.TestCase):
         self.assertIn('Reinstall conflict: managed file changed CLAUDE.md', self.install_conflict())
         self.assertEqual(path.read_bytes(), importing)
 
+    def test_managed_file_matching_planned_content_survives_reinstall(self):
+        """#189: a managed file another machine already moved to this release is not a conflict.
+
+        The record still names the older release this machine installed, so neither the hash nor
+        the stored content matches the disk; only the planned bytes do. A CRLF checkout of those
+        bytes is the same file. An edit on top of them, or of the older bytes, still conflicts.
+        """
+        names = ('.claude/scripts/beyin_v3_hook.py', '.agents/skills/beyin/SKILL.md', 'beyin.py')
+        self.install()
+        planned = {name: (self.vault / name).read_bytes() for name in names}
+        older = {name: data + b'\n# older release\n' for name, data in planned.items()}
+        manifest = self.manifest()
+        for name in names:
+            manifest['files'][name].update(installed_hash=hashlib.sha256(older[name]).hexdigest(),
+                                           installed_content=base64.b64encode(older[name]).decode())
+        (self.state / 'v3-install.json').write_text(json.dumps(manifest), encoding='utf-8')
+        (self.vault / 'beyin.py').write_bytes(planned['beyin.py'].replace(b'\n', b'\r\n'))
+        self.install()
+        for name in names:
+            self.assertEqual((self.vault / name).read_bytes(), planned[name])
+            self.assertEqual(self.manifest()['files'][name]['installed_hash'], hashlib.sha256(planned[name]).hexdigest())
+        manifest = self.manifest()
+        hook = self.vault / names[0]
+        for edited in (planned[names[0]] + b'\n# custom user edit\n', older[names[0]] + b'# custom user edit\n'):
+            manifest['files'][names[0]].update(installed_hash=hashlib.sha256(older[names[0]]).hexdigest(),
+                                               installed_content=base64.b64encode(older[names[0]]).decode())
+            (self.state / 'v3-install.json').write_text(json.dumps(manifest), encoding='utf-8')
+            hook.write_bytes(edited)
+            self.assertIn('Reinstall conflict: managed file changed ' + names[0], self.install_conflict())
+            self.assertEqual(hook.read_bytes(), edited)
 
 if __name__ == '__main__':
     unittest.main()
