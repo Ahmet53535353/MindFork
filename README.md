@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.7.0:** Oturum başı bağlamı artık Claude Code ve Codex'in dosyaya taşıma sınırının altında kalıyor, böylece Last-Session, Threads ve Journal ajana gerçekten ulaşıyor. Gizli nota bağlı receipt oturum başına girmiyor, `companion-compact` yeniden yazmadan önce tam yedek alıyor ve `recover` başarılı bir V2 geçişinden sonra takılmıyor. İsteğe bağlı paralel oturum bildirimi ve kullanım raporu geldi. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.7.0.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.7.1:** Güncellemeden sonra `doctor` ve oturum başı bildirimi artık kurulu sürümü yanlışlıkla "resmi sürümden ileride" göstermiyor; vault'u git ile birden çok makinede eşitleyenlerde öbür makineden güncel gelen dosyalar güncellemeyi durdurmuyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.7.1.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
