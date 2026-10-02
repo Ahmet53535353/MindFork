@@ -517,8 +517,9 @@ not knowledge synthesis.
         item = manifest["files"].get(name)
         path = vault / name
         current = path.read_bytes() if path.exists() else None
-        # A managed file that already holds the planned text has nothing to lose: another machine
-        # on the same release synced it here (#112), so the hash of this install differs.
+        # A managed file that already holds the planned bytes (line endings aside) has nothing to
+        # lose: another machine synced it here (#112, #189), so this install's record differs.
+        # Any other byte, BOM or whitespace included, still goes through the conflict check.
         already = planned[name] is not None and line_endings_only(planned[name], current)
         if item and not already and (current is None or digest(current) != item["installed_hash"]):
             baseline = base64.b64decode(item["installed_content"]) if item.get("installed_content") else None
