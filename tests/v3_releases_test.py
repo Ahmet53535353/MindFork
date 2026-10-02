@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 
-from v3_package_helpers import ROOT, install, isolated_env, run_python, snapshot
+from v3_package_helpers import ROOT, clean_environ, install, isolated_env, run_python, snapshot
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 import beyin_v3_releases as releases
 import beyin_v3_update as updater
@@ -38,7 +38,7 @@ class ReleasesTest(unittest.TestCase):
         (self.vault / '.beyin-version').write_text('3.0.2')
         self.state = self.root / 'state'
         self.env = isolated_env(self.root / 'home')
-        self.clean_env = patch.dict(os.environ, {'BEYIN_UPDATES_OFF': '0', 'BEYIN_V3_NO_SPAWN': '1'})
+        self.clean_env = clean_environ(BEYIN_V3_NO_SPAWN='1')
         self.clean_env.start(); self.addCleanup(self.clean_env.stop)
 
     def seed_cache(self, now=1000, v='3.1.0'):

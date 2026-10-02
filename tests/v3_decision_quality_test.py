@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from v3_package_helpers import clean_environ
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
@@ -27,7 +28,7 @@ class DecisionQualityTest(unittest.TestCase):
         self.store = runtime.MemoryStore(Path(self.tmp.name) / 'state', self.vault)
         self.state = self.store.state_dir
         self.calls = []
-        self.env = patch.dict(os.environ, {'TYPESAFE_API_KEY': 'synthetic-test-key'})
+        self.env = clean_environ(TYPESAFE_API_KEY='synthetic-test-key')
         self.env.start()
         self.addCleanup(self.env.stop)
 

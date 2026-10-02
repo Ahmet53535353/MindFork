@@ -83,6 +83,19 @@ class MigrationTest(unittest.TestCase):
                 self.m.finalize_migration(self.root, self.state, plan)
         self.assertEqual(p.read_text(), 'new')
 
+    def test_finalize_with_an_earlier_success_receipt_ignores_later_source_edits(self):
+        # An earlier cutover already succeeded, so finalizing again writes nothing and
+        # must not fail because a note changed since the plan was taken (interrupted
+        # update, edit, recover).
+        p = self.source('Companion/Core.md', 'old')
+        first = self.m.migrate_v2(self.root, self.state)
+        with self.m.migration_guard(self.root, self.state) as plan:
+            self.assertEqual(plan['previous'], first)
+            p.write_text('new', encoding='utf-8')
+            self.assertEqual(self.m.finalize_migration(self.root, self.state, plan), first)
+        self.assertEqual(p.read_text(), 'new')
+        self.assertEqual(json.loads((self.state / 'v2-migration.json').read_text(encoding='utf-8')), first)
+
     def test_receipts_project_new_views_without_old_day_recapture(self):
         from beyin_v3_sync import SyncEngine
         day = self.source('daily/2025-01-01.md', 'Human daily stays exact\n')

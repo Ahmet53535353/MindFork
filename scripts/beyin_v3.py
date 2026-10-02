@@ -264,6 +264,8 @@ def parser():
                           help="Opt-in SessionStart question for a long-quiet top-level folder")
     settings.add_argument("--promotion", choices=("on", "off"),
                           help="Opt-in touch log for the doctor's hot/cold folder report")
+    settings.add_argument("--parallel-sessions", choices=("on", "off"),
+                          help="Opt-in one-line notice when another session is open on this vault")
     compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
     compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
@@ -406,9 +408,9 @@ def main(argv=None):
                     result['companion_context_notice'] = companion.CONTEXT_FILE + ' gecersiz; oturum basi baglami context_chars ile sinirli.'
             widest = max(result['companion_context']['context_chars'], settings['context_chars'])
             if companion.client_budget('claude', widest) < widest:  # #175: say so instead of silently using less
-                result['client_context_notice'] = (f"Claude Code oturumlarinda otomatik baglam {companion.client_budget('claude', widest)} "
-                                                   'karakterde tutulur: Claude Code 10.000 karakteri asan hook baglamini dosyaya '
-                                                   'tasiyip modele yalniz ilk ~2.000 karakteri gosterir.')
+                result['client_context_notice'] = (f"Claude Code ve Codex oturumlarinda otomatik baglam {companion.client_budget('claude', widest)} "
+                                                   'karakterde tutulur: Claude Code 10.000 karakteri, Codex yaklasik 10.000 bayti '
+                                                   'asan hook baglamini dosyaya tasiyip modele yalniz bir onizleme gosterir.')
             import beyin_v3_releases as releases
             result['update_notifications'] = releases.preferences(state, None if args.update_notifications is None else args.update_notifications == 'on')
             if args.update_notifications is not None:
@@ -426,6 +428,15 @@ def main(argv=None):
                 result['hygiene'], hygiene_valid = hygiene.read_settings(state)
                 if not hygiene_valid:
                     result['hygiene_notice'] = 'hygiene.json gecersiz; tum hijyen sinyalleri kapali sayiliyor.'
+            # Machine-local (#170): an older release would reject a new .beyin-preferences.json key.
+            import beyin_v3_parallel as parallel
+            if args.parallel_sessions is not None:
+                parallel.save_settings(state, args.parallel_sessions == 'on')
+                result['status'] = 'saved'
+            parallel_on, parallel_valid = parallel.read_settings(state)
+            result['parallel_sessions'] = 'on' if parallel_on else 'off'
+            if not parallel_valid:
+                result['parallel_sessions_notice'] = 'parallel-sessions.json gecersiz; paralel oturum bildirimi kapali sayiliyor.'
         elif args.command == "jev":
             laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
@@ -542,6 +553,11 @@ def main(argv=None):
                         result[key] = getattr(hygiene, key)(vault)
                 except Exception as exc:
                     result[key] = {'status': 'unavailable', 'error': type(exc).__name__}
+            try:  # read-only report of the opt-in parallel-session notice (#170)
+                import beyin_v3_parallel as parallel
+                result['parallel_sessions'] = parallel.doctor(state)
+            except Exception as exc:
+                result['parallel_sessions'] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
             # Information only: a leftover global OMP hook copy predates the vault-owned plan
             # (OMP.md says the installer never updates or removes it). After an engine update the

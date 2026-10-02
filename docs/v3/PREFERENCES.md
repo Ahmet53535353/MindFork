@@ -38,11 +38,14 @@ yolu ile ilk ~2.000 karakterlik önizlemeyi verir; bu sınırı yükselten bir a
 companion'da önizlemeye yalnız `Core` ve `Kurallar` sığar, `Last-Session`, `Threads` ve
 `Journal` otomatik bağlamdan düşer (#175). Bu yüzden Claude Code oturumlarında hem açılış hem
 tur bağlamı en fazla 9.500 karakterle üretilir (`context_chars` 12.000 olsa da); `preferences`
-çıktısı bunu `client_context_notice` ile söyler. Codex de varsayılan olarak yaklaşık 10.000
-UTF-8 baytı (2.500 yaklaşık token) aşan hook bağlamını dosyaya taşır ve baş/son önizleme verir;
-Türkçe harfler 2 bayt tuttuğu için 9.000 karakter bile taşabilir. Bu sürüm Codex bütçesini
-değiştirmez; Codex'te 8.000 ve altı güvenlidir. Antigravity, OpenCode, Hermes ve OMP için böyle
-bir sınır ölçülmedi.
+çıktısı bunu `client_context_notice` ile söyler. Codex de varsayılan olarak 10.000 UTF-8 baytı
+(4 baytlık 2.500 yaklaşık token) aşan hook bağlamını dosyaya taşır ve modele yalnız baş ve son
+önizlemeyi verir; ortası düşer (`codex-rs/hooks/src/output_spill.rs`). Türkçe harfler 2 bayt
+tuttuğu için Codex oturumlarında bağlam aynı 9.500 karakter bütçesiyle üretilir, metin 10.000
+baytı geçerse bütçe orantılı küçültülüp yeniden üretilir; bölümler sondan kesilmez. Codex'in
+hook başına `additionalContextLimit` ayarı `.codex/hooks.json` içindedir ve bu dosyayı
+değiştirmek hook güvenini düşürdüğü için Beyin onu kullanmaz. Antigravity, OpenCode, Hermes ve
+OMP için böyle bir sınır ölçülmedi.
 
 Açılışta hafıza dosyaları kırpılıyorsa sorgusuz seçilen ilgisiz bir not eklenmez; kalan
 bütçe kırpılan dosyalara döner. Dosyalar tam sığıyorsa en fazla 1.500 karakterlik bir
@@ -89,6 +92,20 @@ python3 beyin.py preferences --promotion on
 - `--promotion`: düzenlenen notların vault içi yollarını runtime klasöründeki `touch-log.tsv` dosyasına yazar; `doctor` bunlardan sıcak ve soğuk klasör raporu çıkarır. Taşıma kararı her zaman senindir.
 
 Companion klasörü, kasa sınıfı adlar (`Kasa`, `Şifreler`, `Müşteriler`, `Özel`, `Private` gibi, emoji ya da numara önekli yazımlar dahil), arşiv, şablon ve kod klasörleri bu sinyallerin hepsinden muaftır. Ayarlar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `hygiene.json` dosyasında tutulur; makineye özeldir, profil değişimi onlara dokunmaz ve rollback güvenlidir. Kapatmak için aynı seçeneği `off` ile ver.
+
+## Paralel oturum bildirimi
+
+Aynı vault'ta birden çok oturum açıkken ajanlar ortak git index'ine, ortak geçici dosyalara ya da aynı nota dokunabilir. Kart tarafı companion protokolüyle çözülü; bu bildirim kartın dışında kalan ortak şeyler içindir (#170). Varsayılan kapalıdır:
+
+```bash
+python3 beyin.py preferences --parallel-sessions on
+```
+
+- Açıkken her gerçek kullanıcı isteminde (UserPromptSubmit; ilk istemi SessionStart olarak gönderen Hermes, OpenCode ve Antigravity'de SessionStart) oturum kendi işaretini yazar. Son 45 dakikada etkin olan ve bu oturumda henüz duyurulmamış başka oturum varsa bağlamın başına tek satır eklenir: `[Paralel oturum] Bu vault'ta 2 oturum daha acik: #3f9a1c2b (3 dk once), #e5f6a7b8 (14 dk once). Ayni dosyaya dokunmadan once diskten yeniden oku; commit oncesi git status.`
+- Kimlik, o oturumun `Receipt session=` değerinin ilk 8 karakteridir; öbür oturumun Last-Session kartı başlığından bulunur. Satırda en fazla iki oturum adıyla yazılır, fazlası sayılır. Aynı oturum bir oturumda bir kez duyurulur; sonradan açılan bir oturum bir sonraki istemde bir kez söylenir. Alt ajan bildirimleri gibi sentetik turlar ne işaret yazar ne satır alır.
+- İşaret runtime klasöründe `session-markers/<sha256(harness + "\0" + session_id)>.json` dosyasıdır ve yalnız `schema, harness, session, first_at, last_at, announced` taşır: istem metni ve çalışma klasörü yazılmaz. Runtime klasörü vault başına ve makineye özel olduğundan başka vault'taki ya da başka makinedeki oturumlar sayılmaz.
+- SessionEnd kendi işaretini siler (`/clear` sonrası hayalet oturum kalmaz). Her yazımda 24 saatten eski işaretler silinir ve en fazla 128 işaret tutulur. Okunamayan işaret yok sayılır; işaret hatası hook'u düşürmez, yalnız satır düşer.
+- Ayar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `parallel-sessions.json` dosyasında tutulur; rollback güvenlidir. Kapalıyken hook çıktısı değişmez ve işaret yazılmaz. `doctor` açıkken etkin işaret sayısını salt okunur olarak yazar. Kapatmak için `--parallel-sessions off`.
 
 ## Stop'ta receipt hatırlatması
 
