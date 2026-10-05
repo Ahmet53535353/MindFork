@@ -1,0 +1,4 @@
+# Commit author attribution. This repository's commits were signed with a placeholder identity
+# because git had no user.name/user.email configured on this machine; the work is Ahmet's.
+# GitHub and `git log --use-mailmap` show the real author from here.
+Ahmet53535353 <219421708+Ahmet53535353@users.noreply.github.com> test <test@test.com>
