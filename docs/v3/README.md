@@ -10,7 +10,7 @@ V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity, [Herm
 
 Kurucu ortak motoru, `beyin`, `beyin-doktor`, `beyin-guncelle` skill'lerini, kurulu `beyin.py` girişini ve işletim sistemine uygun güncelleme kısayolunu dağıtır. Paket ZIP olarak açılıp kullanılabilir; Git gerekmez. Kurulu vault kaynak repo klasöründen bağımsız çalışır.
 
-[Son kararlı release](https://github.com/avenoxai/avenoxbeyin/releases/latest) ve içindeki `beyin-v3-X.Y.Z.zip` paketi stable dağıtım noktasıdır. V3.5.1 turunda 715 test ile 10/10 development ve 6/6 holdout semantik senaryosu geçti; CI aynı paketi Windows, macOS ve Linux'ta doğrular.
+[Son kararlı release](https://github.com/avenoxai/avenoxbeyin/releases/latest) ve içindeki `beyin-v3-X.Y.Z.zip` paketi stable dağıtım noktasıdır. V3.7.1 turunda 875 test ile 10/10 development ve 6/6 holdout semantik senaryosu geçti; CI aynı paketi Windows, macOS ve Linux'ta doğrular.
 
 ## Davranış
 
@@ -32,6 +32,8 @@ Kurucu ortak motoru, `beyin`, `beyin-doktor`, `beyin-guncelle` skill'lerini, kur
 [Platform testleri](PLATFORM-TESTS.md) ve [gerçek istemci oturumları](LIVE-CLIENTS.md) ayrı kanıtlardır. Runtime'ın daha önceki native CI başarısı yeni updater paketinin final CI veya release kanıtı yerine geçmez. Codex CLI kontrolü de Codex Desktop cold-session kontrolünün yerine geçmez.
 
 Önceden sabitlenen [semantik sözleşme](SEMANTIC-TEST-CONTRACT.md) küçük, sentetik bir kaynak bulma/durum testidir. Motor kelime tabanlı arama kullanır; embedding veya genel doğal dil anlama başarısı iddia edilmez. Fixture'a göre kodlama yapılmaz; development ve holdout sonuçları ayrı kaydedilir. [Temel karşılaştırma](BASELINE.md).
+
+Gerçek kullanımda kancanın enjekte ettiği kaynakların sonradan açılıp açılmadığını Claude Code transkriptlerinden salt okunur sayan geliştirici aracı: [kullanım raporu](USAGE-REPORT.md). Yayın paketine girmez.
 
 ## Teknik ve tarihsel kayıt
 

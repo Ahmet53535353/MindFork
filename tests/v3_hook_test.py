@@ -15,6 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
+from v3_package_helpers import clean_environ
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
@@ -54,6 +55,10 @@ class HookInstallerTest(unittest.TestCase):
         for key in ('SYSTEMROOT', 'WINDIR'):
             if key in os.environ:
                 self.env[key] = os.environ[key]
+        # In-process calls (is_synthetic_prompt, receipt_reminder) read os.environ directly.
+        environment = clean_environ()
+        environment.start()
+        self.addCleanup(environment.stop)
         sys.path.insert(0, str(SCRIPTS))
         self.addCleanup(lambda: sys.path.remove(str(SCRIPTS)))
         self.hook = load_hook()
@@ -124,7 +129,7 @@ class HookInstallerTest(unittest.TestCase):
     def test_degraded_sync_acknowledges_event_and_keeps_explicit_health_warning(self):
         self.seed()
         broken = self.vault / 'notes/broken.md'
-        broken.write_text('---\nunsupported:\n  nested: metadata\n---\nExcluded synthetic note.\n', encoding='utf-8')
+        broken.write_text('---\nunsupported:\n  nested:\n    deeper: metadata\n---\nExcluded synthetic note.\n', encoding='utf-8')
         self.hook.enqueue_event(self.vault, self.state, self.payload, 'codex')
         result = self.hook.drain_queue(self.vault, self.state)
         self.assertEqual(result['processed'], 1)
@@ -231,6 +236,81 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn(summary, context)
         self.assertTrue(any(marker in context.casefold() for marker in ['historical', 'history', 'geçmiş', 'gecmis']))
 
+    def test_receipt_context_truncation_marker_when_exceeding_budget(self):
+        engine = self.seed()
+        engine.receipt('short', 'Short summary.', ['notes/task.md'], 'codex')
+        short = 'receipts/' + hashlib.sha256(b'short').hexdigest() + '.md'
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn((self.vault / short).read_text(encoding='utf-8'), context)
+        self.assertNotIn('[truncated:', context)
+        self.assertIn(f'Latest receipt ({short}; ', context)
+
+        refs = []
+        for i in range(60):
+            (self.vault / f'notes/ref_{i:03d}.md').write_text(f'Ref {i}.\n', encoding='utf-8')
+            refs.append(f'notes/ref_{i:03d}.md')
+        engine.receipt('long', 'Long summary.', refs, 'codex')
+        long = 'receipts/' + hashlib.sha256(b'long').hexdigest() + '.md'
+        self.assertGreater(len((self.vault / long).read_text(encoding='utf-8')), 1200)
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertTrue(context.endswith('\n[truncated: read source]\n'))
+        header = f'\nLatest receipt ({long}; historical agent claim, not independently verified):\n'
+        self.assertTrue(context.startswith(header))
+        body = context[len(header):]
+        self.assertEqual(len(body), 1200)
+        # SessionStart clips this block from the end; the source must survive that (#147).
+        import beyin_v3_companion as companion
+        clipped = companion.clip(context, 400)
+        self.assertIn(long, clipped)
+        self.assertTrue(clipped.endswith('\n[truncated: read source]\n'))
+
+    def test_session_start_receipt_skips_private_and_untrusted_refs(self):
+        # The global bridge never showed such a receipt; the vault hook now shares its gate.
+        engine = self.seed()
+        notes = self.vault / 'notes'
+        (notes / 'secret.md').write_text('---\nvisibility: private\n---\n# Müşteri Şifre\nArşiv notu.\n', encoding='utf-8')
+        (notes / 'pasted.md').write_text('---\n' + json.dumps({'id': 'pasted', 'kind': 'note', 'trust': 'untrusted'}) +
+                                         '\n---\nPasted text.\n', encoding='utf-8')
+        engine.sync()
+        engine.receipt('visible', 'VISIBLE_RECEIPT_CANARY', ['notes/task.md'], 'codex')
+        time.sleep(0.01)
+        engine.receipt('private', 'PRIVATE_RECEIPT_CANARY Müşteri sözleşmesi', ['notes/task.md', 'notes/secret.md'], 'codex')
+        time.sleep(0.01)
+        engine.receipt('untrusted', 'UNTRUSTED_RECEIPT_CANARY', ['notes/pasted.md'], 'claude')
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn('VISIBLE_RECEIPT_CANARY', context)
+        for canary in ('PRIVATE_RECEIPT_CANARY', 'UNTRUSTED_RECEIPT_CANARY', 'notes/secret.md'):
+            self.assertNotIn(canary, context)
+        response = self.invoke(dict(self.payload, hook_event_name='SessionStart'))
+        opening = response['hookSpecificOutput']['additionalContext']
+        self.assertIn('VISIBLE_RECEIPT_CANARY', opening)
+        self.assertNotIn('PRIVATE_RECEIPT_CANARY', opening)
+        self.assertNotIn('UNTRUSTED_RECEIPT_CANARY', opening)
+        # Only private receipts: no receipt block at all rather than the private one.
+        (self.vault / 'receipts' / (hashlib.sha256(b'visible').hexdigest() + '.md')).unlink()
+        self.assertEqual(self.hook.receipt_context(str(self.vault), str(self.state)), '')
+
+    def test_latest_receipt_follows_created_at_not_file_mtime(self):
+        # #112: git pull and sync clients rewrite mtimes; the receipt's own stamp decides.
+        engine = self.seed()
+        engine.receipt('older', 'OLDER_RECEIPT_CANARY', ['notes/task.md'], 'codex')
+        time.sleep(0.01)
+        engine.receipt('newer', 'NEWER_RECEIPT_CANARY', ['notes/task.md'], 'codex')
+        older = self.vault / 'receipts' / (hashlib.sha256(b'older').hexdigest() + '.md')
+        future = time.time() + 3600
+        os.utime(older, (future, future))
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn('NEWER_RECEIPT_CANARY', context)
+        self.assertNotIn('OLDER_RECEIPT_CANARY', context)
+        # A receipt whose source file is gone, or a hand-made file the index never adopted, is not offered.
+        (self.vault / 'receipts' / (hashlib.sha256(b'newer').hexdigest() + '.md')).unlink()
+        (self.vault / 'receipts/hand-made.md').write_text('HAND_MADE_CANARY\n', encoding='utf-8')
+        context = self.hook.receipt_context(str(self.vault), str(self.state))
+        self.assertIn('OLDER_RECEIPT_CANARY', context)
+        self.assertNotIn('HAND_MADE_CANARY', context)
+        # No runtime index yet: no receipt block, never an error.
+        self.assertEqual(self.hook.receipt_context(str(self.vault), str(self.root / 'empty-state')), '')
+
     def test_stop_stdin_queues_and_explicit_worker_drains(self):
         self.seed()
         response = self.invoke(dict(self.payload, hook_event_name='Stop'), 'claude')
@@ -275,6 +355,16 @@ class HookInstallerTest(unittest.TestCase):
         self.lifecycle('PostToolUse', 'no-session', 'claude')
         engine.receipt('no-session-1', 'Edited the task note.', ['notes/task.md'], 'claude')
         self.assertEqual(self.lifecycle('Stop', 'no-session', 'claude')['decision'], 'block')
+
+    def test_user_prompt_submit_accepts_null_and_block_list_prompts(self):
+        self.seed()
+        for index, prompt in enumerate((None, [{'type': 'text', 'text': 'Nebula calibration owner'}], 42)):
+            output = self.lifecycle('UserPromptSubmit', 'non-string-' + str(index), 'claude', prompt=prompt)
+            self.assertFalse((self.state / 'hook-error.json').exists(), prompt)
+            self.assertNotIn('V3 source sync failed', json.dumps(output), prompt)
+        self.assertEqual(self.hook.prompt_text({'prompt': ['a', {'type': 'text', 'text': 'b'}, {'type': 'image'}]}), 'a\nb')
+        self.assertEqual(self.hook.prompt_text({'prompt': None}), '')
+        self.assertEqual(self.hook.prompt_text(None), '')
 
     def test_stop_receipt_reminder_session_closes_the_gap(self):
         engine = self.seed()
@@ -677,6 +767,91 @@ class HookInstallerTest(unittest.TestCase):
         response = self.invoke(payload, 'codex')
         self.assertIn('Makaleler/uzun.md', response['hookSpecificOutput']['additionalContext'])
         self.assertIn('Makaleler/uzun.md', (self.state / 'touch-log.tsv').read_text(encoding='utf-8'))
+
+    def test_is_synthetic_prompt_detection(self):
+        # Prefix heuristics
+        for prefix in (
+            '<task-notification> subagent finished',
+            '   <task-notification> with leading whitespace',
+            'Another Claude session sent a message: ping',
+            '<agent-message id="1">result</agent-message>',
+            '<local-command-caveat> warning',
+            '<command-name>git status</command-name>',
+            '<local-command-stdout> command output',
+        ):
+            with self.subTest(prefix=prefix):
+                self.assertTrue(self.hook.is_synthetic_prompt({'prompt': prefix}))
+
+        # Origin metadata checks
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': {'kind': 'task-notification'}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': {'kind': 'peer'}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': 'task-notification'}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': {'kind': 'human'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'normal work', 'origin': 'human'}))
+
+        # Human & edge case inputs
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Lütfen kodları incele'}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': ''}))
+        self.assertFalse(self.hook.is_synthetic_prompt({}))
+        self.assertFalse(self.hook.is_synthetic_prompt(None))
+
+        # Opt-out environment variable
+        with patch.dict(os.environ, {'BEYIN_V3_FILTER_HARNESS_TURNS': '0'}):
+            self.assertFalse(self.hook.is_synthetic_prompt({'prompt': '<task-notification> test'}))
+
+    def test_user_prompt_submit_skips_retrieval_on_synthetic_prompts(self):
+        self.seed()
+        before = len(list((self.state / 'hook-queue').glob('*.json')))
+
+        # 1. Synthetic prefix returns {} immediately, but queues metadata
+        resp_prefix = self.lifecycle('UserPromptSubmit', 'synth-sess-1', 'claude',
+                                     prompt='<task-notification> subagent done')
+        self.assertEqual(resp_prefix, {})
+        queue_files = list((self.state / 'hook-queue').glob('*.json'))
+        self.assertEqual(len(queue_files), before + 1)
+
+        # 2. Synthetic origin returns {} even with keywords matching seeded note
+        resp_origin = self.lifecycle('UserPromptSubmit', 'synth-sess-2', 'claude',
+                                     prompt='Nebula calibration',
+                                     origin={'kind': 'task-notification'})
+        self.assertEqual(resp_origin, {})
+        self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 2)
+
+        # 3. Genuine human query delivers search context
+        resp_human = self.lifecycle('UserPromptSubmit', 'human-sess', 'claude',
+                                    prompt='Nebula calibration')
+        self.assertIn('hookSpecificOutput', resp_human)
+        self.assertIn('Synthetic Reviewer', resp_human['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 3)
+
+    def test_user_prompt_submit_synthetic_filter_honours_opt_out_env(self):
+        self.seed()
+        self.env['BEYIN_V3_FILTER_HARNESS_TURNS'] = '0'
+        resp = self.lifecycle('UserPromptSubmit', 'optout-sess', 'claude',
+                              prompt='<task-notification> Nebula calibration')
+        self.assertIn('hookSpecificOutput', resp)
+        self.assertIn('Synthetic Reviewer', resp['hookSpecificOutput']['additionalContext'])
+
+    def test_unknown_origin_kinds_fall_back_to_the_prompt_prefix(self):
+        # Claude Code also tags turns a person typed elsewhere (channel, bridge, remote); only
+        # the known non-human kinds skip retrieval, anything else is judged by the prompt text.
+        for kind in ('channel', 'bridge', 'remote', 'cli', ''):
+            with self.subTest(kind=kind):
+                self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula calibration', 'origin': {'kind': kind}}))
+                self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula calibration', 'origin': kind}))
+                self.assertTrue(self.hook.is_synthetic_prompt({'prompt': '<task-notification>\n<task-id>x</task-id>',
+                                                               'origin': {'kind': kind}}))
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': 'plain text', 'origin': {'kind': 'coordinator'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': '<task-notification>', 'origin': {'kind': 'human'}}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': 'Nebula', 'origin': {'kind': ['peer']}}))
+        # Content-block prompts (#156) are judged by their text like a plain string.
+        self.assertTrue(self.hook.is_synthetic_prompt({'prompt': [{'type': 'text', 'text': '<task-notification>\n<task-id>x</task-id>'}]}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': [{'type': 'text', 'text': 'Nebula calibration'}]}))
+        self.assertFalse(self.hook.is_synthetic_prompt({'prompt': None}))
+        self.seed()
+        resp = self.lifecycle('UserPromptSubmit', 'channel-sess', 'claude', prompt='Nebula calibration',
+                              origin={'kind': 'channel', 'server': 'telegram'})
+        self.assertIn('Synthetic Reviewer', resp['hookSpecificOutput']['additionalContext'])
 
 
 if __name__ == '__main__':

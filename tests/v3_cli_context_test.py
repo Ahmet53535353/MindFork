@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+from v3_package_helpers import inherited_env
 
 class ContextRefreshTest(unittest.TestCase):
     def setUp(self):
@@ -26,7 +27,7 @@ class ContextRefreshTest(unittest.TestCase):
         self.source.write_text('---\n{"id":"calibration","kind":"fact","project":"demo","visibility":"internal"}\n---\n'+body+'\n',encoding='utf-8')
 
     def run_cli(self, *args):
-        return subprocess.run([sys.executable,str(ROOT/'scripts/beyin_v3.py'),'--vault',str(self.vault),'--state',str(self.state),*args],capture_output=True,text=True,encoding='utf-8')
+        return subprocess.run([sys.executable,str(ROOT/'scripts/beyin_v3.py'),'--vault',str(self.vault),'--state',str(self.state),*args],capture_output=True,text=True,encoding='utf-8',env=inherited_env())
 
     def test_context_refreshes_external_edit_without_hook(self):
         self.write('Current synthetic calibration value CHANGED.')
@@ -44,7 +45,7 @@ class ContextRefreshTest(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
         before = snapshot(checkout), snapshot(self.vault), snapshot(self.state)
-        env = dict(os.environ)
+        env = inherited_env()
         env.pop('PYTHONDONTWRITEBYTECODE', None)
         env.pop('PYTHONPYCACHEPREFIX', None)
         result = subprocess.run(
@@ -76,7 +77,7 @@ class ContextRefreshTest(unittest.TestCase):
     def test_context_serves_fresh_healthy_subset_with_explicit_degraded_warning(self):
         healthy = self.vault/'notes/healthy.md'
         healthy.write_text('Current healthy nebula calibration note.\n', encoding='utf-8')
-        self.source.write_text('---\nunsupported:\n  nested: metadata\n---\nChanged source',encoding='utf-8')
+        self.source.write_text('---\nunsupported:\n  nested:\n    deeper: metadata\n---\nChanged source', encoding='utf-8')
         result=self.run_cli('context','nebula calibration')
         self.assertEqual(result.returncode,0,result.stderr)
         output=json.loads(result.stdout)

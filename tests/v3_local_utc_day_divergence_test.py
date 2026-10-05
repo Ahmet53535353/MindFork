@@ -12,7 +12,7 @@ here is what keeps it from becoming invisible -- a future change that makes the 
 come here first, and the fix belongs to the product, not to the clock the tests run in.
 
 The split between the two is deliberate: a batch boundary must be stable, a human day must not.
-`beyin_v3_projections._local_day` therefore joins the *daily log*, not the window, and the fourth
+`beyin_v3_projections.receipt_day` therefore joins the *daily log*, not the window, and the fourth
 test below pins that the two files in `daily/` read the same clock. It is the third leg of this
 divergence and it was untested: a change could put the daily index back on UTC and nothing here
 would notice.
@@ -78,10 +78,10 @@ class LocalVsUtcDayTest(unittest.TestCase):
     def test_the_daily_index_follows_the_machine_with_the_daily_log_not_the_window(self):
         """The two files in daily/ are one human day; the window is a different concept."""
         self.in_zone('Etc/GMT-3')
-        self.assertEqual(projections._local_day(STAMP), EAST_DAY)
-        self.assertEqual(projections._local_day(STAMP), sessionlog._day(EPOCH),
+        self.assertEqual(projections.receipt_day(STAMP), EAST_DAY)
+        self.assertEqual(projections.receipt_day(STAMP), sessionlog._day(EPOCH),
                          'günlük dizin ve günlük log aynı günü söylemeli')
-        self.assertNotEqual(projections._local_day(STAMP), self.window_day(),
+        self.assertNotEqual(projections.receipt_day(STAMP), self.window_day(),
                             'günlük dizin pencereye döndü: sözleşme günlük logla aynı saattir')
 
 

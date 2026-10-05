@@ -84,8 +84,10 @@ class MulticardContextTest(unittest.TestCase):
         return [tag for tag in TAGS if f'HEAD_{tag}' in text]
 
     def test_newest_card_arrives_whole_when_the_budget_is_tight(self):
+        # 1400 is the measured edge for this fixture: below it the card does not fit its share
+        # at all and is named as dropped, which is the other half of the contract below.
         self.build(handoff(CARDS))
-        for budget in (1200, 1500, 2000):
+        for budget in (1400, 1500, 2000):
             with self.subTest(budget=budget):
                 text = self.context(budget)
                 self.assertLessEqual(len(text), budget)
@@ -102,7 +104,7 @@ class MulticardContextTest(unittest.TestCase):
     def test_no_card_is_split_by_the_budget(self):
         cards = CARDS + [('DORT', '2026-09-25 09:00', 'dddddddd'), ('BES', '2026-09-24 09:00', 'eeeeeeee')]
         self.build(handoff(cards))
-        for budget in (1200, 1600, 2000, 2600, 3400):
+        for budget in (1400, 1600, 2000, 2600, 3400):
             with self.subTest(budget=budget):
                 text = self.context(budget)
                 for tag in [tag for tag, _, _ in cards]:
@@ -116,6 +118,33 @@ class MulticardContextTest(unittest.TestCase):
         dropped = [tag for tag, _, _ in cards if f'HEAD_{tag}' not in text]
         self.assertTrue(dropped, 'bu bütçede kart düşmüyor, test ölçüm için geçersiz')
         self.assertRegex(text, rf'\[truncated: {len(dropped)} older handoff cards not shown')
+
+    def test_a_card_is_never_cut_in_the_middle_without_a_marker(self):
+        """A card is whole, or it is its two ends with the marker between, or it is absent.
+
+        The shape that was tried and measured: dropping the card when it does not fit its share.
+        Upstream's own rule suite expects HANDOFF_CANARY in the text at 5000 (#177), so a handoff
+        that does not fit still has to say what it was. The remaining hazard is a card shown with
+        its head and neither its tail nor a marker -- the "next concrete step" line gone with
+        nothing naming it -- which is the failure this whole-card rule exists to prevent.
+        """
+        cards = CARDS + [('DORT', '2026-09-25 09:00', 'dddddddd'), ('BES', '2026-09-24 09:00', 'eeeeeeee')]
+        self.build(handoff(cards))
+        for budget in (400, 700, 1200, 1400, 2000):
+            with self.subTest(budget=budget):
+                text = self.context(budget)
+                self.assertLessEqual(len(text), budget)
+                for tag in [tag for tag, _, _ in cards]:
+                    if f'HEAD_{tag}' in text and f'TAIL_{tag}' not in text:
+                        # The one permitted half is head+marker: the marker has to say so.
+                        self.assertIn('[truncated:', text,
+                                      f'{tag} kartının kuyruğu gitti ama hiçbir işaret yok')
+                # Below ~700 the budget cannot even hold the file's own heading, so
+                # clip_cards answers with the heading alone and there is no room to name the
+                # cards. From there up, an absent card has to be named.
+                if budget >= 700 and 'HEAD_YENI' not in text:
+                    self.assertRegex(text, r'\[truncated: \d+ older handoff cards not shown',
+                                     'kart adıyla düşmedi, sessizce kesildi')
 
     def test_normal_profile_still_delivers_every_card_whole(self):
         self.build(handoff(CARDS))
@@ -136,7 +165,7 @@ class MulticardContextTest(unittest.TestCase):
                  'HEAD_SONKART: en sona eklenen kart.\n' + FILLER * 4 +
                  'TAIL_SONKART: Sonraki somut adım: gece işi.\n')
         self.build(body)
-        for budget in (1200, 2000, 3400):
+        for budget in (1400, 2000, 3400):
             with self.subTest(budget=budget):
                 text = self.context(budget)
                 self.assertIn('HEAD_SONKART', text, 'dosyanın sonundaki en yeni kart düştü')
@@ -149,7 +178,7 @@ class MulticardContextTest(unittest.TestCase):
         # budget over a dated card, and it must not crash the ranking.
         body = handoff(CARDS)
         self.build(body.rstrip() + '\n\n## Devir kartı (eski bicim)\nHEAD_ESKIBICIM: eski.\n')
-        text = self.context(1200)
+        text = self.context(1400)
         self.assertIn('HEAD_YENI', text)
         self.assertIn('TAIL_YENI', text)
 
@@ -165,7 +194,7 @@ class MulticardContextTest(unittest.TestCase):
                   'HEAD_TARIHSSIZ: dosyanın en üstündeki yeni kart.\n' + FILLER * 4 +
                   'TAIL_TARIHSSIZ: Sonraki somut adım: yeni kartın adımını yaz.\n\n')
         self.build(older.replace('# Son oturum\n\n', '# Son oturum\n\n' + newest, 1))
-        for budget in (1200, 2000):
+        for budget in (1400, 2000):
             with self.subTest(budget=budget):
                 text = self.context(budget)
                 self.assertIn('HEAD_TARIHSSIZ', text, 'en üstteki tarihsiz kart düştü')

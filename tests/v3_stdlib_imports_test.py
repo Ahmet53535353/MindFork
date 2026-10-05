@@ -4,9 +4,12 @@ The installer promises Python 3.11+ and nothing else. An optional backend (for e
 model server) must stay an external process: its Python packages are never imported here.
 """
 import ast
+import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 # Exactly the Python files the release builder packages (scripts/build_v3_release.py).
@@ -25,8 +28,14 @@ def imported(path):
             yield node.lineno, node.module.split('.')[0]
 
 
+# A local import must name a module the release actually ships. Helpers such as
+# _portalock.py live next to the V3 modules in the source tree but are not packaged,
+# so importing one would pass every source-tree test and fail in an installed vault (#151).
+LOCAL = {path.stem for path in PACKAGED}
+
+
 def allowed(name):
-    return name in sys.stdlib_module_names or name.startswith('beyin') or name == '_portalock'
+    return name in sys.stdlib_module_names or name in LOCAL
 
 
 class StdlibImportTest(unittest.TestCase):
@@ -39,6 +48,24 @@ class StdlibImportTest(unittest.TestCase):
     def test_the_guard_rejects_model_runtimes(self):
         for name in ('torch', 'laya', 'transformers', 'numpy', 'requests'):
             self.assertFalse(allowed(name), name)
+
+    def test_the_guard_rejects_unpackaged_local_helpers(self):
+        for name in ('_portalock', 'flush', 'compile', 'antigravity_hooks', 'beyin_helper'):
+            self.assertFalse(allowed(name), name)
+
+    def test_packaged_list_matches_the_builder_and_the_updater_allowlist(self):
+        spec = importlib.util.spec_from_file_location('beyin_release_builder_under_test', ROOT / 'scripts/build_v3_release.py')
+        builder = importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
+        spec = importlib.util.spec_from_file_location('beyin_updater_under_test', ROOT / 'template/.claude/scripts/beyin_v3_update.py')
+        updater = importlib.util.module_from_spec(spec); spec.loader.exec_module(updater)
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / 'release.zip'
+            builder.build(archive, '3.0.0')
+            with zipfile.ZipFile(archive) as release:
+                names = [name for name in release.namelist() if name != 'manifest.json']
+        shipped = sorted(ROOT / name for name in names if name.endswith('.py'))
+        self.assertEqual(shipped, PACKAGED)
+        self.assertEqual([name for name in names if not updater.allowed(name)], [])
 
 
 if __name__ == '__main__':

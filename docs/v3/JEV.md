@@ -59,7 +59,7 @@ python scripts/beyin_v3.py --vault /path/to/vault --state /path/to/state context
 
 Kurulu kasada karşılığı: `python beyin.py context "kısa notlar" --project demo --jev --json`. `--json`, danışman teşhislerini de gösterir. İnceleme için `python beyin.py jev-review --project demo --file proposal.json --json` kullanın.
 
-`--jev` ve açık proje kimliği birlikte gerekir. Bu çağrı yerel aramanın en fazla 16 adayından uzaktan değerlendirmeye izin verilenlerin başlıklarını (160 karakter), metin kesitlerini (800 karakter), proje/durum/tarih bilgisini ve sorguyu gönderir. Son çıktıdaki kayıt sayısı ayrı bir sınırdır. `internal` görünürlük de gönderilebilir; yalnız kamu metni için `--audience public` kullanın. `private`, kapsam dışı, güvenilmeyen, değişmiş ve superseded kayıtlar gönderilmez. Yerel sır örüntüsü eşleşirse çağrı yapılmaz; örüntü taraması tüm hassas bilgileri tanıma garantisi değildir.
+`--jev` ve açık proje kimliği birlikte gerekir. Bu çağrı yerel aramanın en fazla 16 adayından uzaktan değerlendirmeye izin verilenlerin başlıklarını (160 karakter), metin kesitlerini (800 karakter), proje/durum/tarih bilgisini ve sorguyu gönderir. Son çıktıdaki kayıt sayısı ayrı bir sınırdır. Havuz tek isteğin sınırlarına (`max_candidates`, `max_questions`, `max_input_chars`) sığmazsa sırasıyla en fazla üç pakete bölünür; varsayılan 24.000 karakterde 800 karakterlik kesitli 16 aday tek isteğe sığmaz. Her paket bir kez gönderilir, tekrar denenmez; biri başarısız olursa bütün puanlar atılır ve yerel sıra kullanılır. Üç pakete sığmayan havuz için hiç çağrı yapılmaz (`budget_exceeded`). `internal` görünürlük de gönderilebilir; yalnız kamu metni için `--audience public` kullanın. `private`, kapsam dışı, güvenilmeyen, değişmiş ve superseded kayıtlar gönderilmez. Yerel sır örüntüsü eşleşirse çağrı yapılmaz; örüntü taraması tüm hassas bilgileri tanıma garantisi değildir.
 
 - `off`: ağ/anahtar/cache erişimi yok.
 - `shadow`: puanlar `jev` alanında; yerel sonuç ve sıralama korunur.
@@ -68,6 +68,23 @@ Kurulu kasada karşılığı: `python beyin.py context "kısa notlar" --project 
 `remote_allowed: false` veya `sensitivity: sensitive` kaynak metaverisi, başlık dahil kaydın Jev'e gönderilmesini engeller. `remote_allowed` için metin değil JSON/YAML boolean kullanın. Yerelde uygun bulunan böyle kaynaklar, uzakta seçilenlerle dönüşümlü paketlenir; bütün kotayı baştan kaplayamazlar. `aliases: ["ses ofseti", "audio offset"]` yerel aday aramasını genişletir; izin kapılarını aşmaz.
 
 Çağrıdan sonra kaynak hashleri, indeks revizyonları ve erişim koşulları yeniden kontrol edilir. Değişim varsa puan atılır ve güncel yerel sonuç kullanılır. Timeout, 429, eksik anahtar veya bozuk yanıt yerel sonuçları engellemez. Teşhislerde ham servis hataları bulunmaz.
+
+### Klasörle proje kapsamı (isteğe bağlı)
+
+Proje kapsamı varsayılan olarak kaydın kendi `project` alanıdır. Notlarını klasörle düzenleyen ve bu alanı hiç yazmayan bir kasada `--project` alan her komutun (`context --jev`, `jev-review`, `jev-memory`, `jev-answer`) kapsamı boş kalır. Vault kökündeki `.beyin-projects.json` bunu notlara dokunmadan çözer:
+
+```json
+{
+  "folders": {"Projeler/Oyun Kanalları": "oyun", "Projeler/Arşiv": "arsiv"},
+  "shared_unscoped": true
+}
+```
+
+- `folders`: vault'a göreli klasör → proje. Kaydın boş olmayan kendi `project` alanı her zaman önce gelir; iç içe klasörlerde en uzun eşleşme kazanır. Eşleşme klasör sınırında durur (`Projeler/Oyun` klasörü `Projeler/Oyun Eski` içindekileri kapsamaz); yollar Unicode NFC, `/` ve büyük/küçük harf farkı gözetmeden karşılaştırılır (macOS ve Windows kasaları gibi). Yazılan her klasör kasada gerçekten bulunmalıdır: yanlış yazılmış ya da yeniden adlandırılmış bir klasör hiçbir notu eşlemez ve `shared_unscoped` açıkken o notlar her projeye ortak kayıt olarak girerdi; bu yüzden böyle bir dosya açık proje çağrısını durdurur.
+- `shared_unscoped`: `true` ise hiçbir projeye düşmeyen kayıtlar (kurallar, genel notlar) her açık proje sorgusunda ortak kayıt olarak kapsama girer. Başka bir projenin kaydı hiçbir durumda girmez. Varsayılan `false`.
+- Dosya yalnız açık proje verilen çağrılarda okunur. Proje göndermeyen her tur bağlamı ve dosyası olmayan kasalar eskisiyle birebir aynı çalışır. Görünürlük, güven, güncellik ve superseded kapıları kapsamın içinde de aynen uygulanır.
+- Geçersiz dosya (bozuk JSON, bilinmeyen anahtar, mutlak ya da `..` içeren yol, kasada bulunmayan klasör, boş proje adı) açık proje çağrısını hata ile durdurur; kapsam sessizce genişlemez. Proje klasörünü yeniden adlandırınca dosyayı da güncelleyin.
+- `shared_unscoped: true` açıkken dış proje köprüsünden yapılan `context --project` aramaları da ortak kayıtları görür; kişisel notlar ortak rafta kalacaksa `private` görünürlük kullanın.
 
 ## Kaydedilmemiş bilgi adayını inceleme
 

@@ -121,8 +121,8 @@ class ProjectionDayTest(unittest.TestCase):
         result = self.engine.sync()
         self.assertNotEqual(result['status'], 'conflict')
         self.assertEqual(self.daily(), [f'{EAST_DAY}.md'], 'bozuk damga uydurma bir gün üretmemeli')
-        self.assertIsNone(projections._local_day('2026-13-45T00:00:00+00:00'))
-        self.assertIsNone(projections._local_day(None))
+        self.assertIsNone(projections.receipt_day('2026-13-45T00:00:00+00:00'))
+        self.assertIsNone(projections.receipt_day(None))
 
     def test_a_hand_edited_view_is_never_deleted(self):
         self.in_zone('Etc/GMT-3')

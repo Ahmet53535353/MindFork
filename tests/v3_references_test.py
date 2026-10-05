@@ -11,6 +11,8 @@ import tempfile
 import unicodedata
 import unittest
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 SCRIPTS = ROOT / 'template/.claude/scripts'
 if str(SCRIPTS) not in sys.path:
@@ -104,7 +106,7 @@ class DoctorIntegrationTest(unittest.TestCase):
         self.vault, self.state = Path(tmp.name) / 'Örnek Beyin', Path(tmp.name) / 'state'
         self.vault.mkdir()
         (self.vault / 'AGENTS.md').write_bytes('Bkz. [[Silinmiş Not]]\n'.encode('utf-8'))
-        self.env = dict(os.environ, BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
+        self.env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
 
     def test_doctor_reports_dead_links_without_raising_status(self):
         before = sorted(path.relative_to(self.vault).as_posix() for path in self.vault.rglob('*'))

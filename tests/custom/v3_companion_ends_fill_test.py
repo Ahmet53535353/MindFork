@@ -33,17 +33,34 @@ class EndsFillTest(unittest.TestCase):
                     continue
                 self.assertLessEqual(len(kept), budget)
 
-    def test_both_ends_clip_keeps_allocation_within_a_few_characters_of_slack(self):
-        # The leftover of the line-boundary cut is refilled from the middle; only
-        # marker-length digits may cost characters, or the water-filled budget
-        # is thrown away.
+    def test_both_ends_clip_refills_until_the_next_whole_line_does_not_fit(self):
+        """Leftover budget is never silently dropped -- up to one line of granularity.
+
+        The first version of this file demanded 4 characters of slack, which pinned the earlier
+        character-level refill loop. Upstream replaced it with a line-filling loop (#151) that
+        spends whole lines from both ends and stops at the first one that does not fit, so the
+        honest claim is the one upstream's own rule suite makes: the next opening line and the
+        previous closing line both fail to fit in what the widest marker leaves over. Measured on
+        this fixture the largest slack is 66 characters, which is the 76-character rule line less
+        what the marker took -- line granularity, not thrown budget.
+        """
         worst = 0
         for budget in range(150, 1200):
             kept = companion.ends(RULES, budget)
             if kept is None:
                 continue
+            head = kept.split('\n[truncated:', 1)[0]
+            opening = head + '\n'
+            widest = len(f'\n[truncated: {len(RULES)} characters omitted here; read source]\n')
+            slack = budget - widest - len(kept)
+            following = RULES[len(opening):RULES.find('\n', len(opening)) + 1]
+            with self.subTest(budget=budget):
+                self.assertLessEqual(len(kept), budget, 'bütçe aşıldı')
+                # Whatever is left cannot hold the next whole line.
+                self.assertTrue(len(following) > slack or slack <= 0,
+                                f'{budget}: {slack} karakter boşta, sonraki satır {len(following)}')
             worst = max(worst, budget - len(kept))
-        self.assertLessEqual(worst, 4)
+        self.assertLessEqual(worst, 76, 'bir kural satırından fazla boşta kalmamalı')
 
     def test_both_ends_clip_still_keeps_first_and_last_marker(self):
         for budget in (200, 500, 999, 1199):

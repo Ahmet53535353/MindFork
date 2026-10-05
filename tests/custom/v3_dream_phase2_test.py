@@ -203,10 +203,42 @@ class DreamPhase2Test(unittest.TestCase):
     def test_a_locked_state_refuses_a_second_window(self):
         self.oversize_note()
         self.seed_receipts()
-        import _portalock
+        # The lock is taken the way dream.py takes it: V3 ships no _portalock, so the module
+        # writes the msvcrt/fcntl calls itself (#160, #193) and this side mirrors them.
+        import contextlib
+        import os as _os
+
+        @contextlib.contextmanager
+        def _held(handle):
+            acquired = False
+            try:
+                if _os.name == 'nt':
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                yield True
+            except (OSError, BlockingIOError):
+                yield False
+            finally:
+                if acquired:
+                    try:
+                        if _os.name == 'nt':
+                            import msvcrt
+                            handle.seek(0)
+                            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+                            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+
         handle = open(self.state / 'dream.lock', 'a+b')
         try:
-            with _portalock.exclusive(handle, blocking=False):
+            with _held(handle):
                 result = self.window()
             self.assertIn('lock', result['gates']['blocked_by'])
             self.assertFalse(result['wrote'])

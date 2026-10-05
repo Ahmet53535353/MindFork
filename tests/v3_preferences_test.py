@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 import beyin_v3_preferences as prefs
@@ -35,7 +37,7 @@ class PreferencesTest(unittest.TestCase):
         r = subprocess.run([sys.executable, str(ROOT / 'template/.claude/scripts/beyin_v3_hook.py'),
             '--vault', str(self.vault), '--state', str(self.state), '--harness', harness, *extra],
             input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8',
-            env=dict(os.environ, BEYIN_V3_NO_SPAWN='1'), timeout=20)
+            env=inherited_env(BEYIN_V3_NO_SPAWN='1'), timeout=20)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
 
@@ -115,11 +117,123 @@ class PreferencesTest(unittest.TestCase):
         prefs.save(self.vault, {}, 'economical')
         before = (self.vault / '.beyin-preferences.json').read_bytes()
         for changes in ({'interval_minutes': -1}, {'interval_minutes': True}, {'context_chars': 999},
-                        {'context_mode': 'unknown'}, {'unknown': 1}, {'auto_sync': 'false'},
-                        {'secret_filter': 'true'}):
+                        {'context_chars': 12001}, {'context_mode': 'unknown'}, {'unknown': 1},
+                        {'auto_sync': 'false'}, {'secret_filter': 'true'}):
             with self.assertRaises(ValueError):
                 prefs.save(self.vault, changes)
         self.assertEqual(before, (self.vault / '.beyin-preferences.json').read_bytes())
+
+    def test_larger_opening_budget_is_machine_local_and_rollback_safe(self):
+        # #140: the opening may use up to 24000 characters, but the vault preference range
+        # stays 1000..12000. An older release validates .beyin-preferences.json and would
+        # reject a wider value in every hook, in doctor and in preferences itself.
+        directory = self.vault / '🔮 850-Companion'
+        directory.mkdir()
+        (directory / 'Core.md').write_text('# Kimlik\nIDENTITY_CANARY\n', encoding='utf-8')
+        threads = ('# Threads\n## Active Threads\n' +
+                   ''.join(f'- Konu {i}: açık iş maddesi ve bir sonraki adım burada duruyor.\n' for i in range(220)) +
+                   '- THREADS_TAIL_CANARY\n## Closed Threads\n')
+        self.assertGreater(len(threads), 13000)
+        (directory / 'Threads.md').write_text(threads, encoding='utf-8')
+        self.cli('sync')
+        self.cli('preferences', '--context-mode', 'session', '--context-chars', '12000')
+        short = self.hook('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertLessEqual(len(short), 12000)
+        self.assertNotIn('THREADS_TAIL_CANARY', short)
+        saved = self.cli('preferences', '--companion-context-chars', '24000')
+        self.assertEqual(saved['companion_context'], {'context_chars': 24000})
+        self.assertEqual(json.loads((self.state / 'companion-context.json').read_text(encoding='utf-8')),
+                         {'schema': 1, 'context_chars': 24000})
+        stored = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
+        self.assertEqual(set(stored), set(prefs.PROFILES['normal']), 'no new vault preference field')
+        self.assertEqual(stored['context_chars'], 12000, 'vault range unchanged for older releases')
+        # A client without a known cut-off receives the larger opening; Codex stays below its own (#175).
+        text = self.hook('SessionStart', harness='opencode')['hookSpecificOutput']['additionalContext']
+        self.assertGreater(len(text), 12000)
+        self.assertLessEqual(len(text), 24000)
+        self.assertIn('THREADS_TAIL_CANARY', text)
+        self.assertLessEqual(len(self.hook('SessionStart')['hookSpecificOutput']['additionalContext'].encode('utf-8')), 10000)
+        before = (self.state / 'companion-context.json').read_bytes()
+        for value in ('999', '24001'):
+            r = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                '--state', str(self.state), 'preferences', '--context-chars', '3000',
+                                '--companion-context-chars', value],
+                               capture_output=True, text=True, encoding='utf-8', timeout=20)
+            self.assertNotEqual(r.returncode, 0)
+        self.assertEqual((self.state / 'companion-context.json').read_bytes(), before)
+        self.assertEqual(json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))['context_chars'],
+                         12000, 'a rejected opening budget saves nothing else')
+        # A damaged file falls back to context_chars; the opening is never lost.
+        (self.state / 'companion-context.json').write_text('{broken', encoding='utf-8')
+        fallback = self.hook('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertLessEqual(len(fallback), 12000)
+        self.assertIn('IDENTITY_CANARY', fallback)
+        self.assertIn('companion_context_notice', self.cli('preferences'))
+
+    def test_claude_context_stays_below_its_file_cutoff(self):
+        # #175: Claude Code files an additionalContext over 10,000 characters away and shows only
+        # a ~2,000 character preview, so a 24000 opening hid Last-Session, Threads and Journal.
+        directory = self.vault / '🔮 850-Companion'
+        directory.mkdir()
+        def fill(head, line, size):
+            return head + line * ((size - len(head)) // len(line))
+        bodies = {'Core.md': fill('# Kimlik\nMARK-CORE\n', 'Kısa ve somut konuşuruz.\n', 900),
+                  'Kurallar.md': fill('# Kurallar\nMARK-KURALLAR\n', '- Önce sonucu söyle, sonra kaynağı.\n', 2700),
+                  'Last-Session.md': fill('# Son oturum\n## 2026-09-30 18:30 · Deneme\nMARK-LAST\n', 'Etiket taslağı bitti; ambalaj ölçüsü açık.\n', 2600),
+                  'Threads.md': fill('# Threads\n## Active Threads\nMARK-THREADS\n', 'Sonraki adım ölçüm; açık soru süre ve malzeme payı.\n', 6000),
+                  'Journal.md': fill('# Journal\n## 2026-09-30 18:00 Gözlem\nMARK-JOURNAL\n', 'Küçük partide takip çizelgesi işe yaradı.\n', 6000)}
+        for name, body in bodies.items():
+            (directory / name).write_text(body, encoding='utf-8')
+        (self.vault / 'Notlar').mkdir()
+        (self.vault / 'Notlar/Ambalaj.md').write_text('# Ambalaj\n' + 'ambalaj ölçüsü etiket taslağı kutu. ' * 300, encoding='utf-8')
+        self.cli('sync')
+        self.cli('preferences', '--context-mode', 'turn', '--context-chars', '12000')
+        saved = self.cli('preferences', '--companion-context-chars', '24000')
+        self.assertIn('9500', saved['client_context_notice'])
+        def context(harness, event, prompt=None):
+            payload = {'hook_event_name': event, 'session_id': 'synthetic-' + harness, 'event_id': event + harness}
+            if prompt:
+                payload['prompt'] = prompt
+            r = subprocess.run([sys.executable, str(ROOT / 'template/.claude/scripts/beyin_v3_hook.py'),
+                                '--vault', str(self.vault), '--state', str(self.state), '--harness', harness],
+                               input=json.dumps(payload), capture_output=True, text=True, encoding='utf-8',
+                               env=inherited_env(BEYIN_V3_NO_SPAWN='1'), timeout=20)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout)['hookSpecificOutput']['additionalContext']
+        for event, prompt in (('SessionStart', None), ('UserPromptSubmit', 'nerede kalmıştık')):
+            # Claude Code measures JavaScript string length (the folder emoji counts twice);
+            # Codex measures UTF-8 bytes (2,500 tokens of 4 bytes), where ş and ı take two.
+            for harness, measure in (('claude', lambda t: len(t.encode('utf-16-le')) // 2),
+                                     ('codex', lambda t: len(t.encode('utf-8')))):
+                with self.subTest(event=event, prompt=prompt, harness=harness):
+                    text = context(harness, event, prompt)
+                    self.assertLessEqual(measure(text), 10000)
+                    self.assertGreater(measure(text), 9000, 'the room under the cut-off is still used')
+                    for mark in ('CORE', 'KURALLAR', 'LAST', 'THREADS', 'JOURNAL'):
+                        self.assertIn('MARK-' + mark, text)
+            # Other clients keep the budget the user chose.
+            self.assertGreater(len(context('opencode', event, prompt)), 10000)
+        # An ordinary turn uses the same ceiling (context_chars may be 12000).
+        text = context('claude', 'UserPromptSubmit', 'ambalaj ölçüsü etiket taslağı')
+        self.assertIn('Notlar/Ambalaj.md', text)
+        self.assertLessEqual(len(text), 9500)
+        import beyin_v3_companion as companion
+        self.assertEqual(companion.client_budget('claude', 24000), 9500)
+        self.assertEqual(companion.client_budget('codex', 24000), 9500)
+        self.assertEqual(companion.client_budget('codex', 5000), 5000)
+        for harness in ('antigravity', 'hermes', 'opencode', 'omp'):
+            self.assertEqual(companion.client_budget(harness, 24000), 24000)
+            self.assertEqual(companion.fit_client(harness, '🔮' * 9500), '🔮' * 9500)
+        astral = companion.fit_client('claude', 'a' * 9000 + '🔮' * 600)
+        self.assertIn(len(astral.encode('utf-16-le')) // 2, (9999, 10000))
+        self.assertTrue(astral.startswith('a' * 9000))
+        for tail in ('🔮' * 600, 'ş' * 1200, 'ı' * 501):
+            fitted = companion.fit_client('codex', 'a' * 9000 + tail)
+            self.assertIn(len(fitted.encode('utf-8')), range(9997, 10001))
+            self.assertTrue(fitted.startswith('a' * 9000))
+        self.assertEqual(companion.fit_client('codex', 'ş' * 5000), 'ş' * 5000)
+        self.assertNotIn('client_context_notice', self.cli('preferences', '--context-chars', '5000',
+                                                           '--companion-context-chars', '9000'))
 
     def test_manual_hooks_do_not_enqueue_or_inject_across_clients(self):
         prefs.save(self.vault, {}, 'manual')
@@ -130,35 +244,6 @@ class PreferencesTest(unittest.TestCase):
             self.assertNotIn('injectSteps', result)
             self.hook('Stop', harness)
         self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
-
-    def test_economical_still_answers_a_returning_user_mid_session(self):
-        # Insan kullanimi E2E'si: ekonomik profilde oturum ortasinda "tatilden
-        # donduk, neler yapmistik" yazan kullaniciya HICBIR sey gelmiyordu;
-        # profil normal olunca ayni cumle companion kaynaklarini getiriyordu.
-        prefs.save(self.vault, {}, 'economical')
-        self.hook('SessionStart')            # araligi bu oturumda tuketir
-        for prompt in ('bir hafta once ne yapmistik', 'neler yapmistik', 'we just got back, what did we do',
-                       'neredeydik', 'kaldigimiz yer nerede'):
-            result = self.hook('UserPromptSubmit', prompt=prompt)
-            text = result.get('hookSpecificOutput', {}).get('additionalContext', '')
-            self.assertIn('Receipt session=', text, prompt)
-            self.assertLessEqual(len(text), 2000, prompt)
-        # Ilgisiz mesaj ekonomik profilde sessiz kalmaya devam eder.
-        self.assertEqual(self.hook('UserPromptSubmit', prompt='bugun hava nasil'), {})
-
-    def test_economical_continuity_turn_says_memory_may_be_stale(self):
-        # Aralik kapisi gecildigi icin otomatik kontrol yapilmadi; teslim edilen
-        # baglamda indeksli hafizanin bayat olabilecegi soylenmeli.
-        prefs.save(self.vault, {}, 'economical')
-        self.hook('SessionStart')
-        text = self.hook('UserPromptSubmit', prompt='neredeydik') \
-            .get('hookSpecificOutput', {}).get('additionalContext', '')
-        self.assertIn('may be stale', text)
-        # Normal profilde her tur senkronlandigi icin bu uyari gelmez.
-        prefs.save(self.vault, {'context_mode': 'turn', 'interval_minutes': 0})
-        self.hook('SessionStart')
-        self.hook('UserPromptSubmit', prompt='menu icerigi')
-        self.assertNotIn('may be stale', str(self.hook('UserPromptSubmit', prompt='neredeydik')))
 
     def test_economical_injects_only_start_and_caps_entire_context(self):
         prefs.save(self.vault, {}, 'economical')

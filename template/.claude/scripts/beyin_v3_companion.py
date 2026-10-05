@@ -5,7 +5,10 @@ import re
 import sys
 import unicodedata
 
-NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md', 'memory-types.md')
+# Continuity sources only. A reference document (memory-types.md) lives in the same directory
+# but is not injected: its label costs 35 characters of the budget before any text arrives,
+# and at a 1000-character budget that comes straight out of Kurallar.md's share (#140).
+NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
 FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
 # Hygiene limits in characters for the two handoff files that are meant to be rewritten,
 # not appended to (#96). Rules, identity and the Journal accumulate by design and are only
@@ -15,7 +18,7 @@ LIMIT_RANGE = (1000, 200000)
 DEFAULT_DIRECTORY = '🔮 850-Companion'
 STARTERS = {
     'Core.md': '# Düşünme ortağı\n\nKullanıcının düşünme ortağı ve ikinci beyniyim. Kimliğimi ve çalışma biçimimi birlikte belirleriz.\n\n## Kullanıcı ve ortak çalışma biçimi\nHenüz kişiselleştirilmedi. Kullanıcının adı, tercih ettiği hitap, çalışma alanı ve beklentilerini konuşarak öğren. Bilinmeyen geçmişi uydurma.\n\n## Kalıcı tercihler\nKullanıcının açıkça belirttiği tercihleri ve dayandıkları kaynağı burada tut.\n',
-    'Kurallar.md': '# Kullanıcının düzeltmeleri\n\nHenüz kaydedilmiş bir düzeltme yok. Açık kullanıcı düzeltmelerini tarih ve kapsamıyla kaydet; geçici istekleri kalıcı kurala dönüştürme.\n',
+    'Kurallar.md': '# Kullanıcının düzeltmeleri\n\nHenüz kaydedilmiş bir düzeltme yok. Açık kullanıcı düzeltmelerini tarih ve kapsamıyla, her kuralı bir iki satırda kaydet; uzun gerekçe ve olayın anlatımı ayrı bir nota gider. Geçici istekleri kalıcı kurala dönüştürme.\n',
     'Last-Session.md': '# Son oturum\n\nHenüz bir çalışma sonucu kaydedilmedi. Anlamlı çalışma sonunda sonuç, gerekçe, açık kalan adım ve kaynak bağlantılarını `## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla buraya yaz. Paralel oturumlarda yalnız kendi kartını düzenle, başka oturumların kartlarını ezme.\n',
     'Threads.md': '# Threads\n\n## Active Threads\nHenüz açık bir konu kaydedilmedi.\n\n## Closed Threads\n',
     'Journal.md': '# Journal\n\nOrtak çalışmadan doğan gözlemler, öğrenimler ve açık sorular. Çıkarımları kesin kullanıcı bilgisi olarak sunma.\n',
@@ -112,6 +115,105 @@ def save_limits(state, changes):
     return result
 
 
+# Budget for the companion opening context (SessionStart and continuity questions), #140.
+# The handoff limits alone (3000 + 8000) nearly fill the 12000 context_chars ceiling, so the
+# opening may use a larger, separate budget. Machine-local in <state>/companion-context.json,
+# never a .beyin-preferences.json field or range: an older release validates that file and a
+# rollback would otherwise break every hook, doctor and even `preferences` itself.
+CONTEXT_FILE = 'companion-context.json'
+CONTEXT_RANGE = (1000, 24000)
+
+
+def check_context(value):
+    if not isinstance(value, dict) or set(value) - {'schema', 'context_chars'} or value.get('schema', 1) != 1:
+        raise ValueError('companion context accepts only context_chars')
+    number = value.get('context_chars', 0)
+    if type(number) is not int or not (number == 0 or CONTEXT_RANGE[0] <= number <= CONTEXT_RANGE[1]):
+        raise ValueError('companion context_chars must be 0 (use context_chars) or an integer between '
+                         f'{CONTEXT_RANGE[0]} and {CONTEXT_RANGE[1]}')
+    return {'context_chars': number}
+
+
+def read_context(state):
+    """(settings, valid). A missing file means 0: the opening uses context_chars. A damaged
+    file falls back to 0 as well and is never silently rewritten."""
+    path = Path(state) / CONTEXT_FILE
+    if not path.exists() and not path.is_symlink():
+        return {'context_chars': 0}, True
+    try:
+        if path.is_symlink():
+            raise ValueError('symlink')
+        return check_context(json.loads(path.read_text(encoding='utf-8'))), True
+    except (ValueError, OSError):
+        return {'context_chars': 0}, False
+
+
+def save_context(state, context_chars):
+    current, valid = read_context(state)
+    if not valid:
+        raise ValueError(CONTEXT_FILE + ' in the runtime state is invalid; fix or remove it first')
+    result = check_context(dict(current, context_chars=context_chars))
+    from beyin_v3_sync import atomic
+    atomic(Path(state) / CONTEXT_FILE, json.dumps(dict(schema=1, **result), ensure_ascii=False, indent=2) + '\n')
+    return result
+
+
+def opening_budget(state, context_chars):
+    """Characters for the companion opening context; context_chars unless set separately."""
+    return read_context(state)[0]['context_chars'] or context_chars
+
+
+# A client that moves a long hook additionalContext to a file shows the model only part of it,
+# so the automatic context stays under that client's line. Each entry is (limit, measure):
+# - Claude Code: over 10,000 characters (JavaScript string length, so UTF-16 units) it shows
+#   only a ~2,000 character preview; no setting raises it (#175).
+# - Codex: over 2,500 approximate tokens, ceil(UTF-8 bytes / 4), so 10,000 bytes, it shows a
+#   head and tail preview with the middle cut out (codex-rs/hooks/src/output_spill.rs). Its own
+#   per-hook additionalContextLimit lives in .codex/hooks.json, and editing that file drops the
+#   user's hook trust, so the hook keeps its text under the default instead.
+# Clients without a known cap here keep their budget.
+CLIENT_TEXT_LIMITS = {'claude': (10000, 'utf-16'), 'codex': (10000, 'utf-8')}
+CLIENT_HEADROOM = 500
+
+
+def client_size(harness, text):
+    """Length of text in the client's own measure; None for a client without a known cap."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    if not limit:
+        return None
+    return len(text.encode('utf-16-le')) // 2 if limit[1] == 'utf-16' else len(text.encode('utf-8'))
+
+
+def client_budget(harness, chars):
+    """The part of a character budget the client shows in full. For a byte-measured client the
+    headroom also absorbs the multi-byte letters of an ordinary Turkish text."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    return min(chars, limit[0] - CLIENT_HEADROOM) if limit else chars
+
+
+def client_rebudget(harness, budget, text):
+    """A smaller character budget for text that was rendered with budget but is over the client's
+    own measure (a Turkish letter is two UTF-8 bytes for Codex), so a second render keeps every
+    section instead of losing the tail; None when it already fits."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    size = client_size(harness, text) if limit else None
+    if size is None or size <= limit[0]:
+        return None
+    return budget * limit[0] // size
+
+
+def fit_client(harness, text):
+    """Last guard after client_budget: an astral character (the companion folder's emoji) counts
+    twice in UTF-16 and four times in UTF-8, so trim the tail until the client's own measure fits."""
+    limit = CLIENT_TEXT_LIMITS.get(harness)
+    over = client_size(harness, text) - limit[0] if limit else 0
+    while over > 0:
+        # A character is one to four units: cut at least one, at most what is over.
+        text = text[:len(text) - max(1, over // (2 if limit[1] == 'utf-16' else 4))]
+        over = client_size(harness, text) - limit[0]
+    return text
+
+
 def size(path):
     """Unicode characters as stored: not bytes and not UTF-16 units, so a Turkish or
     emoji-rich file is not reported larger than it is. Line endings are not translated
@@ -162,35 +264,28 @@ def hygiene_notice(report):
             'afterwards rewrite in place, never append.\n')
 
 
-# A returning user phrases continuity in many ways, and often without diacritics or
-# from a different harness with a different keyboard. Folding first keeps the pattern
-# list ASCII; the phrase set covers what people actually type after a break, not only
-# the textbook wording: "neredeydik", "kaldığımız yer", "son durum ne", "ne olmuştu".
-CONTINUITY_PATTERN = re.compile(
-    r'(son (oturum|konus|gorus)|gecen (sefer|oturum|konus)|ne(ler)? (yap|ol|oldu|olmus|bitt|devam)|'
-    r'nerede (kal|kald|kaldik)|kaldigimiz yer|neredeydik|neredeyiz|son durum|'
-    r'beni (tani|tanit|hatirla)|kisili|tercihlerim|sen kimsin|kim oldugunu|hatirlat bana|'
-    r'last (session|time|week)|previous session|where (did we|we) leave|what did we do|'
-    r'remember me|catch me up|recap|personality|my (preferences|name)|who (am i|are you))')
-
-_DOTLESS_I = str.maketrans({'ı': 'i', 'İ': 'i', 'I': 'i'})
+# Turkish letters that NFKD does not decompose; the rest (ş, ü, ç, â, ...) lose their marks there.
+FOLD = str.maketrans('ıİ', 'iI')
+# "We are back, what were we doing" in its common first-person forms, matched on folded
+# text so a keyboard without Turkish letters (donduk, yapmistik) reads the same (#151).
+RETURNING = re.compile(r'\b(?:ne(?:ler)? (?:yaptik|yapmistik|yapiyorduk)|nere?deydik|kaldigimiz (?:yer|konu)'
+                       r'|son durum(?:umuz)? (?:ne|nedir|neydi)\b|ne olmustu|(?:tatil|izin)den don(?:dum|duk)\b'
+                       r'|kisilig|what (?:did|have) we (?:do|done|work(?:ed)? on)|what were we (?:doing|working on)'
+                       r'|where were we|catch me up)')
 
 
-def _fold(text):
-    """Lowercase and strip diacritics so the phrase list stays ASCII.
-
-    Turkish dotless ı is a letter of its own and does not decompose, so it is mapped
-    before the combining marks are dropped.
-    """
-    decomposed = unicodedata.normalize('NFKD', text.lower().translate(_DOTLESS_I))
-    return ''.join(character for character in decomposed if not unicodedata.combining(character))
+def fold(text):
+    """Lowercase ASCII-ish form for matching: ı/İ become i, combining marks drop."""
+    decomposed = unicodedata.normalize('NFKD', text.translate(FOLD))
+    return ''.join(c for c in decomposed if not unicodedata.combining(c)).lower()
 
 
 def relevant(query):
-    """Whether a prompt asks for continuity, so the companion sources must be offered."""
-    if not isinstance(query, str):
-        return False
-    return bool(CONTINUITY_PATTERN.search(_fold(query)))
+    # 'nerede kal' only as a first-person continuity question (#145): kargo nerede kaldı is not.
+    # (?!l[ae]r) keeps kaldıkları/kaldiklarini (theirs) out; re.I already folds ı/i/I/İ, only
+    # ş/s and ğ/g need ASCII spellings.
+    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|ner(?:e)?de kal(?:dık|dıydık|mıştık|dığım|dım|dıydım|mıştım|mışız|mışım|dıysak|dıysam|dik|diydik|mistik|digim|dim|diydim|mistim|misiz|misim|diysak|diysam)(?!l[ae]r)|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query)) or bool(RETURNING.search(fold(query)))
+
 
 
 
@@ -203,7 +298,9 @@ def stamp(header):
 
 def excerpt(name, text):
     if name == 'Threads.md':
-        match = re.search(r'(?im)^## (?:Active(?: Threads)?|Aktif[^\n]*)\s*$', text)
+        # Same active headings compaction recognizes (beyin_v3_compact.ACTIVE), so a
+        # '## Açık konular' file does not inject its closed threads too (#153).
+        match = re.search(r'(?im)^## (?:(?:Active|Open)(?: Threads)?|Aktif[^\n]*|A[çc][ıi]k(?:[ \t][^\n]*)?)\s*$', text)
         if match:
             body = text[match.start():]
             closed = re.search(r'(?im)^## (?:Closed|Kapan|Kapalı)', body)
@@ -214,7 +311,11 @@ def excerpt(name, text):
         if entries:
             # Equal timestamps follow the file's own direction: a newest-first journal keeps
             # the latest entry at the top, an append-ordered one at the bottom.
-            newest_first = all(b <= a for (a, _), (b, _) in zip(dated, dated[1:]))
+            # Only distinct timestamps show a direction; when every dated entry shares one,
+            # the bottom goes first, as for an all-undated journal (#163).
+            moments = [moment for moment, _ in dated]
+            rising = any(a < b for a, b in zip(moments, moments[1:]))
+            newest_first = not rising and any(a > b for a, b in zip(moments, moments[1:]))
             index = max(dated, key=lambda item: (item[0], -item[1] if newest_first else item[1]))[1] if dated else len(entries) - 1
             # An undated entry at the end the newest writing lands on is the latest thought,
             # so it wins over dated ones instead of dropping out of the selection (#134).
@@ -231,7 +332,61 @@ def excerpt(name, text):
         previous = re.search(r'(?im)^## (?:Previous|Önceki)', text)
         if previous:
             return text[:previous.start()]
+    if name == 'Kurallar.md':
+        return without_v2_window(text)
     return text
+
+
+# The V2 seed of Kurallar.md says its "first 60 lines" are injected. V3 shows the start and
+# end of the file within a character budget (#45), so that text sends the agent the wrong
+# model: rules were moved to the top "out of the 60-line window" (#177). The opening context
+# names the omission instead; the user's file is never changed.
+V2_WINDOW = re.compile(r'(?i)\bilk 60 sat[ıi]r')
+V2_WINDOW_NOTE = ('[V2 template note about "the first 60 lines" omitted: V3 shows the start and end of this '
+                  'file within a character budget; read source]')
+
+
+def _level(paragraph):
+    """Heading level of a one-line heading paragraph, else 0."""
+    match = re.fullmatch(r'(#{1,6}) [^\n]*\n?', paragraph)
+    return len(match[1]) if match else 0
+
+
+def without_v2_window(text):
+    pieces = re.split(r'(\n(?:[ \t]*\n)+)', text)
+    paragraphs, gaps = pieces[0::2], [''] + pieces[1::2]
+    drop = {i for i, item in enumerate(paragraphs)
+            if V2_WINDOW.search(item) and '**kural' not in item.casefold()}
+    if not drop:
+        return text
+    for i in sorted(drop):
+        # A section heading left with nothing under it (`## Nasıl büyür`) goes with its paragraph.
+        after = next((j for j in range(i + 1, len(paragraphs)) if j not in drop), None)
+        if i and _level(paragraphs[i - 1]) and (after is None or 0 < _level(paragraphs[after].split('\n', 1)[0]) <= _level(paragraphs[i - 1])):
+            drop.add(i - 1)
+    out, noted = '', False
+    for i, item in enumerate(paragraphs):
+        if i in drop:
+            if not noted:
+                out += gaps[i] + V2_WINDOW_NOTE
+                noted = True
+            continue
+        out += gaps[i] + item
+    return out.lstrip('\n') if not text.startswith('\n') else out
+
+
+# A rule and the story of why it exists share one list item in the V2 format
+# (`- **kural:** ... **neden:** ...`). When the rules do not fit their share of the opening,
+# the reasons go first so more rules arrive whole (#177); the rule sentences stay verbatim.
+REASON = re.compile(r'(?:\n[ \t]*|[ \t]*)\*\*(?:neden|gerekçe|gerekce|why|reason)(?::\*\*|\*\*:)'
+                    r'.*?(?=\n[ \t]*(?:[-*+][ \t]|\d+[.)][ \t]|#)|\n[ \t]*\n|\n?\Z)', re.S | re.I)
+
+
+def without_reasons(text):
+    stripped, count = REASON.subn('', text)
+    if not count:
+        return text
+    return stripped.rstrip('\n') + f'\n[{count} rule reasons (**neden:**) omitted to fit the opening; read source]\n'
 
 
 def _section_count(text):
@@ -245,13 +400,13 @@ def _section_count(text):
 
 
 def ends(text, budget):
-    """Opening plus closing lines of a rule set, with the omitted amount and count named.
+    """Opening plus closing lines of a rule set, with the omitted amount named.
 
     The first marker is sized with the whole length, so the final one, counting only
     what was really dropped, can never be longer and the result stays inside budget.
-    Whatever the line-boundary cut gives back is taken from the middle by the closing,
-    because a water-filled allocation that renders short is budget thrown away.
     """
+    if len(text) <= budget:
+        return text
     sections = _section_count(text)
 
     def gap(omitted, omitted_sections=0):
@@ -266,13 +421,17 @@ def ends(text, budget):
     def count(head, closing):
         return max(sections - _section_count(head + closing), 0)
 
-    # A source that fits must come back untouched. The filler loop below can grow a closing part
-    # past the original text, which used to return the whole source plus a marker claiming
-    # nothing was omitted: a false alarm that sends an agent to read a file it already has.
+    # The marker is sized with the whole length, so the final one, counting only what was
+    # really dropped, can never be longer and the result stays inside budget.
     if len(text) <= budget:
         return text
-
-    keep = budget - len(gap(len(text), sections))
+    # Reserve for the marker that will actually be written. A text with `##` sections may get the
+    # counted form, which is up to 66 characters longer than the plain one; sizing `keep` against
+    # the plain form and then emitting the counted one either overshot the budget (425 for 400) or,
+    # dropped the count at the end and threw that 66 characters away. Reserve the longest form the
+    # render can use and the fill lands where it was aimed.
+    reserve = len(gap(len(text), sections if sections else 0)) if sections else len(gap(len(text)))
+    keep = budget - reserve
     if keep < 80:
         return None
     # Cut on line boundaries so neither end is a half rule; the closing part also takes
@@ -281,20 +440,26 @@ def ends(text, budget):
     head = head[:head.rfind('\n') + 1] or head
     closing = text[len(text) - (keep - len(head)):]
     closing = closing[closing.find('\n') + 1:] or closing
-    best = head + gap(len(text) - len(head) - len(closing), count(head, closing)) + closing
-    # Fill the slack the snaps created: grow the closing back into the middle until the
-    # budget is full, only a marker digit oscillation away from exact.
+    # Snapping to line boundaries gives characters back. Spend them on whole lines,
+    # alternating between the two ends, never letting the ends meet (#151).
     start = len(text) - len(closing)
-    for _ in range(6):
-        slack = budget - (len(head) + len(gap(start - len(head), count(head, text[start:]))) + len(text) - start)
-        if slack == 0:
-            break
-        moved = min(max(start - slack, len(head)), len(text))
-        if moved == start:
-            break
-        start = moved
-    result = head + gap(start - len(head), count(head, text[start:])) + text[start:]
-    return result if len(result) <= budget else best
+    grown = True
+    while grown:
+        grown = False
+        cut = text.rfind('\n', len(head), start - 1) + 1 or len(head)
+        if cut < start and len(head) + len(closing) + start - cut <= keep:
+            closing, start, grown = text[cut:], cut, True
+        end = text.find('\n', len(head), start) + 1
+        if end and len(closing) + end <= keep and end < start:
+            head, grown = text[:end], True
+    # The section-count marker is longer than the one `keep` was sized against, so the filled
+    # render can land over the budget: measured 425 characters for a 400 budget. Take the count
+    # when it fits and drop to the character-only marker when it does not, because the ceiling is
+    # a ceiling and a marker that names no count still says how much was left out.
+    counted = head + gap(start - len(head), count(head, closing)) + closing
+    if len(counted) <= budget:
+        return counted
+    return head + gap(len(text) - len(head) - len(closing)) + closing
 
 
 def clip(text, budget, tail=False, both=False):
@@ -337,6 +502,9 @@ def handoff_cards(text):
 def clip_cards(text, budget):
     """Whole cards newest first; a card that does not fit is dropped, never cut after its head."""
     preamble, cards = handoff_cards(text)
+    if budget <= len(preamble):
+        # No room for the file's own heading, so there is nothing to say about its cards.
+        return clip(preamble, budget)
     if not cards:
         return clip(text, budget)
     # Rank by each card's own heading date instead of its line, so an agent that appends its
@@ -364,12 +532,27 @@ def clip_cards(text, budget):
         kept.append(card)
         used += len(card)
     if not kept:
-        # The newest card alone is over budget: spend what is left on its opening and its
-        # closing, because the closing line is the next concrete step this file exists for.
-        # It counts as shown -- ends() already names what it left out -- so the notice below
-        # only names the cards that are missing altogether.
+        # The newest card alone does not fit its share. It is not dropped: a budget that
+        # small still has to say what the handoff was, and upstream's own rule suite expects
+        # the card's marker in the text at 5000 (#177). So the card goes through ends() and
+        # keeps its opening and its closing -- the next concrete step is the last line, which
+        # is what survives -- and the notice then names only the cards that are missing
+        # altogether. A card is never cut in the middle; this is its two ends, not a half.
         note = notice.format(count=len(cards) - 1) if len(cards) > 1 else ''
-        return preamble + clip(cards[0], max(0, budget - used - len(note)), both=True) + note
+        room = max(0, budget - used - len(note))
+        card = cards[0]
+        kept = clip(card, room, both=True)
+        # Two ends only when they are two ends. When the first content line is longer than the
+        # opening's share, ends() snaps the opening back to the heading and the card's first
+        # sentence goes with it -- measured on the #177 rule fixture, where upstream's own suite
+        # expects HANDOFF_CANARY in the text. Then the head-only cut is the honest one: it keeps
+        # the line that says what the card is and marks the rest as gone.
+        heading_end = card.find('\n') + 1
+        line_end = card.find('\n', heading_end)
+        first_line = card[heading_end:line_end if line_end != -1 else None].strip()
+        if first_line and first_line[:24] not in kept:
+            kept = clip(card, room)
+        return preamble + kept + note
     dropped = len(cards) - len(kept)
     return preamble + ''.join(kept) + (notice.format(count=dropped) if dropped else '')
 
@@ -402,19 +585,31 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
     if fixed > budget:
         return clip(header + notice + 'Read companion files: ' + ', '.join(r['source'] for r in records), budget)
 
-    def companion(available):
+    def share(available, parts):
         # Rules and the handoff get a floor first: an even split leaves the two continuity
         # sources the same share as a one-line style note. The rest water-fills, so small
         # identity files still return their unused share to long histories.
-        lengths = [min(len(body), int(available * FLOORS.get(name, 0))) for _, body, name in sections]
+        lengths = [min(len(body), int(available * FLOORS.get(name, 0))) for _, body, name in parts]
         spare = available - sum(lengths)
-        while spare and any(lengths[i] < len(item[1]) for i, item in enumerate(sections)):
-            for i, (_, body, _) in enumerate(sections):
+        while spare and any(lengths[i] < len(item[1]) for i, item in enumerate(parts)):
+            for i, (_, body, _) in enumerate(parts):
                 if spare and lengths[i] < len(body):
                     lengths[i] += 1
                     spare -= 1
+        return lengths
+
+    def companion(available):
+        parts = sections
+        lengths = share(available, parts)
+        if any(name == 'Kurallar.md' and lengths[i] < len(body) for i, (_, body, name) in enumerate(parts)):
+            # Rules that do not fit drop their reasons before any rule is cut (#177).
+            parts = [(label, without_reasons(body) if name == 'Kurallar.md' else body, name)
+                     for label, body, name in parts]
+            lengths = share(available, parts)
         rendered = header + notice
-        for i, (label, body, name) in enumerate(sections):
+        # A handoff card is the unit that moves (upstream #118), so the budget may shorten
+        # the list of cards but never cut one in half.
+        for i, (label, body, name) in enumerate(parts):
             if name == 'Last-Session.md':
                 rendered += label + clip_cards(body, lengths[i])
             else:
@@ -422,25 +617,54 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
                                          tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
         return rendered
 
+    needed = sum(len(body) for _, body, _ in sections)
     available = max(0, int(budget * .83) - fixed)
+    companion_clipped = needed > available
     text = companion(available)
+    # The ceiling holds whatever the water-fill, the notices and the retrieval share worked out
+    # to be. Measured: 425 characters for a 400 budget when `available` came out at zero, because
+    # the per-source labels alone were larger than the 17% the fill leaves aside.
+    if len(text) > budget:
+        text = clip(text, budget)
     extra = ''
     index = store.source_snapshot(['index.md'], source_directory='knowledge', budget_chars=4000)
     if index['records']:
         label = '\n[Knowledge map: knowledge/index.md]\n'
-        allowance = min(600, (budget - len(text)) // 3)
+        room = budget - len(text)
+        allowance = min(600, room // 3)
+        if not companion_clipped:
+            # The map grows with spare room (#146), but not while companion sources are clipped:
+            # there each extra character would come out of what #140/#143 give back to them.
+            allowance = min(1500, max(allowance, room // 4))
         if allowance > len(label) + 40:
             extra += label + clip(index['records'][0]['text'], allowance - len(label))
     remaining = budget - len(text) - len(extra)
-    ranked = store.context_for(harness, query, budget_chars=max(0, remaining - 100)) if query else store.snapshot_context(budget_chars=max(0, remaining - 100))
+    # At SessionStart without a query, an unqueried snapshot must never starve clipped companion
+    # sources: an ambient note yields its budget so active threads and rules stay whole.
+    retrieval_share = max(0, budget - int(budget * .83) - len(extra))
+    if query:
+        retrieval_budget = min(remaining, retrieval_share) if companion_clipped else remaining
+        ranked = store.context_for(harness, query, budget_chars=max(0, retrieval_budget - 100))
+    elif not companion_clipped and remaining > 200:
+        ranked = store.snapshot_context(budget_chars=min(1500, max(0, remaining - 100)))
+    else:
+        ranked = {'records': []}
     used = {r['source'] for r in records}
+    retrieval_used = 0
+    retrieval_cap = retrieval_share if companion_clipped else remaining
     for record in ranked.get('records', []):
         if record['source'] in used:
             continue
         label = f'\n[Related source: {record["source"]}]\n'
-        if len(text) + len(extra) + len(label) + 40 < budget:
-            extra += label + clip(record['text'], budget - len(text) - len(extra) - len(label))
-    if receipt and len(text) + len(extra) + 80 < budget:
+        room = min(budget - len(text) - len(extra) - len(label), retrieval_cap - retrieval_used - len(label))
+        if room > 40:
+            addition = label + clip(record['text'], room)
+            extra += addition
+            retrieval_used += len(addition)
+    # The receipt comes with its whole header, which names the source and calls it a historical
+    # claim (#147), plus some body; a narrower room goes back to the companion sources instead.
+    receipt_head = receipt.find('):\n') + 3 if receipt else 0
+    if receipt and len(text) + len(extra) + receipt_head + 80 < budget:
         extra += clip(receipt, budget - len(text) - len(extra))
     # Retrieval takes its share first; every character it did not use goes back to the
     # clipped companion sources instead of being dropped.

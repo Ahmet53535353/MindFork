@@ -21,7 +21,6 @@ import re
 import unicodedata
 from pathlib import Path
 
-import _portalock
 import beyin_v3_projections as projections
 from beyin_v3 import _tokens as _stems
 
@@ -72,6 +71,44 @@ def _parse(value):
     return moment.replace(tzinfo=dt.timezone.utc) if moment.tzinfo is None else moment
 
 
+@contextlib.contextmanager
+def _advisory(handle, blocking=True):
+    """Cross-process exclusive lock on an open file, msvcrt on Windows and flock elsewhere.
+
+    V3 carries no _portalock: the release ships the runtime modules and nothing beside them
+    (#160), so an import of a helper outside that list would break an installed vault while
+    still passing the repository's own import guard. Upstream's compaction lock (#193) writes
+    the same two calls inline, and that is the pattern these callers follow.
+    """
+    acquired = False
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK if not blocking else msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        acquired = True
+        yield True
+    except (OSError, BlockingIOError):
+        # The caller reads this as "not acquired" and decides: a window that could not take the
+        # lock reports it, a handoff write waits. Yielding False here is the whole contract.
+        yield False
+    finally:
+        if acquired:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
 def _locked(state):
     # A report must not even create its lock file: an absent lock cannot be held. The
     # check-then-acquire race only affects the reported status of a read-only window.
@@ -80,7 +117,7 @@ def _locked(state):
         return False
     handle = open(path, 'a+b')
     try:
-        with _portalock.exclusive(handle, blocking=False) as acquired:
+        with _advisory(handle, blocking=False) as acquired:
             return not acquired
     finally:
         handle.close()
@@ -644,7 +681,7 @@ def _acquire(state):
     path.touch()
     handle = open(path, 'a+b')
     try:
-        with _portalock.exclusive(handle, blocking=False) as acquired:
+        with _advisory(handle, blocking=False) as acquired:
             yield acquired
     finally:
         handle.close()

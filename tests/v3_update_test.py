@@ -7,12 +7,13 @@ import stat
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-from v3_package_helpers import ROOT, build_package, install, isolated_env, rewrite_zip, snapshot, run_python
+from v3_package_helpers import ROOT, build_package, clean_environ, install, isolated_env, rewrite_zip, snapshot, run_python
 
 MODULE = ROOT / 'template/.claude/scripts/beyin_v3_update.py'
 
@@ -114,6 +115,23 @@ class OfflineUpdateTest(unittest.TestCase):
         before = snapshot(self.vault)
         self.module.recover(self.vault, self.state)
         self.assertEqual(snapshot(self.vault), before)
+
+    def test_recover_completes_after_a_user_note_changes_following_the_interruption(self):
+        # The cutover receipt from the first install is already on disk, so recovery has no
+        # migration left to prove; an edited note must not make it impossible.
+        def crash(phase, index=None):
+            if phase == 'after_replace' and index == 0:
+                raise OSError('Synthetic interruption after first managed replacement')
+        with patch.object(self.module, 'transaction_hook', side_effect=crash):
+            with self.assertRaises(OSError):
+                self.module.update(self.vault, self.state, self.package)
+        self.assertTrue((self.state / 'update-journal.json').exists())
+        self.note.write_text('User edit after the interruption.\n')
+        recovered = self.module.recover(self.vault, self.state)
+        self.assertEqual(recovered['status'], 'recovered')
+        self.assertEqual(self.version(), '3.0.1')
+        self.assertEqual(self.note.read_text(), 'User edit after the interruption.\n')
+        self.assertFalse((self.state / 'update-journal.json').exists())
 
 
     def test_builder_manifest_contains_matching_allowlisted_file_hashes(self):
@@ -301,6 +319,88 @@ class OfflineUpdateTest(unittest.TestCase):
         self.assertEqual(skills.sync_skills(self.vault, self.state, mode='copy')['conflicts'], [])
         self.assertEqual(canonical.read_bytes(), original)
         self.assertEqual(mirror.read_bytes(), original)
+
+    def test_update_refreshes_release_cache_and_avoids_stale_ahead_status(self):
+        # status() honours BEYIN_UPDATES_OFF; a suite run from a configured shell must not inherit it.
+        with clean_environ():
+            self._update_refreshes_release_cache()
+
+    def _update_refreshes_release_cache(self):
+        spec = importlib.util.spec_from_file_location('beyin_v3_releases', ROOT / 'template/.claude/scripts/beyin_v3_releases.py')
+        releases = importlib.util.module_from_spec(spec); spec.loader.exec_module(releases)
+        cache_file = self.state / 'release-cache.json'
+        old_cache = {
+            'schema': 1,
+            'checked_at': 1000,
+            'attempted_at': 1000,
+            'next_check_at': 1000 + 86400,
+            'etag': '"old-etag"',
+            'release': {
+                'release_id': 1,
+                'version': '3.0.0',
+                'published_at': '2026-09-01T00:00:00Z',
+                'release_url': 'https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0',
+                'asset_id': 1,
+                'asset_name': 'beyin-v3-3.0.0.zip',
+                'asset_url': 'https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip',
+                'asset_size': 1000,
+                'asset_sha256': '00' * 32,
+                'checksum_url': None,
+            },
+            'failures': 0,
+        }
+        releases.atomic_json(cache_file, old_cache)
+        self.module.update(self.vault, self.state, self.package)
+        self.assertFalse(cache_file.exists())
+        self.assertEqual(releases.status(self.vault, self.state)['status'], 'unknown')
+        releases.atomic_json(cache_file, old_cache)
+        self.module.rollback(self.vault, self.state)
+        self.assertFalse(cache_file.exists())
+        fake_meta = {
+            'release_id': 2,
+            'version': '3.0.1',
+            'published_at': '2026-09-10T00:00:00Z',
+            'release_url': 'https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.1',
+            'asset_id': 2,
+            'asset_name': 'beyin-v3-3.0.1.zip',
+            'asset_url': 'https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.1/beyin-v3-3.0.1.zip',
+            'asset_size': 1000,
+            'asset_sha256': '11' * 32,
+            'checksum_url': None,
+        }
+        with patch.object(self.module, '_download', return_value=(self.package, '3.0.1', fake_meta, '"etag-301"')):
+            self.module.update(self.vault, self.state)
+        self.assertTrue(cache_file.exists())
+        st = releases.status(self.vault, self.state)
+        self.assertEqual(st['status'], 'up_to_date')
+        self.assertEqual(st['version'], '3.0.1')
+        self.assertEqual(st['current_version'], '3.0.1')
+
+    def test_cache_left_by_an_older_updater_is_not_reported_as_ahead(self):
+        # 3.6.0 and 3.7.0 run their own updater, which never touches the cache (#188). The
+        # first fixed release must still read the cache it inherits correctly: installed doctor.
+        self.module.update(self.vault, self.state, self.package)
+        stamped = (self.vault / '.beyin-version').stat().st_mtime
+        release = {'release_id': 1, 'version': '3.0.0', 'published_at': '2026-09-01T00:00:00Z',
+                   'release_url': 'https://github.com/avenoxai/avenoxbeyin/releases/tag/v3.0.0',
+                   'asset_id': 1, 'asset_name': 'beyin-v3-3.0.0.zip',
+                   'asset_url': 'https://github.com/avenoxai/avenoxbeyin/releases/download/v3.0.0/beyin-v3-3.0.0.zip',
+                   'asset_size': 1000, 'asset_sha256': '00' * 32, 'checksum_url': None}
+        cache = self.state / 'release-cache.json'
+        def doctor():
+            result = run_python(self.vault / 'beyin.py', ['doctor', '--json'], self.vault, self.env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+            return json.loads(result.stdout)['updates']
+        checked = stamped - 60
+        cache.write_text(json.dumps({'schema': 1, 'checked_at': checked, 'attempted_at': checked,
+                                     'next_check_at': checked + 86400, 'etag': '"old"', 'release': release, 'failures': 0}))
+        self.assertEqual(doctor(), {'status': 'unknown'})
+        # A check made after the install that still finds 3.0.0 is a genuine dev install ahead.
+        checked = time.time()
+        self.assertGreater(checked, stamped)
+        cache.write_text(json.dumps({'schema': 1, 'checked_at': checked, 'attempted_at': checked,
+                                     'next_check_at': checked + 86400, 'etag': '"old"', 'release': release, 'failures': 0}))
+        self.assertEqual(doctor()['status'], 'ahead')
 
 
 if __name__ == '__main__':

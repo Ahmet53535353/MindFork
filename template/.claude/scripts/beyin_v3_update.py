@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -38,7 +39,7 @@ def version(value):
 
 
 def allowed(name):
-    return name in ('scripts/install_v3.py', 'scripts/beyin_v3.py', 'scripts/beyin_entry.py', 'template/.claude/scripts/_portalock.py') or bool(re.fullmatch(r'template/\.claude/scripts/beyin_v3(?:_[a-z]+)*\.py', name)) or bool(re.fullmatch(r'template/\.agents/skills/(beyin|beyin-doktor|beyin-guncelle)/SKILL\.md', name))
+    return name in ('scripts/install_v3.py', 'scripts/beyin_v3.py', 'scripts/beyin_entry.py') or bool(re.fullmatch(r'template/\.claude/scripts/beyin_v3(?:_[a-z]+)*\.py', name)) or bool(re.fullmatch(r'template/\.agents/skills/(beyin|beyin-doktor|beyin-guncelle)/SKILL\.md', name))
 
 
 def atomic(path, data):
@@ -135,9 +136,9 @@ def validate_package(package):
         return manifest, files
 
 
-def _download(directory):
+def _download(directory, with_metadata=False):
     import beyin_v3_releases as releases
-    metadata, _ = releases.fetch_metadata()
+    metadata, tag = releases.fetch_metadata()
     if metadata is None: raise ValueError('release metadata missing')
     data, _ = releases.request_bytes(metadata['asset_url'], MAX_PACKAGE)
     if data is None or len(data) != metadata['asset_size']:
@@ -159,6 +160,8 @@ def _download(directory):
         raise ValueError('release package has no external checksum')
     path = Path(directory) / metadata['asset_name']
     path.write_bytes(data)
+    if with_metadata:
+        return path, metadata['version'], metadata, tag
     return path, metadata['version']
 
 
@@ -179,15 +182,49 @@ def locked(vault, state):
         for connection in reversed(connections): connection.close()
 
 
+def _is_link(path):
+    """A symlink, junction or other reparse point: a name that can lead out of its directory."""
+    info = os.lstat(path)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0))
+
+
+def _contained(root, path):
+    """Whether root/name stays inside root. update, recover and rollback all ask here.
+
+    Resolve both sides at write time: a root resolved before it existed gains a Windows
+    redirect (MSIX-virtualised AppData, junction) once created (#97). An MSIX package can
+    also see AppData through a merged view that redirects the children but not the root:
+    a directory that exists outside the package keeps its spelling, while files the package
+    wrote resolve under Packages\\<id>\\LocalCache (#139). That redirect is not a link in the
+    tree, so a diverging resolution is still accepted when the name is lexically below the
+    root and nothing between the root and the target is a link. Links that leave still fail.
+    """
+    if path.resolve().is_relative_to(root.resolve()):
+        return True
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False  # a drive or rooted name replaced the root while joining
+    current = root
+    for part in relative.parts:
+        current = current / part
+        try:
+            if _is_link(current): return False
+        except FileNotFoundError:
+            return True  # nothing below a missing component exists, so nothing can lead away
+        except OSError:
+            return False
+    return True
+
+
 def _destination(vault, state, operation):
     root = vault if operation['scope'] == 'vault' else state
     name = operation['name']
     if Path(name).is_absolute() or '..' in Path(name).parts:
         raise ValueError('unsafe transaction path')
     path = root / name
-    # Resolve both sides now: a root resolved before it existed gains a Windows redirect
-    # (MSIX-virtualised AppData, junction) once created. Links that leave it still fail.
-    if not path.resolve().is_relative_to(root.resolve()):
+    if not _contained(root, path):
         raise ValueError('transaction target escapes root')
     return path
 
@@ -272,6 +309,10 @@ def _recover_locked(vault, state):
                 (directory / Path(operation['name']).name).write_bytes(decode(operation['new']))
         with _migration_guard(vault, state, directory, journal.get('migration_plan')) as migration:
             _apply(vault, state, journal, migration)
+            try:
+                (state / 'release-cache.json').unlink(missing_ok=True)
+            except Exception:
+                pass
     return {'status': 'recovered', 'version': current_version(vault)}
 
 
@@ -311,7 +352,9 @@ def update(vault, state, package=None, check=False):
     vault, state = roots(vault, state)
     with tempfile.TemporaryDirectory(prefix='beyin-release-') as temporary:
         expected = None
-        if package is None: package, expected = _download(temporary)
+        release_meta = None
+        release_tag = None
+        if package is None: package, expected, release_meta, release_tag = _download(temporary, with_metadata=True)
         manifest, files = validate_package(package)
         if expected and manifest['version'] != expected: raise ValueError('release tag/package mismatch')
         stage = Path(temporary) / 'package'
@@ -353,6 +396,23 @@ def update(vault, state, package=None, check=False):
                 journal = {'schema': 1, 'vault': str(vault), 'direction': 'update', 'from_version': old, 'to_version': new, 'operations': operations, 'migration_plan': migration[1] if migration else None, 'migration_backup': encode((state/'v2-migration.json').read_bytes() if (state/'v2-migration.json').exists() else None)}
                 atomic(state / 'update-journal.json', jbytes(journal))
                 _apply(vault, state, journal, migration)
+                try:
+                    import beyin_v3_releases as releases
+                    if release_meta is not None:
+                        now = time.time()
+                        releases.atomic_json(state / 'release-cache.json', {
+                            'schema': 1,
+                            'checked_at': now,
+                            'attempted_at': now,
+                            'next_check_at': now + 86400,
+                            'etag': release_tag,
+                            'release': release_meta,
+                            'failures': 0,
+                        })
+                    else:
+                        (state / 'release-cache.json').unlink(missing_ok=True)
+                except Exception:
+                    pass
         result = {'status': 'updated', 'from_version': old, 'version': new, 'trust_review_required': trust_review}
         if plan.get('removed'):
             result['removed'] = plan['removed']
@@ -414,4 +474,8 @@ def rollback(vault, state):
         journal = {'schema': 1, 'vault': str(vault), 'direction': 'rollback', 'operations': operations}
         atomic(pending, jbytes(journal))
         _apply(vault, state, journal)
+        try:
+            (state / 'release-cache.json').unlink(missing_ok=True)
+        except Exception:
+            pass
         return {'status': 'rolled_back' if (vault/'.beyin-version').exists() else 'uninstalled', 'version': current_version(vault) if (vault/'.beyin-version').exists() else None}

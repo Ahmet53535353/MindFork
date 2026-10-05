@@ -17,7 +17,6 @@ import sqlite3
 import tempfile
 import time
 
-import _portalock
 
 ABANDONED_AFTER_SECONDS = 8 * 3600  # an open session older than this is dead
 REMINDER = ('Günlük log: oturum bitmeden daily/log bloğundaki Özet bölümünü beş bölümle '
@@ -45,10 +44,48 @@ def _log_path(vault, day):
 
 
 @contextlib.contextmanager
+def _advisory(handle, blocking=True):
+    """Cross-process exclusive lock on an open file, msvcrt on Windows and flock elsewhere.
+
+    V3 carries no _portalock: the release ships the runtime modules and nothing beside them
+    (#160), so an import of a helper outside that list would break an installed vault while
+    still passing the repository's own import guard. Upstream's compaction lock (#193) writes
+    the same two calls inline, and that is the pattern these callers follow.
+    """
+    acquired = False
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK if not blocking else msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        acquired = True
+        yield True
+    except (OSError, BlockingIOError):
+        # The caller reads this as "not acquired" and decides: a window that could not take the
+        # lock reports it, a handoff write waits. Yielding False here is the whole contract.
+        yield False
+    finally:
+        if acquired:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
+@contextlib.contextmanager
 def _locked(state):
     handle = open(Path(state) / 'daily-log.lock', 'a+b')
     try:
-        with _portalock.exclusive(handle):
+        with _advisory(handle):
             yield
     finally:
         handle.close()

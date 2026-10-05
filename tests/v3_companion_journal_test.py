@@ -33,6 +33,15 @@ class JournalExcerptTest(unittest.TestCase):
                     self.assertNotIn('OLDER_ENTRY', excerpt)
                     self.assertNotIn('ANCIENT_ENTRY', excerpt)
 
+    def test_single_date_journal_picks_the_bottom_like_an_undated_one(self):
+        # Every heading on one date gives no direction; the bottom goes first (#163).
+        dated = '# Journal\n## 2026-09-30 (sabah)\nOLDER_ENTRY\n## 2026-09-30 (öğlen)\nLATEST_ENTRY\n'
+        undated = '# Journal\n## Sabah\nOLDER_ENTRY\n## Öğlen\nLATEST_ENTRY\n'
+        for text in (dated, undated):
+            excerpt = companion.excerpt('Journal.md', text)
+            self.assertIn('LATEST_ENTRY', excerpt)
+            self.assertNotIn('OLDER_ENTRY', excerpt)
+
     def test_distinct_dates_and_undated_journals_are_unchanged(self):
         newest_first = '# Journal\n## 2026-09-17\nLATEST_ENTRY\n## 2020-01-01\nANCIENT_ENTRY\n'
         appended = '# Journal\n## 2020-01-01\nANCIENT_ENTRY\n## 2026-09-17\nLATEST_ENTRY\n'
@@ -72,6 +81,24 @@ class JournalExcerptTest(unittest.TestCase):
     def test_other_sources_are_returned_untouched(self):
         self.assertEqual(companion.excerpt('Core.md', '# Kimlik\n## 2026-09-18\nx\n'), '# Kimlik\n## 2026-09-18\nx\n')
 
+
+
+class ThreadsExcerptTest(unittest.TestCase):
+    """Active threads end at the closed section under every heading the engine writes."""
+    def test_turkish_and_english_active_headings_stop_at_closed(self):
+        for active in ('## Active Threads', '## Aktif konular', '## Açık konular', '## AÇIK KONULAR',
+                       '## Acik konular', '## Açık', '## Open'):
+            for closed in ('## Closed Threads', '## Kapanan konular', '## Kapalı'):
+                with self.subTest(active=active, closed=closed):
+                    text = f'# Konular\n\n{active}\n### ACTIVE_THREAD\n\n{closed}\n### CLOSED_THREAD\n'
+                    excerpt = companion.excerpt('Threads.md', text)
+                    self.assertTrue(excerpt.startswith(active))
+                    self.assertIn('ACTIVE_THREAD', excerpt)
+                    self.assertNotIn('CLOSED_THREAD', excerpt)
+
+    def test_heading_that_only_starts_like_open_is_not_the_active_section(self):
+        text = '# Konular\n## Açıklama\nINTRO\n## Kapanan konular\n### CLOSED_THREAD\n'
+        self.assertEqual(companion.excerpt('Threads.md', text), text)
 
 if __name__ == '__main__':
     unittest.main()

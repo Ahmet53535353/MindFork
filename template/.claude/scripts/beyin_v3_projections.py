@@ -41,6 +41,37 @@ def _vault_file(vault, relative):
         return False
 
 
+def latest_receipts(db, vault, sessions=None):
+    """Receipts an automatic context may show, newest first by created_at, then event_id, as (source, event).
+
+    The order is the receipt's own stamp, never the file mtime that a git pull or a sync
+    client rewrites (#112). Only receipts with a readable stamp, a summary and a regular
+    source file inside the vault are yielded; with sessions, only those sessions. A receipt
+    whose source or any ref is a private or untrusted record is skipped whole: its summary
+    describes that record. The SessionStart hook and the global bridge share this gate.
+    """
+    vault = Path(vault)
+    candidates = []
+    for (payload,) in db.execute('SELECT payload FROM receipts'):
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get('event_id'), str) or not isinstance(event.get('summary'), str):
+            continue
+        if sessions is not None and event.get('session') not in sessions:
+            continue
+        instant = _receipt_instant(event.get('created_at'))
+        if instant is not None:
+            candidates.append((instant, event['event_id'], event))
+    for _, ident, event in sorted(candidates, key=lambda item: item[:2], reverse=True):
+        source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
+        refs = [ref for ref in event.get('refs') or [] if isinstance(ref, str)] if isinstance(event.get('refs'), list) else []
+        if (not (vault / source).is_symlink() and _vault_file(vault, source) and
+                not _hidden_ref_sources(db, [source, *refs])):
+            yield source, event
+
+
 def recent_receipts(db, days=7, limit=20, today=None, vault=None):
     """A bounded, source-linked activity view; summaries remain agent claims.
 
@@ -229,30 +260,44 @@ def refresh_gaps(engine, db):
     }))
 
 
-def _local_day(created_at):
-    """The machine's day for a stored UTC stamp: daily/ holds the human daily log too, and both
-    answer "what happened today". The consolidation window in beyin_v3_dream stays UTC on purpose
-    -- that is a batch boundary, not a human day. See tests/v3_local_utc_day_divergence_test.py.
+def _local_zone():
+    """Zone for the day a person reads in a view name; None is this machine's local zone. Tests patch this."""
+    return None
 
-    None for a stamp that cannot be read. A corrupt row is skipped, never fatal: the old
-    `created_at[:10]` sliced past a bad value silently and gave it a plausible day, so a
-    malformed stamp has to be dropped explicitly rather than raise out of a whole sync.
-    """
+
+def _receipt_instant(created_at):
+    """Aware UTC instant of a receipt stamp, or None when it cannot be read. A naive stamp is UTC, as in recap."""
     try:
         stamp = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-    except (AttributeError, TypeError, ValueError, OverflowError):
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone(timezone.utc)
+    except (AttributeError, TypeError, ValueError, OverflowError, OSError):
         return None
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
-    return stamp.astimezone().date().isoformat()
 
 
-def project_receipts(engine, db):
+def receipt_day(created_at, zone=None):
+    """Local calendar day (YYYY-MM-DD) that names daily/v3 for this stamp; None for an unreadable stamp.
+
+    Stamps stay UTC in receipts and the database; only the human-read file name follows the local day,
+    the same day beyin_v3_bridge calls "today" (#149).
+    """
+    instant = _receipt_instant(created_at)
+    if instant is None:
+        return None
+    try:
+        return instant.astimezone(zone).date().isoformat()
+    except (ValueError, OverflowError, OSError):  # Windows localtime rejects some extreme instants
+        return None
+
+
+def project_receipts(engine, db, warnings=None):
     _hash, atomic, render = engine.projection_helpers()
     db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
     migration = engine.state/'v2-migration.json'
     previous = json.loads(migration.read_text(encoding='utf-8')) if migration.exists() else {}
     historical = set(previous.get('historical_receipts', []))
+    zone = _local_zone()
     grouped = defaultdict(list)
     for row in db.execute('SELECT payload FROM receipts ORDER BY id'):
         event = json.loads(row[0])
@@ -262,15 +307,18 @@ def project_receipts(engine, db):
         # The machine's day, not the stamp's: daily/ also holds the human daily log, which is
         # named locally, and both answer "what happened today". The consolidation window in
         # beyin_v3_dream stays UTC deliberately -- that is a batch boundary, not a human day.
-        day = _local_day(event['created_at'])
+        day = receipt_day(event['created_at'], zone)
         if day is None:
+            # Never invent a day from the raw text (2026-13-45); the receipt stays in recap's undated count.
+            if warnings is not None:
+                warnings.append({'source': source, 'reason': 'unreadable receipt created_at; omitted from daily/v3'})
             continue
-        grouped[day].append((event['created_at'], source, event['summary']))
+        grouped[day].append((_receipt_instant(event['created_at']), event['created_at'], source, event['summary']))
     desired = {}
     outcomes = []
     for day, items in sorted(grouped.items()):
         entries = []
-        for at, source, summary in sorted(items):
+        for _, at, source, summary in sorted(items):
             entries.append(f'## {at}\n\n{summary}\n\nSource: [[{source}]]\n')
             outcomes.append(f'- {day}: {summary}\n  Source: [[{source}]]\n')
         desired[f'daily/v3/{day}.md'] = render({'generated': True, 'kind': 'receipt-index'}, '# Recorded outcomes\n\nAgent-authored claims, not independently verified facts.\n\n'+'\n'.join(entries))
@@ -292,21 +340,44 @@ def project_receipts(engine, db):
                 continue
             atomic(path, content)
         db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
-    # Every sync regroups every receipt, so a receipt that changes day renames its file and leaves
-    # the old one behind. Only the row in receipt_views proves the engine wrote that file; an
-    # edited one is a person's work and is reported, never deleted.
-    for (relative, tracked_hash) in db.execute('SELECT path, hash FROM receipt_views').fetchall():
-        if relative in desired or not relative.startswith('daily/v3/'):
-            continue
-        path = engine._path(relative)
-        if not path.exists():
-            db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
-        elif _hash(path.read_bytes()) == tracked_hash:
-            path.unlink()
-            db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
-        else:
-            conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved'})
+# Every sync regroups every receipt, so a receipt that changes day renames its file and leaves
+    # the old one behind. _retire_stale_views does the cleanup: only a file whose bytes still match
+    # the hash recorded when it was written is removed, an edited one is never touched (#149).
+    conflicts.extend(_retire_stale_views(engine, db, desired, _hash))
     refresh_gaps(engine, db)
+    return conflicts
+
+
+def _retire_stale_views(engine, db, desired, _hash):
+    """Remove views this state wrote that are no longer projected, e.g. a UTC-named daily/v3 file after #149.
+
+    Only a file whose bytes still match the hash recorded when it was written is removed; an edited
+    file is never touched and stays a visible conflict until the person moves or deletes it.
+    """
+    conflicts = []
+    for relative, tracked in db.execute('SELECT path, hash FROM receipt_views ORDER BY path').fetchall():
+        if relative in desired:
+            continue
+        try:
+            path = engine._path(relative)
+            current = _hash(path.read_bytes()) if path.is_file() else None
+        except (ValueError, OSError):
+            conflicts.append({'source': relative, 'reason': 'stale receipt view unreadable; preserved'})
+            continue
+        if current is None and not path.exists():
+            db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
+            continue
+        if current != tracked:
+            conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved; view no longer generated'})
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            conflicts.append({'source': relative, 'reason': 'stale receipt view could not be removed'})
+            continue
+        db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
     return conflicts
 
 

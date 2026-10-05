@@ -118,11 +118,14 @@ def finalize_migration(vault_root, state_dir, plan):
             continue
         if path.exists() and ('BEYIN_V3_LEGACY_RETIRED' not in path.read_text(encoding='utf-8')):
             raise RuntimeError('legacy runner not retired; use supported installer cutover')
+    if plan.get('previous'):
+        # An earlier cutover already left its success receipt, so there is nothing to prove or
+        # write here. The plan's source digests may be old (recovering an interrupted update),
+        # and a note edited since must not make recovery impossible.
+        return plan['previous']
     sources, states = _inventory(vault)
     if any(sources.get(name) != digest for name, digest in plan['sources'].items()) or states != plan['legacy_state']:
         raise RuntimeError('source or legacy state changed during migration; no success receipt')
-    if plan.get('previous'):
-        return plan['previous']
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name in plan['legacy_state']:
         destination = state/'v2-preserved-state'/name

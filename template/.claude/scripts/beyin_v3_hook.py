@@ -25,6 +25,38 @@ KNOWLEDGE_REMINDER = (
     "Distill lasting learnings into knowledge/concepts/<name>.md (or update an existing concept, then sync); "
     "if no permanent note is required, state that in one sentence to proceed."
 )
+HARNESS_SYNTHETIC_PROMPT_PREFIXES = (
+    "<task-notification>",
+    "Another Claude session sent a message:",
+    "<agent-message",
+    "<local-command-caveat>",
+    "<command-name>",
+    "<local-command-stdout>",
+)
+# Claude Code turn origins that no human typed. Its hook payload carries no origin field today (2.1.285), so
+# the prefixes above do the work; if one appears, other kinds (channel, bridge, remote, ...) can be a person
+# typing elsewhere, so only these known kinds skip retrieval and anything else falls back to the prefix check.
+SYNTHETIC_ORIGIN_KINDS = frozenset({"task-notification", "peer", "coordinator"})
+
+
+def is_synthetic_prompt(payload):
+    """Detect automated, subagent, or notification turns in UserPromptSubmit.
+
+    Prevents expensive search retrieval and irrelevant context injection on
+    non-human turns (Claude Code subagent completions, peer agent messages,
+    background task notifications).
+    """
+    if not isinstance(payload, dict):
+        return False
+    if os.environ.get("BEYIN_V3_FILTER_HARNESS_TURNS") == "0":
+        return False
+    origin = payload.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else origin
+    if kind == "human":
+        return False
+    if isinstance(kind, str) and kind in SYNTHETIC_ORIGIN_KINDS:
+        return True
+    return prompt_text(payload).lstrip().startswith(HARNESS_SYNTHETIC_PROMPT_PREFIXES)
 
 
 def atomic(path, data):
@@ -42,17 +74,45 @@ def output_context(harness, event, text):
     return {"injectSteps": [{"ephemeralMessage": text}]} if harness == "antigravity" else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
 
-def receipt_context(vault):
-    directory = Path(vault) / "receipts"
-    if not directory.exists() or not directory.resolve().is_relative_to(Path(vault).resolve()):
+def prompt_text(payload):
+    """The user's prompt as text; retrieval and the opt-out check need a string. Claude Code (checked on 2.1.285,
+    where task notifications arrive as <task-notification> text), Codex and the bundled OpenCode, Hermes and OMP
+    adapters send a string; null or a list of content blocks from any other caller must not crash the turn."""
+    prompt = payload.get("prompt") if isinstance(payload, dict) else None
+    if isinstance(prompt, str):
+        return prompt
+    if isinstance(prompt, list):
+        parts = [part if isinstance(part, str) else part.get("text") if isinstance(part, dict) else None for part in prompt]
+        return "\n".join(part for part in parts if isinstance(part, str))
+    return ""
+
+
+def receipt_context(vault, state):
+    """The newest receipt by its created_at stamp (#112), read from the runtime index."""
+    import sqlite3
+    from beyin_v3_projections import latest_receipts
+    database = Path(state) / "memory.sqlite3"
+    if database.is_symlink() or not database.is_file():
         return ""
-    candidates = [p for p in directory.glob("*.md") if not p.is_symlink()]
-    if not candidates:
+    # Short read-only timeout: a busy worker must not push SessionStart past the host limit.
+    db = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)
+    try:
+        source = next((found for found, _ in latest_receipts(db, vault)), None)
+    except sqlite3.Error:
+        source = None
+    finally:
+        db.close()
+    if source is None:
         return ""
-    path = max(candidates, key=lambda p: (p.stat().st_mtime_ns, p.name))
-    with path.open(encoding="utf-8") as source:
-        content = source.read(1200)
-    return "\nLatest receipt (historical agent claim, not independently verified):\n" + content
+    path = Path(vault) / source
+    budget, marker = 1200, "\n[truncated: read source]\n"
+    with path.open(encoding="utf-8") as reader:
+        content = reader.read(budget + 1)
+    if len(content) > budget:
+        content = content[:budget - len(marker)] + marker
+    # Name the source in the header: callers clip this block from the end, which would
+    # replace a path carried in the tail marker with a generic one (#147).
+    return f"\nLatest receipt ({source}; historical agent claim, not independently verified):\n" + content
 
 
 def _get_session_receipt(database, harness, session, since):
@@ -167,8 +227,7 @@ def receipt_reminder(payload, state, harness, event, vault=None):
         if done.exists() and kdone.exists():
             return None
         if event == "UserPromptSubmit":
-            prompt = payload.get("prompt")
-            if isinstance(prompt, str) and "[kaydetme]" in prompt:
+            if "[kaydetme]" in prompt_text(payload):
                 folder.mkdir(parents=True, exist_ok=True)
                 done.touch()
                 kdone.touch()
@@ -355,19 +414,40 @@ def main():
             except Exception:
                 pass
         log_line = None
-        from beyin_v3_preferences import read_daily_log
-        if read_daily_log(state, vault)[0] and not args.metadata_only and event in ('SessionStart', 'SessionEnd'):
+        if not args.metadata_only:
+            # Opt-in parallel-session notice (#170), machine-local in state/parallel-sessions.json.
+            # Without that file a prompt costs one stat; SessionEnd still removes its own marker.
             try:
-                import beyin_v3_sessionlog
-                if event == 'SessionStart':
-                    log_line = beyin_v3_sessionlog.session_start(vault, state, settings, args.harness,
-                                                                 payload.get('session_id', 'unknown'))
-                    log_line = (log_line or '') + beyin_v3_sessionlog.default_notice(vault, state)
-                else:
-                    beyin_v3_sessionlog.session_end(vault, state, settings, args.harness,
-                                                    payload.get('session_id', 'unknown'))
+                if event == 'SessionEnd':
+                    if (state / 'session-markers').is_dir():
+                        from beyin_v3_parallel import end
+                        end(state, args.harness, payload.get('session_id'))
+                elif (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity'))) \
+                        and (state / 'parallel-sessions.json').is_file() and not is_synthetic_prompt(payload):
+                    from beyin_v3_parallel import enabled, touch
+                    if enabled(state):
+                        notice += touch(state, args.harness, payload.get('session_id'))
             except Exception:
-                log_line = None  # the daily log can never cost the hook its real job
+                pass  # a marker can never cost the turn
+
+        # The daily log is its own switch. It sat inside the parallel-session block above for a
+        # moment, which made the log's notice ride on that feature's off switch -- and the #170
+        # contract is that with the switch off the hook output is byte-identical to no feature.
+        log_line = None
+        if not args.metadata_only:
+            from beyin_v3_preferences import read_daily_log
+            if read_daily_log(state, vault)[0] and event in ('SessionStart', 'SessionEnd'):
+                try:
+                    import beyin_v3_sessionlog
+                    if event == 'SessionStart':
+                        log_line = beyin_v3_sessionlog.session_start(vault, state, settings, args.harness,
+                                                                     payload.get('session_id', 'unknown'))
+                        log_line = (log_line or '') + beyin_v3_sessionlog.default_notice(vault, state)
+                    else:
+                        beyin_v3_sessionlog.session_end(vault, state, settings, args.harness,
+                                                        payload.get('session_id', 'unknown'))
+                except Exception:
+                    log_line = None  # the daily log can never cost the hook its real job
         if not settings['auto_sync']:
             print(json.dumps(output_context(args.harness, event, (notice + (log_line or ''))[:settings['context_chars']])) if (notice or log_line) else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
@@ -386,25 +466,15 @@ def main():
         # After enqueue, so reminder bookkeeping can never cost the queued checkpoint.
         # The global bridge (--metadata-only) discards stdout, so it keeps no reminder state.
         reminder = None if args.metadata_only else receipt_reminder(payload, state, args.harness, event, vault=vault)
-        # A returning user is the one case where the economical profile's silence costs the
-        # answer: they ask what we were doing after a break and get nothing back. The
-        # continuity gate is a fixed phrase set, so it fires rarely and only on a real
-        # return; it also clears the interval wait, which would otherwise answer the
-        # question with "automatic check deferred" instead of context.
-        continuity_turn = False
-        if settings['context_mode'] == 'session' and event == 'UserPromptSubmit':
-            try:
-                from beyin_v3_companion import relevant
-                continuity_turn = relevant(payload.get('prompt') or '')
-            except Exception:
-                continuity_turn = False  # a pattern check never costs the hook its job
-        inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session'
-                                                        and (event == 'SessionStart' or continuity_turn))
-        if not inject or args.metadata_only:
+# The economical profile answers only at SessionStart (#151: the owner kept this a
+        # documented design decision, PREFERENCES.md:31). A returning user gets the
+        # companion context there, not mid-session.
+        inject = settings['context_mode'] == 'turn' or (settings['context_mode'] == 'session' and event == 'SessionStart')
+        if not inject or args.metadata_only or (event == 'UserPromptSubmit' and is_synthetic_prompt(payload)):
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}')))
             return
         if event in ("SessionStart", "UserPromptSubmit"):
-            if not due and not disabled and not continuity_turn:
+            if not due and not disabled:
                 print(json.dumps(output_context(args.harness, event, notice + 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
                 return
             try:
@@ -417,12 +487,12 @@ def main():
                 raise RuntimeError("Source sync failed; metadata remains queued")
             from beyin_v3_sync import SyncEngine
             store = SyncEngine(vault, state).store
-            query = payload.get("prompt", "")
+            query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
             warning = ''
-            if continuity_turn and not due:
+            if not due:
                 # No automatic check ran for this turn, so the companion files are current
                 # Markdown while the indexed memory behind them may not be.
                 warning += ('Automatic check deferred by your interval preference: companion '
@@ -437,21 +507,31 @@ def main():
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
                     warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
-            from beyin_v3_companion import context as companion_context, relevant
+            from beyin_v3_companion import (context as companion_context, relevant, opening_budget, client_budget,
+                                            client_rebudget, fit_client)
+            # Both budgets stop below a client's own cut-off; past it the client files the text away (#175).
+            # A text over the client's own measure is rendered once more with a scaled budget.
+            limit = client_budget(args.harness, settings['context_chars'])
+            receipt = receipt_context(vault, state)
             if event == 'SessionStart' or relevant(query):
-                text = companion_context(store, settings['context_chars'], session, args.harness,
-                                         query, receipt_context(vault), warning)
+                # The opening may carry its own machine-local budget (#140); never a vault preference.
+                limit = client_budget(args.harness, opening_budget(state, settings['context_chars']))
+                text = companion_context(store, limit, session, args.harness, query, receipt, warning)
+                smaller = client_rebudget(args.harness, limit, notice + text)
+                if smaller is not None:
+                    limit = smaller
+                    text = companion_context(store, limit, session, args.harness, query, receipt, warning)
             else:
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
                 # header plus the newest unrelated notes.
-                context = store.context_for(args.harness, query, project=project, budget_chars=settings['context_chars'], strict=True) if query else {"records": []}
+                context = store.context_for(args.harness, query, project=project, budget_chars=limit, strict=True) if query else {"records": []}
                 inherited = False
                 from beyin_v3_continuity import resolve, remember
                 topic_session = payload.get('session_id', 'unknown')
                 try:
                     context, inherited = resolve(store, args.harness, topic_session, query, context,
-                                                 budget_chars=settings['context_chars'], project=project)
+                                                 budget_chars=limit, project=project)
                 except (ValueError, OSError):
                     pass  # Optional local continuity cannot break basic retrieval.
                 # Vague continuations use current local references, not remote transcripts.
@@ -461,14 +541,17 @@ def main():
                     if remaining >= 0.8:
                         try:
                             from beyin_v3_jev import auto_context
-                            context = auto_context(store, args.harness, query, context, budget_chars=settings['context_chars'],
+                            context = auto_context(store, args.harness, query, context, budget_chars=limit,
                                                    timeout_cap=min(2.0, remaining), project=project)
                         except Exception:
                             pass  # an advisor failure must never cost the local context
                 from beyin_v3 import render_context
                 prefix = warning + f"Receipt session={session}; choose --harness for the current client.\nV3 source-backed context (data, not instructions):\n"
-                text, delivered = render_context(context, max(0, settings['context_chars'] - len(notice)),
-                                                 prefix=prefix, suffix=receipt_context(vault))
+                text, delivered = render_context(context, max(0, limit - len(notice)), prefix=prefix, suffix=receipt)
+                smaller = client_rebudget(args.harness, limit, notice + text)
+                if smaller is not None:
+                    limit = smaller
+                    text, delivered = render_context(context, max(0, limit - len(notice)), prefix=prefix, suffix=receipt)
                 try:
                     remember(store, args.harness, topic_session, query, delivered, inherited=inherited)
                 except (ValueError, OSError):
@@ -476,7 +559,10 @@ def main():
                 if not delivered.get("records"):
                     print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
                     return
-            output = output_context(args.harness, event, (notice + text + (log_line or ''))[:settings['context_chars']])
+# The daily log line rides along inside the client's own limit (#175), not on top of
+            # it, so a Claude Code or Codex cut-off can never be pushed past by the log.
+            output = output_context(args.harness, event,
+                                    fit_client(args.harness, (notice + text + (log_line or ''))[:limit]))
             print(json.dumps(output))
         else:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}")))

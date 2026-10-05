@@ -15,6 +15,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 SCRIPTS = ROOT / 'template/.claude/scripts'
 if str(SCRIPTS) not in sys.path:
@@ -26,6 +28,16 @@ COMPANION = '🔮 850-Companion'
 NOW = datetime(2026, 9, 25, 4, 30, tzinfo=timezone.utc)
 FILLER = 'Karar gerekçesi, kaynak bağlantısı ve açık kalan adım burada ayrıntılı olarak anlatılıyor. '
 
+
+
+def human_entry():
+    """The installed CLI's human formatter (scripts/beyin_entry.py), loaded once."""
+    if not hasattr(human_entry, 'module'):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('hygiene_entry_cli', ROOT / 'scripts/beyin_entry.py')
+        human_entry.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(human_entry.module)
+    return human_entry.module
 
 def oversized_last_session(entries=80):
     moment = datetime(2026, 9, 24, 21, 10)
@@ -60,7 +72,7 @@ class HygieneCliTest(unittest.TestCase):
         self.directory = self.vault / COMPANION
         self.directory.mkdir(parents=True)
         self.state = self.base / 'state'
-        self.env = dict(os.environ, BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
+        self.env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
         self.write('Core.md', '# Kimlik\nIDENTITY_CANARY: düşünme ortağı.\n')
         self.write('Journal.md', '# Journal\n## 2026-09-20\nJOURNAL_CANARY\n' + ('## 2026-08-01\neski gözlem\n' * 900))
 
@@ -264,7 +276,81 @@ class HygieneCliTest(unittest.TestCase):
         self.assertEqual(result['status'], 'needs_rewrite')
         self.assertEqual(result['files']['Last-Session.md']['status'], 'needs_rewrite')
         self.assertEqual(path.read_bytes(), before)
+        # Issue #168: full file is backed up verbatim to Arşiv before rewriting
+        archive = self.directory / 'Arşiv' / f'Last-Session-{datetime.now(timezone.utc).strftime("%Y-%m")}.md'
+        self.assertTrue(archive.exists())
+        archive_text = archive.read_text(encoding='utf-8')
+        self.assertIn(FILLER, archive_text)
+        self.assertIn('tam metin yedeği (needs_rewrite)', archive_text)
+        self.assertEqual(result['files']['Last-Session.md'].get('archive'),
+                         f'{COMPANION}/Arşiv/{archive.name}')
+        self.assertEqual(result['files']['Last-Session.md']['backup'], 'written')
+        self.assertIn(before.decode('utf-8'), archive_text)
+
+    def test_dry_run_undated_prose_does_not_create_archive(self):
+        path = self.write('Last-Session.md', '# Son oturum\n\n' + FILLER * 60)
+        before = path.read_bytes()
+        result = self.run_cli('companion-compact', '--dry-run')
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(result['files']['Last-Session.md']['status'], 'needs_rewrite')
+        self.assertEqual(result['files']['Last-Session.md']['backup'], 'planned')
+        self.assertEqual(path.read_bytes(), before)
         self.assertFalse((self.directory / 'Arşiv').exists())
+        # The human dry-run line must not claim a backup that was never written.
+        human = human_entry().human_result(result, 'companion-compact')
+        self.assertNotIn('yedeklendi', human)
+        self.assertIn('--dry-run olmadan calistir', human)
+
+    def test_needs_rewrite_avoids_duplicate_snapshots_on_repeated_runs(self):
+        body = '# Threads\n\n## Active Threads\n' + ('### Thread\nAktif konu detay metni.\n' * 300)
+        path = self.write('Threads.md', body)
+        first = self.run_cli('companion-compact')
+        self.assertEqual(first['files']['Threads.md']['status'], 'needs_rewrite')
+        archive = self.directory / 'Arşiv' / f'Threads-{datetime.now(timezone.utc).strftime("%Y-%m")}.md'
+        self.assertTrue(archive.exists())
+        first_size = len(archive.read_text(encoding='utf-8'))
+        # Second run without changes should not duplicate the snapshot
+        second = self.run_cli('companion-compact')
+        self.assertEqual(second['files']['Threads.md']['status'], 'needs_rewrite')
+        second_size = len(archive.read_text(encoding='utf-8'))
+        self.assertEqual(first_size, second_size)
+        self.assertEqual(second['files']['Threads.md']['backup'], 'exists')
+
+    def test_a_file_still_over_the_limit_after_moving_is_backed_up_whole(self):
+        # #168 with a few dated updates: they move, the file stays over the limit and the agent
+        # rewrites it next, so the remaining text must reach the archive verbatim first.
+        parts = ['# Threads\n\n## Active Threads\n']
+        for thread in range(13):
+            parts.append(f'### Thread: Konu {thread:02d}\n**Status:** 🟢 Active: created 2026-09-01\n'
+                         f'Durum [[Karar-{thread:02d}]] OPEN_{thread:02d} ' + FILLER * 8 + '\n')
+            if thread < 2:
+                parts.append(f'2026-09-10: OLD_UPDATE_{thread} ' + FILLER * 2 + '\n2026-09-20: NEW_UPDATE_{thread}\n')
+            parts.append('\n')
+        original = ''.join(parts)
+        self.assertGreater(len(original), 8000)
+        path = self.write('Threads.md', original)
+        first = self.run_cli('companion-compact')
+        entry = first['files']['Threads.md']
+        self.assertEqual((first['status'], entry['status'], entry['within_limit_after'], entry['backup']),
+                         ('needs_rewrite', 'compacted', False, 'written'))
+        live = path.read_text(encoding='utf-8')
+        self.assertNotIn('OLD_UPDATE_0', live)
+        archive = self.directory / 'Arşiv' / f'Threads-{datetime.now(timezone.utc).strftime("%Y-%m")}.md'
+        text = archive.read_text(encoding='utf-8')
+        self.assertIn(live, text)
+        self.assertIn('OLD_UPDATE_0', text)
+        human = human_entry().human_result(first, 'companion-compact')
+        self.assertIn('hala sinirin (8000) ustunde (tam metin arsive yedeklendi: ', human)
+        again = self.run_cli('companion-compact')
+        self.assertEqual((again['files']['Threads.md']['status'], again['files']['Threads.md']['backup']),
+                         ('needs_rewrite', 'exists'))
+        self.assertEqual(archive.read_text(encoding='utf-8'), text)
+        # The agent summarizes; every line of the original is still in the archive.
+        path.write_text('# Threads\n\n## Active Threads\n### Thread: Konu 00\nÖzet.\n', encoding='utf-8')
+        self.assertEqual(self.run_cli('companion-compact')['status'], 'within_limit')
+        text = archive.read_text(encoding='utf-8')
+        for line in original.splitlines():
+            self.assertIn(line, text)
 
     def test_symlinked_archive_directory_is_refused(self):
         self.write('Last-Session.md', oversized_last_session(8))
@@ -424,6 +510,17 @@ class CompactionPlanTest(unittest.TestCase):
         self.assertIn('AKŞAM', live)
         self.assertNotIn('SABAH', live)
 
+    def test_same_day_thread_updates_keep_the_bottom_one(self):
+        # The reproduction from #163: thread updates are appended, so the bottom one is newest.
+        text = ('# Threads\n\n## Active Threads\n### Thread: Volt\n**Status:** Active\n'
+                '2026-09-28 kontrol: ÜST hâlâ 0 testçi. ' + FILLER + '\n'
+                '2026-09-28: ORTA 8 testçi kayıtlı. ' + FILLER + '\n'
+                '**2026-09-28: ALT 12+ testçi, kapalı test başladı.**\n\n## Closed Threads\n')
+        result = self.plan(text, 'Threads.md', len(text) - 60)
+        self.assertIn('ALT 12+', result['live'])
+        self.assertNotIn('ÜST', result['live'])
+        self.assertIn('ÜST', result['archive'])
+
     def test_v2_session_headings_and_structured_handoff_blocks(self):
         text = ('# Last Session\n\n## Session: 2026-09-24 (Codex)\nYENİ\n### Açık kalanlar\n- test\n\n'
                 '## Session: 2026-09-20\nESKİ ' + FILLER * 4 + '\n\n## Previous Sessions\n(none yet)\n')
@@ -575,6 +672,15 @@ class CompactionRaceTest(unittest.TestCase):
         self.assertIn('ENTRY_007', self.live.read_text(encoding='utf-8'))
         self.assertFalse(self.archive.exists())
 
+    def test_a_concurrent_edit_during_a_needs_rewrite_backup_removes_the_backup(self):
+        self.live.write_text('# Son oturum\n\n' + FILLER * 60, encoding='utf-8')
+        with self.racing():
+            result = compact_module.compact(self.vault, self.state, now=NOW)
+        self.assertEqual(result['files']['Last-Session.md']['status'], 'conflict')
+        self.assertNotIn('backup', result['files']['Last-Session.md'])
+        self.assertTrue(self.live.read_text(encoding='utf-8').endswith('CONCURRENT_EDIT\n'))
+        self.assertFalse(self.archive.exists())
+
     def test_a_concurrent_edit_restores_an_existing_archive_byte_for_byte(self):
         self.archive.parent.mkdir()
         self.archive.write_bytes(b'# Kullanicinin arsivi\n')
@@ -582,6 +688,24 @@ class CompactionRaceTest(unittest.TestCase):
             result = compact_module.compact(self.vault, self.state, now=NOW)
         self.assertEqual(result['files']['Last-Session.md']['status'], 'conflict')
         self.assertEqual(self.archive.read_bytes(), b'# Kullanicinin arsivi\n')
+
+    def test_concurrent_call_archive_is_not_reverted_on_conflict(self):
+        """#193: A conflicting compact must not roll back if the archive was modified by another caller."""
+        original = compact_module._write
+
+        def write(path, text):
+            original(path, text)
+            if Path(path).parent.name == 'Arşiv':
+                # Simulate another caller committing its own archive and live update
+                self.archive.write_bytes(b'# CONCURRENT_CALLER_ARCHIVE_DATA\n')
+                with self.live.open('a', encoding='utf-8') as handle:
+                    handle.write('CONCURRENT_EDIT\n')
+
+        with mock.patch.object(compact_module, '_write', write):
+            result = compact_module.compact(self.vault, self.state, now=NOW)
+        self.assertEqual(result['status'], 'conflict')
+        self.assertTrue(self.archive.exists())
+        self.assertEqual(self.archive.read_bytes(), b'# CONCURRENT_CALLER_ARCHIVE_DATA\n')
 
     def test_hygiene_counts_characters_and_names_the_directory(self):
         report = companion_module.hygiene(self.vault, self.state)

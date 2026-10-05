@@ -60,9 +60,24 @@ class IndexPending(RuntimeError):
     """The index is still being built; the caller falls back to the note-level path."""
 
 
-_HEADING = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+# Only the opening "#" run is a pattern; the title and its optional closing "#" sequence are
+# trimmed in _heading. One pattern for both let a heading line with a long run of spaces or
+# tabs backtrack quadratically (about 10 s for 40,000 spaces), inside a hook turn.
+_HEADING = re.compile(r" {0,3}(#{1,6})(?=[ \t]|$)")
 _FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
 _SENTENCE = re.compile(r"[.!?…][\"')\]]*\s+")
+
+
+def _heading(bare):
+    """(level, title) of an ATX heading line, or None. Linear in the line length."""
+    match = _HEADING.match(bare)
+    if not match:
+        return None
+    title = bare[match.end():].strip(" \t")
+    body = title.rstrip("#")
+    if body != title and body[-1:] in (" ", "\t"):  # a closing sequence needs a space before it
+        title = body.rstrip(" \t")
+    return len(match.group(1)), title.strip()
 
 
 def _path_key(value):
@@ -160,13 +175,13 @@ def split_blocks(text, target=BLOCK_TARGET, overlap=BLOCK_OVERLAP):
             start = line_start if start is None else start
             last = line_start + len(bare)
             continue
-        heading = _HEADING.match(bare)
+        heading = _heading(bare)
         if heading:
             close()
-            level = len(heading.group(1))
+            level = heading[0]
             while heads and heads[-1][0] >= level:
                 heads.pop()
-            heads.append((level, (heading.group(2) or "").strip()))
+            heads.append(heading)
             continue
         if not bare.strip():
             close()

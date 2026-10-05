@@ -115,6 +115,15 @@ def state_location_lines(location):
     return lines
 
 
+def rewrite_note(entry):
+    """#168: the rewrite instruction, said only once the full text is safe in the archive."""
+    if entry.get('backup') in ('written', 'exists'):
+        return ' (tam metin arsive yedeklendi: ' + str(entry.get('archive')) + '); dosyayi sinir icinde yeniden yaz.'
+    if entry.get('backup') == 'planned':
+        return '; once --dry-run olmadan calistir, tam metin arsive yedeklenir; sonra dosyayi sinir icinde yeniden yaz.'
+    return '; dosyayi sinir icinde yeniden yaz.'
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
@@ -147,6 +156,11 @@ def human_result(result, command, installed_version=None):
                  'Sir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali'),
                  'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali'),
                  'Proje oturum basi baglami: ' + ('acik' if result.get('project_context') == 'on' else 'kapali')]
+        opening = (result.get('companion_context') or {}).get('context_chars')
+        if opening is not None:
+            lines.append('Oturum basi hafiza baglami: ' + (str(opening) + ' karakter' if opening else 'baglam ust siniri kadar'))
+        if result.get('companion_context_notice'):
+            lines.append(result['companion_context_notice'])
         for name, value in (result.get('companion_limits') or {}).items():
             lines.append('Hafiza dosyasi siniri, ' + name + ': ' + (str(value) + ' karakter' if value else 'kapali'))
         hygiene = result.get('hygiene') or {}
@@ -157,6 +171,10 @@ def human_result(result, command, installed_version=None):
                          ', terfi raporu ' + ('acik' if hygiene.get('promotion') else 'kapali'))
         if result.get('hygiene_notice'):
             lines.append(result['hygiene_notice'])
+        if result.get('parallel_sessions'):
+            lines.append('Paralel oturum bildirimi: ' + ('acik' if result['parallel_sessions'] == 'on' else 'kapali'))
+        if result.get('parallel_sessions_notice'):
+            lines.append(result['parallel_sessions_notice'])
         if result.get('excluded_components'):
             lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']))
         if result.get('exclusion_notice'):
@@ -197,9 +215,9 @@ def human_result(result, command, installed_version=None):
                              (' olacak' if entry['status'] == 'planned' else '') + ', ' + str(entry.get('moved_chars')) +
                              ' karakter arsive ' + ('tasinacak' if entry['status'] == 'planned' else 'tasindi') + '.')
                 if not entry.get('within_limit_after'):
-                    lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde; dosyayi sinir icinde yeniden yaz.')
+                    lines.append(name + ' hala sinirin (' + str(entry.get('limit')) + ') ustunde' + rewrite_note(entry))
             elif entry.get('status') == 'needs_rewrite':
-                lines.append(name + ': tasinacak tarihli eski kayit yok; dosyayi sinir icinde yeniden yaz.')
+                lines.append(name + ': tasinacak tarihli eski kayit yok' + rewrite_note(entry))
             elif entry.get('status') == 'conflict':
                 lines.append(name + ': islem sirasinda dosya degisti; hicbir sey tasinmadi, tekrar dene.')
             elif entry.get('status') == 'needs_attention':
@@ -312,6 +330,11 @@ def human_result(result, command, installed_version=None):
         if promo.get('cold'):
             lines.append('Soguk klasorler (terfi karari senin): ' +
                          ', '.join(plain_text(entry['folder']) + ' (' + str(entry['days_quiet']) + ' gun)' for entry in promo['cold'][:3]))
+        parallel = result.get('parallel_sessions') or {}
+        if parallel.get('enabled'):
+            lines.append('Paralel oturum bildirimi: acik (son 45 dakikada etkin ' + str(parallel.get('active', 0)) + ' oturum isareti)')
+        elif parallel.get('valid') is False:
+            lines.append('parallel-sessions.json gecersiz; paralel oturum bildirimi kapali sayiliyor.')
         lines += state_location_lines(result.get('state_location'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')

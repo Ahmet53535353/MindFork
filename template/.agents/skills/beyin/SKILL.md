@@ -39,7 +39,10 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
   güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
   al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.
-- Kurallar.md: kullanıcı açıkça düzelttiğinde tarih, kapsam ve mümkünse kaynakla kaydet.
+- Kurallar.md: kullanıcı açıkça düzelttiğinde kuralı bir iki satırda, tarih ve kapsamıyla kaydet.
+  Bu dosya her oturum başında karakter bütçesiyle yüklenir; uzun dosyada önce gerekçeler, sonra
+  ortadaki kurallar kırpılır. Gerekçe, kullanıcının cümlesi ve olayın anlatımı gerekiyorsa
+  companion klasöründe ayrı bir nota (ör. `Kurallar-Detay.md`) gider; kurala bağlantısını bırak.
   Tek seferlik biçim isteğini evrensel kişilik kuralı yapma. Çelişen eski kuralı açıklayarak düzelt.
 - Core.md / Soul.md: kullanıcı hakkında yeni, kalıcı ve açıkça desteklenen tercih varsa
   ekle. Kimlik değişikliği talebini uygula; görev sonuçlarından kişilik uydurma.
@@ -53,7 +56,11 @@ Last-Session.md ve Threads.md dosyalarında `## Previous`/`## Önceki` ve `## Cl
 bölümlerini, ardından en eski tarihli kayıtları kelimesi kelimesine companion klasöründeki
 `Arşiv/` altına, aylık ve `visibility: private` bir dosyaya taşır. Devir kartının ve her
 konunun en yeni tarihli kaydı yerinde kalır; hiçbir metin silinmez, özetlenmez, model
-çağrılmaz. Çıktı `needs_rewrite` derse dosyayı sınır içinde kendin yeniden yaz. Arşivi
+çağrılmaz. Taşımadan sonra hala sınırı aşan dosyanın kalan tam metnini de aynı arşive
+kelimesi kelimesine yedekler; `--dry-run` hiçbir şey yazmaz. Çıktı `needs_rewrite` derse
+önce yedeği doğrula (`tam metin arsive yedeklendi`, JSON'da `backup: written` veya
+`exists`), sonra dosyayı sınır içinde kendin yeniden yaz ve çıkardığın ayrıntı için arşiv
+dosyasına bağlantı bırak. Yedek yoksa yeniden yazma. Arşivi
 bağlama yükleme; eski bir ayrıntı gerekirse yalnız ilgili arşiv dosyasını aç.
 
 Yalnız değişmesi gereken dosyaları güncelle; no-memory/no-tools istekleri bu protokolden
@@ -160,9 +167,11 @@ Kullanıcı “ekonomik moda geç”, “otomatik kontrolleri kapat” veya “k
 - Otomatik bağlamı kapat, yerel kontroller devam etsin: `python3 beyin.py preferences --context-mode off`
 - Daha az bağlam: `python3 beyin.py preferences --context-chars 2000`
 - Receipt/note/task yazımlarında opt-in sır süzgeci: `python3 beyin.py preferences --secret-filter on`
+- Oturum başı hafıza bağlamı kırpılıyorsa ayrı bütçe: `python3 beyin.py preferences --companion-context-chars 8000` (1000-24000, 0 `context-chars` kullanır; ayar bu makinedeki runtime klasöründe tutulur). Claude Code 10.000 karakteri aşan hook bağlamını dosyaya taşıyıp modele yalnız ilk ~2.000 karakteri gösterir; bu yüzden Claude Code oturumlarında otomatik bağlam 9.500 karakterde tutulur. Codex de 10.000 baytı aşan hook bağlamının ortasını keser; Codex oturumlarında bağlam bu yüzden 10.000 baytın altında tutulur. Daha büyük değeri yalnız kullandığın istemcinin bağlamı tam ilettiğini biliyorsan seç.
 - Günlük oturum logu (varsayılan açık): `python3 beyin.py preferences --daily-log off` kapatır, `on` tekrar açar. Kullanıcı bir tercihi hiç belirtmediyse oturum başında bir kez "günlük log açık, şunu çalıştırarak kapatabilirsin" de; belirttikten sonra tekrar etme.
 - Hafıza dosyası sınırları: `python3 beyin.py preferences --last-session-chars 3000 --threads-chars 8000` (0 kapatır; ayar bu makinedeki runtime klasöründe tutulur)
 - Global köprüde projeyi tanıyan oturum başı (aynı projenin son receipt özeti ve tarihi gelen görevleri, başka projelerden yalnız sayı): `python3 beyin.py preferences --project-context on` (varsayılan kapalı; ayar bu makinedeki runtime klasöründe tutulur)
+- Aynı vault'ta açık başka oturum varsa ilk istemde tek satırlık uyarı (yalnız oturum kimliği ve süre, istem metni yok): `python3 beyin.py preferences --parallel-sessions on` (varsayılan kapalı; ayar bu makinedeki runtime klasöründe tutulur). Satır gelirse aynı dosyaya dokunmadan önce diskten yeniden oku ve commit öncesi `git status` bak.
 - Bileşen veya skill susturma: `python3 beyin.py preferences --exclude-component skills/beyin-doktor` (geri açmak için `--include-component`; ayarlar `.beyin-exclusions.json` dosyasında tutulur, sonraki güncelleme veya kurulumda uygulanır)
 
 Normal: her hook olayında yerel kontrol, oturum başı ve mesajlarda en çok 5000 karakter ek bağlam. Ekonomik: yeni oturumda taze kontrol ve en çok 2000 karakter bağlam; sonraki olaylarda kontroller arası en az 15 dakika. Manuel: otomatik iş başlatma ve bağlam kapalı; açık `context`, `sync`, not/görev ve receipt komutları çalışır. Sadece aralığı değiştirmek manuel modu açmaz; kullanıcı kontrolleri yeniden açmayı istiyorsa `--auto-sync on` kullan.

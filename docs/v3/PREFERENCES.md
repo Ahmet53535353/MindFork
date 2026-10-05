@@ -20,6 +20,37 @@ dosyası hiçbir ayarı kaydettirmez. Sınır aşılınca oturum başındaki uya
 ve kayıpsız `companion-compact` komutu [companion incelemesinde](COMPANION-PARITY.md)
 anlatılır.
 
+## Oturum başı hafıza bağlamı
+
+Oturum başındaki hafıza bağlamı (ve "nerede kaldık" gibi süreklilik soruları) `Core`, `Kurallar`,
+`Last-Session`, `Threads` ve `Journal` dosyalarını birlikte taşır. Yalnız iki handoff dosyasının
+sınırları 3.000 + 8.000 karakter olduğundan 12.000 tavanı dar kalabilir.
+`python3 beyin.py preferences --companion-context-chars 24000` bu açılış bağlamına 1.000 ile
+24.000 arasında ayrı bir bütçe verir; `0` yeniden `context_chars` değerini kullanır. Diğer
+turlardaki bağlam `context_chars` ile sınırlı kalır. Ayar vault tercih dosyasında değil,
+runtime klasöründeki `companion-context.json` dosyasında tutulur: eski sürümler tercih
+dosyasındaki bilinmeyen alanı ya da aralık dışı değeri reddettiği için rollback güvenli
+kalır. Bozuk dosya açılışı `context_chars` sınırına döndürür ve kendiliğinden ezilmez.
+
+İstemcinin kendi sınırı bu bütçeden önce gelir. Claude Code, hook'un `additionalContext`
+metni 10.000 karakteri aşınca metni oturum klasöründe bir dosyaya yazar ve modele yalnız dosya
+yolu ile ilk ~2.000 karakterlik önizlemeyi verir; bu sınırı yükselten bir ayar yoktur. Dolu
+companion'da önizlemeye yalnız `Core` ve `Kurallar` sığar, `Last-Session`, `Threads` ve
+`Journal` otomatik bağlamdan düşer (#175). Bu yüzden Claude Code oturumlarında hem açılış hem
+tur bağlamı en fazla 9.500 karakterle üretilir (`context_chars` 12.000 olsa da); `preferences`
+çıktısı bunu `client_context_notice` ile söyler. Codex de varsayılan olarak 10.000 UTF-8 baytı
+(4 baytlık 2.500 yaklaşık token) aşan hook bağlamını dosyaya taşır ve modele yalnız baş ve son
+önizlemeyi verir; ortası düşer (`codex-rs/hooks/src/output_spill.rs`). Türkçe harfler 2 bayt
+tuttuğu için Codex oturumlarında bağlam aynı 9.500 karakter bütçesiyle üretilir, metin 10.000
+baytı geçerse bütçe orantılı küçültülüp yeniden üretilir; bölümler sondan kesilmez. Codex'in
+hook başına `additionalContextLimit` ayarı `.codex/hooks.json` içindedir ve bu dosyayı
+değiştirmek hook güvenini düşürdüğü için Beyin onu kullanmaz. Antigravity, OpenCode, Hermes ve
+OMP için böyle bir sınır ölçülmedi.
+
+Açılışta hafıza dosyaları kırpılıyorsa sorgusuz seçilen ilgisiz bir not eklenmez; kalan
+bütçe kırpılan dosyalara döner. Dosyalar tam sığıyorsa en fazla 1.500 karakterlik bir
+güncel not eklenebilir.
+
 ## Opt-in sır süzgeci
 
 `python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create ve task-create gövdesi, bu komutların ve task-update değişikliklerinin `title`, `next_action`, `completion_criterion` ve `facts` alanlarında yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan açıktır (2026-09-26: bir aylık insan kullanımı E2E'sinde özelliğin hiç keşfedilemediği görüldü, `docs/specs/2026-09-26-followup-findings-plan.md`); henüz hiçbir tercih belirtmemiş kullanıcıya oturum başında tek satır kapatma komutu söylenir, tercihi belirttikten sonra bu hatırlatma tekrar etmez. Profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.
@@ -61,6 +92,20 @@ python3 beyin.py preferences --promotion on
 - `--promotion`: düzenlenen notların vault içi yollarını runtime klasöründeki `touch-log.tsv` dosyasına yazar; `doctor` bunlardan sıcak ve soğuk klasör raporu çıkarır. Taşıma kararı her zaman senindir.
 
 Companion klasörü, kasa sınıfı adlar (`Kasa`, `Şifreler`, `Müşteriler`, `Özel`, `Private` gibi, emoji ya da numara önekli yazımlar dahil), arşiv, şablon ve kod klasörleri bu sinyallerin hepsinden muaftır. Ayarlar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `hygiene.json` dosyasında tutulur; makineye özeldir, profil değişimi onlara dokunmaz ve rollback güvenlidir. Kapatmak için aynı seçeneği `off` ile ver.
+
+## Paralel oturum bildirimi
+
+Aynı vault'ta birden çok oturum açıkken ajanlar ortak git index'ine, ortak geçici dosyalara ya da aynı nota dokunabilir. Kart tarafı companion protokolüyle çözülü; bu bildirim kartın dışında kalan ortak şeyler içindir (#170). Varsayılan kapalıdır:
+
+```bash
+python3 beyin.py preferences --parallel-sessions on
+```
+
+- Açıkken her gerçek kullanıcı isteminde (UserPromptSubmit; ilk istemi SessionStart olarak gönderen Hermes, OpenCode ve Antigravity'de SessionStart) oturum kendi işaretini yazar. Son 45 dakikada etkin olan ve bu oturumda henüz duyurulmamış başka oturum varsa bağlamın başına tek satır eklenir: `[Paralel oturum] Bu vault'ta 2 oturum daha acik: #3f9a1c2b (3 dk once), #e5f6a7b8 (14 dk once). Ayni dosyaya dokunmadan once diskten yeniden oku; commit oncesi git status.`
+- Kimlik, o oturumun `Receipt session=` değerinin ilk 8 karakteridir; öbür oturumun Last-Session kartı başlığından bulunur. Satırda en fazla iki oturum adıyla yazılır, fazlası sayılır. Aynı oturum bir oturumda bir kez duyurulur; sonradan açılan bir oturum bir sonraki istemde bir kez söylenir. Alt ajan bildirimleri gibi sentetik turlar ne işaret yazar ne satır alır.
+- İşaret runtime klasöründe `session-markers/<sha256(harness + "\0" + session_id)>.json` dosyasıdır ve yalnız `schema, harness, session, first_at, last_at, announced` taşır: istem metni ve çalışma klasörü yazılmaz. Runtime klasörü vault başına ve makineye özel olduğundan başka vault'taki ya da başka makinedeki oturumlar sayılmaz.
+- SessionEnd kendi işaretini siler (`/clear` sonrası hayalet oturum kalmaz). Her yazımda 24 saatten eski işaretler silinir ve en fazla 128 işaret tutulur. Okunamayan işaret yok sayılır; işaret hatası hook'u düşürmez, yalnız satır düşer.
+- Ayar, eski sürümler bilinmeyen tercih alanını reddettiği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `parallel-sessions.json` dosyasında tutulur; rollback güvenlidir. Kapalıyken hook çıktısı değişmez ve işaret yazılmaz. `doctor` açıkken etkin işaret sayısını salt okunur olarak yazar. Kapatmak için `--parallel-sessions off`.
 
 ## Stop'ta receipt hatırlatması
 

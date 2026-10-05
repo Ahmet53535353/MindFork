@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 
-from v3_package_helpers import ROOT, install, isolated_env, run_python, snapshot
+from v3_package_helpers import ROOT, clean_environ, install, isolated_env, run_python, snapshot
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 import beyin_v3_releases as releases
 import beyin_v3_update as updater
@@ -38,7 +38,7 @@ class ReleasesTest(unittest.TestCase):
         (self.vault / '.beyin-version').write_text('3.0.2')
         self.state = self.root / 'state'
         self.env = isolated_env(self.root / 'home')
-        self.clean_env = patch.dict(os.environ, {'BEYIN_UPDATES_OFF': '0', 'BEYIN_V3_NO_SPAWN': '1'})
+        self.clean_env = clean_environ(BEYIN_V3_NO_SPAWN='1')
         self.clean_env.start(); self.addCleanup(self.clean_env.stop)
 
     def seed_cache(self, now=1000, v='3.1.0'):
@@ -252,6 +252,35 @@ class ReleasesTest(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), data); self.assertEqual(v, '3.1.0')
             with patch.object(releases, 'fetch_metadata', return_value=(metadata, None)), patch.object(releases, 'request_bytes', side_effect=[(data, {}), (b'bad', {})]):
                 with self.assertRaises(ValueError): updater._download(self.root)
+
+    def test_cache_older_than_the_installed_version_is_rechecked_not_ahead(self):
+        stamp = self.vault / '.beyin-version'
+        stamped = stamp.stat().st_mtime
+        # An older updater moved 3.0.1 -> 3.0.2 and left the 3.0.1 cache it found (#188).
+        self.seed_cache(now=stamped - 60, v='3.0.1')
+        self.assertEqual(releases.status(self.vault, self.state, now=stamped + 1), {'status': 'unknown'})
+        self.assertEqual(releases.notification(self.vault, self.state, now=stamped + 1), '')
+        self.assertFalse(releases.claim_worker(self.state, now=stamped + 1))
+        self.assertTrue(releases.claim_worker(self.state, now=stamped + 1, vault=self.vault))
+        # The check after the install still finds 3.0.1: a dev install really is ahead, once.
+        with patch.object(releases, 'fetch_metadata', return_value=(None, '"synthetic-etag"')):
+            releases.refresh(self.state, now=stamped + 2)
+        self.assertEqual(releases.status(self.vault, self.state, now=stamped + 3)['status'], 'ahead')
+        self.assertFalse(releases.claim_worker(self.state, now=stamped + 100, vault=self.vault))
+        # Offline after the install: one attempt, then the normal backoff, not a spawn per session.
+        self.seed_cache(now=stamped - 60, v='3.0.1')
+        with patch.object(releases, 'fetch_metadata', side_effect=releases.ReleaseError('network_unavailable')):
+            releases.refresh(self.state, now=stamped + 200)
+        self.assertEqual(releases.status(self.vault, self.state, now=stamped + 201)['status'], 'unavailable')
+        self.assertFalse(releases.claim_worker(self.state, now=stamped + 300, vault=self.vault))
+        # Only a stale ahead is set aside: an older cache that is level or behind still reports.
+        for cached, expected in (('3.0.2', 'up_to_date'), ('3.1.0', 'available')):
+            self.seed_cache(now=stamped - 60, v=cached)
+            self.assertEqual(releases.status(self.vault, self.state, now=stamped + 1)['status'], expected)
+        # A stamp dated in the future (clock skew, synced vault) never suppresses the cache.
+        self.seed_cache(now=stamped - 60, v='3.0.1')
+        os.utime(stamp, (stamped + 3600, stamped + 3600))
+        self.assertEqual(releases.status(self.vault, self.state, now=stamped + 1)['status'], 'ahead')
 
     def test_installed_preferences_hook_no_memory_and_no_sync(self):
         result = install(self.vault, self.state, self.env)

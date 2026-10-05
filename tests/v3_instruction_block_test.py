@@ -10,6 +10,8 @@ import sys
 import tempfile
 import unittest
 
+from v3_package_helpers import inherited_env
+
 ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
 START, END = '<!-- beyin-v3:start -->', '<!-- beyin-v3:end -->'
 ENGLISH = ('A preference, decision or fact the user states directly is not an inference; '
@@ -30,7 +32,7 @@ class InstructionBlockTest(unittest.TestCase):
         self.vault = self.base / 'Örnek Beyin'
         self.vault.mkdir()
         self.state = self.base / 'state'
-        self.env = dict(os.environ, BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
+        self.env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
 
     def run_cli(self, script, *args):
         result = subprocess.run([sys.executable, str(script), *map(str, args)], capture_output=True,
@@ -95,6 +97,19 @@ class InstructionBlockTest(unittest.TestCase):
             path.write_text(text + NOTE if name == 'AGENTS.md' else text, encoding='utf-8')
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
+    def downgrade_record_only(self):
+        """Point the install record at the older block without touching the files."""
+        manifest_path = self.state / 'v3-install.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        for name in ('AGENTS.md', 'CLAUDE.md'):
+            text = (self.vault / name).read_text(encoding='utf-8')
+            for sentence in (ENGLISH, TURKISH):
+                text = re.sub(r'\s*' + r'\s+'.join(map(re.escape, sentence.split())), '', text, count=1)
+            data = text.encode()
+            manifest['files'][name] = dict(manifest['files'][name], installed_hash=hashlib.sha256(data).hexdigest(),
+                                           installed_content=base64.b64encode(data).decode())
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
     def test_generated_block_records_direct_user_statements_in_both_languages(self):
         self.seed('CLAUDE.md', CLAUDE)
         self.install()
@@ -103,6 +118,39 @@ class InstructionBlockTest(unittest.TestCase):
                 block = self.block(name)
                 self.assertIn(' '.join(ENGLISH.split()), ' '.join(block.split()))
                 self.assertIn(' '.join(TURKISH.split()), ' '.join(block.split()))
+
+    def test_block_carries_no_machine_path(self):
+        # #112: AGENTS.md may be synced between machines; the block must read the same on each.
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        other_vault, other_state = self.base / 'İkinci Makine' / 'Beyin', self.base / 'other-state'
+        other_vault.mkdir(parents=True)
+        (other_vault / 'CLAUDE.md').write_bytes(CLAUDE.encode())
+        self.run_cli(ROOT / 'scripts/install_v3.py', '--vault', other_vault, '--state', other_state)
+        for name in ('AGENTS.md', 'CLAUDE.md'):
+            with self.subTest(file=name):
+                self.assertEqual(self.block(name), (other_vault / name).read_text(encoding='utf-8').split(START)[1].split(END)[0])
+                for machine in (str(self.vault), str(self.state), str(other_vault), sys.executable,
+                                self.vault.as_posix(), '.claude/scripts/beyin_v3_cli.py'):
+                    self.assertNotIn(machine, self.block(name))
+                self.assertIn('beyin.py sync', self.block(name))
+
+    def test_router_synced_from_a_machine_already_updated_does_not_conflict(self):
+        # Machine A updated and pushed its routers; machine B pulled them before its own update.
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        current = {name: (self.vault / name).read_bytes() for name in ('AGENTS.md', 'CLAUDE.md')}
+        self.downgrade()  # B's own install record is the older block
+        for name, data in current.items():
+            (self.vault / name).write_bytes(data + (NOTE.encode() if name == 'AGENTS.md' else b''))
+        self.install()
+        self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
+        self.assertEqual((self.vault / 'CLAUDE.md').read_bytes(), current['CLAUDE.md'])
+        # An edit inside the block is still the user's and still stops the installer.
+        path = self.vault / 'AGENTS.md'
+        path.write_text(path.read_text(encoding='utf-8').replace('beyin.py sync', 'beyin.py sync # benim'), encoding='utf-8')
+        self.downgrade_record_only()
+        self.assertIn('managed file changed', self.install_conflict())
 
     def test_reinstall_over_previous_block_adopts_the_clause_and_keeps_user_text(self):
         self.seed('CLAUDE.md', CLAUDE)
@@ -240,6 +288,36 @@ class InstructionBlockTest(unittest.TestCase):
         self.assertIn('Reinstall conflict: managed file changed CLAUDE.md', self.install_conflict())
         self.assertEqual(path.read_bytes(), importing)
 
+    def test_managed_file_matching_planned_content_survives_reinstall(self):
+        """#189: a managed file another machine already moved to this release is not a conflict.
+
+        The record still names the older release this machine installed, so neither the hash nor
+        the stored content matches the disk; only the planned bytes do. A CRLF checkout of those
+        bytes is the same file. An edit on top of them, or of the older bytes, still conflicts.
+        """
+        names = ('.claude/scripts/beyin_v3_hook.py', '.agents/skills/beyin/SKILL.md', 'beyin.py')
+        self.install()
+        planned = {name: (self.vault / name).read_bytes() for name in names}
+        older = {name: data + b'\n# older release\n' for name, data in planned.items()}
+        manifest = self.manifest()
+        for name in names:
+            manifest['files'][name].update(installed_hash=hashlib.sha256(older[name]).hexdigest(),
+                                           installed_content=base64.b64encode(older[name]).decode())
+        (self.state / 'v3-install.json').write_text(json.dumps(manifest), encoding='utf-8')
+        (self.vault / 'beyin.py').write_bytes(planned['beyin.py'].replace(b'\n', b'\r\n'))
+        self.install()
+        for name in names:
+            self.assertEqual((self.vault / name).read_bytes(), planned[name])
+            self.assertEqual(self.manifest()['files'][name]['installed_hash'], hashlib.sha256(planned[name]).hexdigest())
+        manifest = self.manifest()
+        hook = self.vault / names[0]
+        for edited in (planned[names[0]] + b'\n# custom user edit\n', older[names[0]] + b'# custom user edit\n'):
+            manifest['files'][names[0]].update(installed_hash=hashlib.sha256(older[names[0]]).hexdigest(),
+                                               installed_content=base64.b64encode(older[names[0]]).decode())
+            (self.state / 'v3-install.json').write_text(json.dumps(manifest), encoding='utf-8')
+            hook.write_bytes(edited)
+            self.assertIn('Reinstall conflict: managed file changed ' + names[0], self.install_conflict())
+            self.assertEqual(hook.read_bytes(), edited)
 
 if __name__ == '__main__':
     unittest.main()
