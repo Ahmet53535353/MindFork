@@ -9,3 +9,28 @@ __pycache__/
 
 # Yerel release çıktıları GitHub Release varlığı olarak yayınlanır
 release/
+
+# CI'in ürettiği geçici paket ve kanıt dizinleri. Hepsi workflow dosyalarında
+# oluşturuluyor; .gitignore'da olmadıkları için yerel koşular iz polutu
+# bırakıyordu. (pytest yalnız kendi ic .gitignore'u yazdığı için
+# .pytest_cache/ diskte duruyordu.)
+dist/
+baseline/
+intermediate-baseline/
+comparison-baseline/
+candidate/
+published/
+evidence-artifacts/
+.installed-proof.json
+pytest.log
+
+# Yerel arac ve test olcu onbellegi
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+*.egg-info/
