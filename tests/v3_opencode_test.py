@@ -278,6 +278,16 @@ class OpenCodeHarnessTest(unittest.TestCase):
             self.assertNotIn('prompt', event, 'Hook metadata must never persist transcript text')
 
     @unittest.skipUnless(NODE, 'node is required to execute the OpenCode plugin')
+    def test_plugin_sends_project_directory_to_the_hook(self):
+        """OpenCode payload'i `cwd` icermiyor; hook'un hangi projede oldugunu bilemiyordu.
+
+        Bunun sonucu olcumdu: Minecraft kurallari her oturumda ayni geliyor, proje
+        baglami hicbir yerde kullanilamiyor.
+        """
+        source = self.plugin.read_text(encoding='utf-8')
+        self.assertIn('cwd: process.cwd()', source)
+        self.assertRegex(source, r'child\.stdin\.end\(JSON\.stringify\(\{ \.\.\.payload, cwd: process\.cwd\(\) \}\)')
+
     def test_plugin_fails_open(self):
         runtime = self.vault / '.beyin-runtime.json'
         original = runtime.read_text(encoding='utf-8')

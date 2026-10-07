@@ -42,7 +42,10 @@ function runHook(state, payload) {
         })
       child.on("error", () => resolve(""))
       child.stdin.on("error", () => {})
-      child.stdin.end(JSON.stringify(payload))
+      // OpenCode's payload carries no `cwd`, so the hook would only ever see the daemon's
+      // directory. Rules that depend on which project the session is in (Minecraft mod,
+      // Gradle build) could never fire.
+      child.stdin.end(JSON.stringify({ ...payload, cwd: process.cwd() }))
     } catch {
       resolve("")
     }

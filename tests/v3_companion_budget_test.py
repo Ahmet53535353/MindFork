@@ -31,6 +31,10 @@ BODIES = {
     'Last-Session.md': '# Son oturum\nHANDOFF_CANARY: prototipi denedik, video kaydı bekliyor.\n',
     'Threads.md': '# Konular\n## Active Threads\nTHREAD_BODY_CANARY: ses denemesi sürüyor.\n## Closed Threads\nNOISE\n',
     'Journal.md': '# Journal\n## 2026-09-17\nJOURNAL_CANARY: örnek üzerinden ilerlemek yararlı oldu.\n',
+    'Tetikleyici.md': '# Tetikleyici\n\n## Derleme yapıyorsan\n\n'
+        '**[Test-Kuralları.md](Test-Kuralları.md)** — madde 21, `./gradlew --stop`.\n\n'
+        '## Oyun içi ölçüm yapacaksan\n\n'
+        '**[Minecraft-Kuralları.md](Minecraft-Kuralları.md)** — kural 8, `free -h`.\n',
     'memory-types.md': '# Memory Types\nMEMORY_TYPES_CANARY\n',
 }
 
