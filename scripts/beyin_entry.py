@@ -152,6 +152,19 @@ def rewrite_note(entry):
 
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
+    if command == 'scheduled-check' and 'status' in result:
+        # Exit 4 (needs attention) prints here like a finished check: the check ran and found something.
+        texts = {'ok': 'Zamanlanmis denetim: saglikli.',
+                 'needs_attention': 'Zamanlanmis denetim: kontrol gerektiren bir sorun var; ayrinti icin beyin.py doctor.',
+                 'already_running': 'Zamanlanmis denetim: baska bir denetim hala calisiyor; bu kosu atlandi.',
+                 'error': 'Zamanlanmis denetim tamamlanamadi (' + ascii_text(result.get('error')) + '); beyin.py doctor ile bak.'}
+        lines = [texts.get(status, 'Zamanlanmis denetim: ' + ascii_text(status))]
+        notification = {'shown': 'Bildirim gosterildi.',
+                        'failed': 'Bildirim gosterilemedi; sonraki oturum acilisinda tek satir olarak cikacak.',
+                        'unavailable': 'Bu makinede bildirim araci yok; sonraki oturum acilisinda tek satir olarak cikacak.'}
+        if result.get('notification') in notification:
+            lines.append(notification[result['notification']])
+        return '\n'.join(lines)
     if result.get('error'):
         return ('Islem tamamlanamadi: ' + str(result.get('message', result['error'])) +
                 ('\n' + ascii_text(result['hint']) if result.get('hint') else ''))
@@ -305,6 +318,10 @@ def human_result(result, command, installed_version=None):
                 lines.append('Son bilgi damitmasi: ' + time_text + ' (o tarihten beri ' + str(kf.get('receipts_since', 0)) + ' makbuz)')
             else:
                 lines.append('Son bilgi damitmasi: henuz kavram notu damitilmadi (toplam ' + str(kf.get('receipts_since', 0)) + ' makbuz)')
+        scheduled = result.get('scheduled_check') or {}
+        if scheduled.get('status') in ('ok', 'needs_attention', 'error'):
+            lines.append('Zamanlanmis denetim (bilgi): son kosu ' + str(scheduled.get('age_hours', '?')) + ' saat once, ' +
+                         {'ok': 'saglikli', 'needs_attention': 'dikkat gerekiyor', 'error': 'denetim tamamlanamadi'}[scheduled['status']] + '.')
         for conflict in result.get('instruction_conflicts', []):
             lines.append('Talimat celiskisi: ' + conflict['file'] + ' icinde V2 derleyici ifadesi var ("' + conflict.get('snippet', '') + '"). Bu metin V3 ajan damitmasiyla celisiyor; eski derleyici talimatlarini kaldir.')
         if result.get('skill_conflicts'):

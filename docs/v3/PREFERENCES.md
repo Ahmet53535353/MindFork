@@ -109,6 +109,80 @@ python3 beyin.py preferences --inbox-folder ""   # listeyi boşalt, ad tanımaya
 
 Listede olup vault'ta bulunmayan klasör `error: not_found` ile gösterilir. Not sayısı `--inbox-max-items` değerine ya da en eski not `--inbox-max-days` gününe ulaşan klasör `attention` ile işaretlenir; bu yalnız bir sinyaldir, `doctor` durumunu değiştirmez. Hiçbir not taşınmaz, sınıflandırılmaz ve ajan başlatılmaz; işleme kararı senindir. Okunamayan klasör boş sayılmaz, `error` ile listelenir. Companion ve kasa sınıfı klasörler muaftır, nokta klasörler ve sembolik bağlar sayılmaz. Eski sürümler bilinmeyen `hygiene.json` anahtarını reddettiği için ayar runtime klasöründe ayrı bir `inbox-report.json` dosyasında tutulur; rollback diğer hijyen sinyallerini kapatmaz. Kapatmak için `--inbox-report off`.
 
+## Zamanlanmış sağlık denetimi ve bildirim
+
+Otomatik kontroller bir istemci olayıyla çalışır; hiçbir istemci açılmazsa `doctor`'un gördüğü sorun (sync çakışması, bayat hook yolu, skill/talimat çakışması, görev ve geçerlilik sorunları) bir sonraki oturuma kadar görünmez (#267). `beyin.py scheduled-check` bunu senin kurduğun işletim sistemi zamanlayıcısıyla kapatır: önce `sync`, sonra `doctor` çalıştırır ve sonucu runtime klasöründeki `scheduled-check.json` dosyasına yazar. `doctor` son koşuyu `scheduled_check` alanında yaşıyla gösterir (hiç kurulmadıysa `never_run`); bu alan bilgi amaçlıdır, durumu değiştirmez. Komut model çağırmaz, servis kurmaz, hiçbir şeyi onarmaz; Beyin zamanlayıcı kurmaz.
+
+Çıkış kodu: `0` sağlıklı, `4` dikkat gerekiyor, `1` denetimin kendisi tamamlanamadı, `3` başka bir denetim hâlâ çalışıyor. `2` argparse'ın kullanım hatasıdır (yanlış yazılmış komut, eski sürümde olmayan seçenek); "dikkat" anlamına gelmez. Kilit işletim sisteminin dosya kilididir: çöken bir koşunun kilidi onunla birlikte bırakılır, beklenecek bayat kilit yoktur.
+
+`--notify` eklersen (varsayılan kapalı) sonuç değiştiğinde işletim sistemi bildirimi gösterilir. Ek bağımlılık yoktur: Windows'ta Windows PowerShell toast, macOS'ta `osascript`, Linux'ta `notify-send` (yoksa bildirim atlanır).
+
+- Yalnız durum değişince: sağlıklıdan dikkate geçişte bir kez, düzelince bir kez (`Beyin: sorunlar giderildi, kasa saglikli.`). Sorun sürdükçe her gece tekrar etmez; yedi günde bir hatırlatır. Denetimin kendisi tamamlanamazsa bildirim değişmez, `doctor` `error` gösterir.
+- Bildirim metni yalnız sorun türünü ve sayısını yazar, not adı ya da yol yazmaz: `Beyin: sync cakismasi (2), hook uyarisi (1) - ayrinti: beyin.py doctor`.
+- Bildirim gösterilemezse (araç yok, oturum yok, hata) satır runtime klasöründeki `scheduled-notice.json` dosyasına yazılır ve bir sonraki ajan oturumunun açılışında tek satır olarak bir kez söylenir.
+- Bütün durum (son koşu, son bildirim zamanı) makineye özel runtime klasöründedir, vault'a yazılmaz; her makine kendi sağlığını kendisi bildirir.
+
+Bildirim yalnız kullanıcı oturumunda çalışan bir zamanlayıcıdan ekrana gelir. Aşağıdaki örnekler bu yüzden kullanıcı oturumunda çalışır; yolları kendi vault'unla değiştir.
+
+**Windows** (Görev Zamanlayıcı; `/RU` verilmeyen görev yalnız kullanıcı oturum açıkken çalışır):
+
+```powershell
+schtasks /Create /TN "Beyin saglik" /SC DAILY /ST 20:00 /TR "py -3 \"C:\Users\SEN\Beynim\beyin.py\" scheduled-check --notify"
+```
+
+**macOS** (LaunchAgent). `/usr/bin/python3` macOS'ta 3.9'dur; Beyin 3.11 ve üstünü ister. `python3 --version` ile 3.11+ olan yolu bul (Homebrew: `/opt/homebrew/bin/python3`, python.org: `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3`). Vault iCloud Drive, Belgeler ya da Masaüstü altındaysa macOS bu klasörleri arka plan işlemlerine kapatır; Sistem Ayarları › Gizlilik ve Güvenlik › Tam Disk Erişimi'ne bu `python3`'ü ekle. `~/Library/LaunchAgents/com.avenox.beyin-saglik.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.avenox.beyin-saglik</string>
+  <key>ProgramArguments</key><array>
+    <string>/opt/homebrew/bin/python3</string>
+    <string>/Users/sen/Beynim/beyin.py</string>
+    <string>scheduled-check</string><string>--notify</string>
+  </array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/Users/sen/Library/Logs/beyin-saglik.log</string>
+  <key>StandardErrorPath</key><string>/Users/sen/Library/Logs/beyin-saglik.log</string>
+</dict></plist>
+```
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.avenox.beyin-saglik.plist
+```
+
+**Linux** (systemd user timer; çıktı `journalctl --user -u beyin-saglik` ile okunur). `~/.config/systemd/user/beyin-saglik.service`:
+
+```ini
+[Unit]
+Description=Beyin saglik denetimi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/sen/Beynim/beyin.py scheduled-check --notify
+SuccessExitStatus=4
+```
+
+`~/.config/systemd/user/beyin-saglik.timer`:
+
+```ini
+[Timer]
+OnCalendar=*-*-* 20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```sh
+systemctl --user enable --now beyin-saglik.timer
+```
+
+Düz `cron` kullanıcı oturumu dışında çalışır; bildirim ekrana gelmez ama kayıt ve oturum açılışındaki satır yine çalışır. Çıktıyı `/dev/null`'a atma, bir günlük dosyasına yönlendir (`>> ~/beyin-saglik.log 2>&1`); macOS'ta cron için de Tam Disk Erişimi gerekir.
+
+Kaldırmak için zamanlayıcı görevini sil; Beyin tarafında kapatılacak bir ayar yoktur.
+
 ## Paralel oturum bildirimi
 
 Aynı vault'ta birden çok oturum açıkken ajanlar ortak git index'ine, ortak geçici dosyalara ya da aynı nota dokunabilir. Kart tarafı companion protokolüyle çözülü; bu bildirim kartın dışında kalan ortak şeyler içindir (#170). Varsayılan kapalıdır:

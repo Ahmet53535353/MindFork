@@ -17,6 +17,8 @@ Kaynak değişikliği indekslenmemişse `python3 beyin.py sync`; skill dosyalar�
 
 `instruction_references` bölümü AGENTS.md, CLAUDE.md, companion Kurallar.md ve skill klasörlerindeki `[[wikilink]]` ve `[metin](yol)` bağlantılarından vault içinde karşılığı olmayanları dosya ve satırıyla listeler; kod blokları sayılmaz. Bu bilgi amaçlıdır, durumu `needs_attention` yapmaz: kullanıcıya hangi talimatın artık olmayan bir nota işaret ettiğini söyle, hedef taşındıysa bağlantıyı düzeltmeyi öner, kendiliğinden not uydurma.
 
+`scheduled_check` kullanıcının kendi kurduğu zamanlayıcının son `scheduled-check` koşusunu gösterir. `never_run` bir arıza değildir; kullanıcı istemciler kapalıyken de denetim ya da bildirim isterse `docs/v3/PREFERENCES.md` içindeki zamanlayıcı örneğini öner, kendiliğinden görev kurma. `error` ya da beklenenden büyük `age_hours` görürsen zamanlayıcının çalışmadığını söyle.
+
 `validity.ignored_rejections` içindeki kayıtlarda `validity: rejected` yazıyor ama `kind` inference ya da preference değil, bu yüzden iddia hala güncel bağlamda. Kullanıcı bu iddiayı gerçekten reddettiyse kaynağa `kind: inference` (ya da `preference`) ekle; reddetmediyse `validity` alanını kaldır. Kaynağı silme.
 
 `validity.rejected_dependents` reddedilmiş bir çıkarıma `[[wikilink]]` ya da `[metin](yol)` ile bağlanan güncel notları listeler; `ambiguous_rejected_links` aynı dosya adını taşıyan birden çok nottan biri reddedilmiş olduğunda bağlantıyı ayrıca gösterir. Bu bilgi amaçlıdır, durumu `needs_attention` yapmaz: bağlantı reddin gerekçesini anlatıyor olabilir. Kullanıcıya hangi notun reddedilmiş iddiaya dayandığını söyle; not o iddiayı hala doğru sayıyorsa düzeltmeyi ya da `supersedes` ile yeni nota bağlamayı öner. Notu kendiliğinden değiştirme veya reddetme.
