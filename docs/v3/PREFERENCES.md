@@ -124,10 +124,10 @@ Otomatik kontroller bir istemci olayıyla çalışır; hiçbir istemci açılmaz
 
 Bildirim yalnız kullanıcı oturumunda çalışan bir zamanlayıcıdan ekrana gelir. Aşağıdaki örnekler bu yüzden kullanıcı oturumunda çalışır; yolları kendi vault'unla değiştir.
 
-**Windows** (Görev Zamanlayıcı; `/RU` verilmeyen görev yalnız kullanıcı oturum açıkken çalışır):
+**Windows** (Görev Zamanlayıcı; `/RU` verilmeyen görev yalnız kullanıcı oturum açıkken çalışır). PowerShell'de `--%` satırın geri kalanını `schtasks`'a olduğu gibi geçirir; o olmadan Windows PowerShell 5.1 `/TR` içindeki `\"` kaçışlarını bozar ve vault yolu `/TR` değerinden kopar. `cmd.exe`'de `--%` yazılmaz:
 
 ```powershell
-schtasks /Create /TN "Beyin saglik" /SC DAILY /ST 20:00 /TR "py -3 \"C:\Users\SEN\Beynim\beyin.py\" scheduled-check --notify"
+schtasks --% /Create /TN "Beyin saglik" /SC DAILY /ST 20:00 /TR "py -3 \"C:\Users\SEN\Beynim\beyin.py\" scheduled-check --notify"
 ```
 
 **macOS** (LaunchAgent). `/usr/bin/python3` macOS'ta 3.9'dur; Beyin 3.11 ve üstünü ister. `python3 --version` ile 3.11+ olan yolu bul (Homebrew: `/opt/homebrew/bin/python3`, python.org: `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3`). Vault iCloud Drive, Belgeler ya da Masaüstü altındaysa macOS bu klasörleri arka plan işlemlerine kapatır; Sistem Ayarları › Gizlilik ve Güvenlik › Tam Disk Erişimi'ne bu `python3`'ü ekle. `~/Library/LaunchAgents/com.avenox.beyin-saglik.plist`:
@@ -152,7 +152,7 @@ schtasks /Create /TN "Beyin saglik" /SC DAILY /ST 20:00 /TR "py -3 \"C:\Users\SE
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.avenox.beyin-saglik.plist
 ```
 
-**Linux** (systemd user timer; çıktı `journalctl --user -u beyin-saglik` ile okunur). `~/.config/systemd/user/beyin-saglik.service`:
+**Linux** (systemd user timer; çıktı `journalctl --user -u beyin-saglik` ile okunur). Beyin Python 3.11 ve üstünü ister; dağıtımın `/usr/bin/python3`'ü daha eski olabilir. `/usr/bin/python3 --version` ile bak, eskiyse `ExecStart`'a 3.11+ olan yolu yaz (ör. `command -v python3.11` çıktısı). `~/.config/systemd/user/beyin-saglik.service`:
 
 ```ini
 [Unit]

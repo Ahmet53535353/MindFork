@@ -236,6 +236,60 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(scheduled.session_notice(self.state), '')
 
 
+class IssuesTest(unittest.TestCase):
+    """issues() and decide() on the shapes doctor and sync print for each kind."""
+
+    def test_task_and_validity_counts_and_their_read_errors(self):
+        doctor = {'status': 'needs_attention',
+                  'task_completion': {'strict_issue_count': 3, 'strict_issues': [PRIVATE]},
+                  'validity': {'ignored_rejection_count': 2, 'ignored_rejections': [PRIVATE]}}
+        self.assertEqual(scheduled.issues(HEALTHY['sync'], doctor), {'task': 3, 'validity': 2})
+        # doctor writes a zero count and the exception when the reader itself failed.
+        broken = {'task_completion': {'strict_issue_count': 0, 'error': 'OSError: ' + PRIVATE},
+                  'validity': {'ignored_rejection_count': 0, 'error': 'ValueError: x'}}
+        self.assertEqual(scheduled.issues(HEALTHY['sync'], broken), {'task': 1, 'validity': 1})
+        self.assertEqual(scheduled.issues(HEALTHY['sync'], {'task_completion': {'strict_issue_count': 0},
+                                                            'validity': {'ignored_rejection_count': 0}}), {})
+        text = scheduled.message('needs_attention', scheduled.issues(HEALTHY['sync'], doctor))
+        self.assertEqual(text, 'Beyin: gorev kaydi sorunu (3), gecerlilik sorunu (2) - ayrinti: beyin.py doctor')
+
+    def test_a_hook_error_file_counts_even_when_hook_paths_are_fine(self):
+        doctor = {'hook_paths': {'status': 'ok'}, 'hook-error.json': {'at': 1.0, 'error': 'OSError'}}
+        self.assertEqual(scheduled.issues(HEALTHY['sync'], doctor), {'hook': 1})
+        self.assertEqual(scheduled.issues(HEALTHY['sync'], {'hook_paths': {'status': 'ok'}, 'hook-error.json': None}), {})
+
+    def test_degraded_sync_counts_its_warnings(self):
+        sync = {'status': 'degraded', 'conflicts': [], 'warnings': [{'source': PRIVATE}, {'source': 'b'}]}
+        self.assertEqual(scheduled.issues(sync, {}), {'sync_degraded': 2})
+        self.assertEqual(scheduled.issues({'status': 'degraded'}, {}), {'sync_degraded': 1})
+        self.assertEqual(scheduled.message('needs_attention', {'sync_degraded': 2}),
+                         'Beyin: sync uyarisi (2) - ayrinti: beyin.py doctor')
+
+    def test_a_degraded_sync_alone_makes_a_run_need_attention(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-scheduled-issues-')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        cli = root / 'fake/cli.py'
+        cli.parent.mkdir()
+        cli.write_text(FAKE_CLI, encoding='utf-8')
+        (cli.parent / 'outputs.json').write_text(json.dumps({
+            'sync': {'status': 'degraded', 'conflicts': [], 'warnings': [{'source': PRIVATE}]},
+            'doctor': {'status': 'observed_metadata', 'hook-error.json': {'error': 'OSError'}}}), encoding='utf-8')
+        record, code = scheduled.run(root / 'vault', root / 'state', cli)
+        self.assertEqual((record['status'], record['issues'], code),
+                         ('needs_attention', {'sync_degraded': 1, 'hook': 1}, 4))
+
+    def test_an_unreadable_or_future_last_notified_at_reminds_instead_of_staying_silent(self):
+        now = 1_800_000_000
+        told = {'notified_status': 'needs_attention'}
+        self.assertEqual(scheduled.decide(dict(told, last_notified_at=scheduled._utc(now - 86400)),
+                                          'needs_attention', now), (None, False))
+        for last in ('yesterday', '2026-13-45T99:00:00Z', scheduled._utc(now + 3 * 86400), 7, None):
+            with self.subTest(last=last):
+                previous = dict(told, last_notified_at=last) if last is not None else dict(told)
+                self.assertEqual(scheduled.decide(previous, 'needs_attention', now), ('attention', True))
+
+
 class NotifierTest(unittest.TestCase):
     """The platform commands, with the subprocess replaced: what would run, never a real toast."""
 
