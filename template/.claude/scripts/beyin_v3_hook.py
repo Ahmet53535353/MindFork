@@ -438,7 +438,7 @@ def main():
             except Exception:
                 pass
         if event == 'SessionStart' and not args.metadata_only and (state / 'scheduled-notice.json').is_file():
-            # Opt-in scheduled-check notification that could not be shown (#267): said once, then gone.
+            # A scheduled-check run that needs attention (#267): one small state file, said once, then gone.
             try:
                 from beyin_v3_scheduled import session_notice as scheduled_notice
                 notice += scheduled_notice(state)

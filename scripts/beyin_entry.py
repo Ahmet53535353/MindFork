@@ -159,11 +159,13 @@ def human_result(result, command, installed_version=None):
                  'already_running': 'Zamanlanmis denetim: baska bir denetim hala calisiyor; bu kosu atlandi.',
                  'error': 'Zamanlanmis denetim tamamlanamadi (' + ascii_text(result.get('error')) + '); beyin.py doctor ile bak.'}
         lines = [texts.get(status, 'Zamanlanmis denetim: ' + ascii_text(status))]
-        notification = {'shown': 'Bildirim gosterildi.',
-                        'failed': 'Bildirim gosterilemedi; sonraki oturum acilisinda tek satir olarak cikacak.',
-                        'unavailable': 'Bu makinede bildirim araci yok; sonraki oturum acilisinda tek satir olarak cikacak.'}
+        notification = {'shown': 'Bildirim gonderildi.',
+                        'failed': 'Bildirim gonderilemedi.',
+                        'unavailable': 'Bu makinede bildirim araci yok.'}
         if result.get('notification') in notification:
             lines.append(notification[result['notification']])
+        if status == 'needs_attention' and result.get('told_at') == result.get('finished_at'):
+            lines.append('Sonraki ajan oturumunun acilisinda da tek satir olarak soylenecek.')
         return '\n'.join(lines)
     if result.get('error'):
         return ('Islem tamamlanamadi: ' + str(result.get('message', result['error'])) +

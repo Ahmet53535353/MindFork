@@ -5,18 +5,24 @@ machine-local runtime state, never in the vault: a record synced through git or 
 reach another machine whose health it does not describe. Files:
 
 - `scheduled-check.json`: the last run (status, issue kinds with counts, notification bookkeeping).
-- `scheduled-check.lock`: an OS advisory lock, released by the OS when the run ends or dies, so
-  there is no stale lock to reclaim. The file stays; unlinking a held advisory-lock file lets a
-  later run lock a new inode while the first still owns the old one (beyin_v3_compact).
-- `scheduled-notice.json`: one line for the next session start, written only when an opt-in
-  notification could not be shown; the first session that claims it says it, once.
+- `scheduled-check.lock`: an OS advisory lock (flock / msvcrt, the `_portalock` primitive, inline
+  as in beyin_v3_compact because the installer ships only beyin_v3* modules), released by the OS
+  when the run ends or dies, so there is no stale lock to reclaim. The file stays; unlinking a
+  held advisory-lock file lets a later run lock a new inode while the first still owns the old one.
+- `scheduled-notice.json`: one line for the next session start. It is written whenever a run
+  turns to needs attention (and at each weekly reminder), with or without a notification:
+  whether an OS notification was really seen cannot be known (osascript returns 0 under Focus,
+  a Windows toast can drop silently), so the notification is an extra channel, never the only
+  one. The first session that claims the line says it once; a healthy run takes it back.
 
 The notification is opt-in (`scheduled-check --notify`) and uses only what the platform ships:
-PowerShell toast on Windows, osascript on macOS, notify-send on Linux. It fires on a state change
-(healthy -> needs attention, needs attention -> healthy) and, while a problem lasts, once more
-every REMIND_SECONDS. Its text names issue kinds and counts only, never a note title or path:
-the corner of a shared screen is not a private place.
+Windows PowerShell 5.1 toast on Windows, osascript on macOS, notify-send on Linux. It fires on
+a state change (healthy -> needs attention, needs attention -> healthy) and, while a problem
+lasts, once more every REMIND_SECONDS. Its text is built from fixed phrases and counts only,
+never a note title, path or project name: the corner of a shared screen is not a private place.
+The text reaches the notifier as an argument, never through a shell.
 """
+import base64
 import calendar
 import json
 import os
@@ -131,24 +137,45 @@ def message(status, found, reminder=False):
             (', '.join(parts) or 'kontrol gerektiren bir sorun') + ' - ayrinti: beyin.py doctor')
 
 
+TOAST_SCRIPT = (
+    "param($Title, $Text)\n"
+    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null\n"
+    "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
+    "$nodes = $xml.GetElementsByTagName('text')\n"
+    "$nodes.Item(0).AppendChild($xml.CreateTextNode($Title)) > $null\n"
+    "$nodes.Item(1).AppendChild($xml.CreateTextNode($Text)) > $null\n"
+    "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'\n"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show("
+    "[Windows.UI.Notifications.ToastNotification]::new($xml))\n")
+
+
+def _windows_powershell():
+    root = os.environ.get('SystemRoot') or os.environ.get('SYSTEMROOT') or r'C:\Windows'
+    return os.path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+
+
+def _encoded(script, *arguments):
+    """-EncodedCommand value running `script` (a param() block) with `arguments` as literals."""
+    for value in arguments:
+        if not value.isascii() or not value.isprintable():
+            # Outside printable ASCII PowerShell also reads typographic quotes as quote marks.
+            raise ValueError('notification text must be printable ASCII')
+    literals = ' '.join("'" + value.replace("'", "''") + "'" for value in arguments)
+    command = '& {\n' + script + '} ' + literals + '\nexit $LASTEXITCODE'
+    return base64.b64encode(command.encode('utf-16le')).decode('ascii')
+
+
 def notify_command(text, platform=None):
     """(argv, extra environment) for the platform's own notifier, or None when there is none."""
     platform = sys.platform if platform is None else platform
     if platform == 'win32':
-        # Windows PowerShell 5.1 ships with every supported Windows and still projects WinRT;
-        # the text travels in the environment, so nothing in it is parsed as script.
-        script = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null\n"
-                  "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
-                  "$text = $xml.GetElementsByTagName('text')\n"
-                  "$text.Item(0).AppendChild($xml.CreateTextNode($env:BEYIN_NOTIFY_TITLE)) > $null\n"
-                  "$text.Item(1).AppendChild($xml.CreateTextNode($env:BEYIN_NOTIFY_TEXT)) > $null\n"
-                  "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'\n"
-                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show("
-                  "[Windows.UI.Notifications.ToastNotification]::new($xml))\n")
-        root = os.environ.get('SystemRoot') or os.environ.get('SYSTEMROOT') or r'C:\Windows'
-        executable = os.path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-        return ([executable, '-NoProfile', '-NonInteractive', '-Command', script],
-                {'BEYIN_NOTIFY_TITLE': TITLE, 'BEYIN_NOTIFY_TEXT': text})
+        # Windows PowerShell 5.1 (absolute launcher, as in the hook commands): pwsh 7 has no WinRT
+        # toast types. PowerShell 5.1 takes no arguments after -EncodedCommand, so, as the hook
+        # commands do, the script block receives them as single-quoted literals inside the
+        # encoded command: a quoted literal is never parsed, and the text is ASCII by construction.
+        return [_windows_powershell(), '-NoProfile', '-NonInteractive', '-EncodedCommand',
+                _encoded(TOAST_SCRIPT, TITLE, text)], {}
     if platform == 'darwin':
         return (['/usr/bin/osascript', '-e', 'on run argv', '-e',
                  'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', TITLE, text], {})
@@ -160,7 +187,10 @@ def notify_command(text, platform=None):
 
 def show(text, platform=None):
     """'shown', 'failed' (the notifier ran and refused) or 'unavailable' (no notifier here)."""
-    command = notify_command(text, platform)
+    try:
+        command = notify_command(text, platform)
+    except ValueError:
+        return 'failed'
     if command is None:
         return 'unavailable'
     argv, extra = command
@@ -182,8 +212,8 @@ def decide(previous, status, now):
     The last status the user was told about starts as healthy, so a first run that finds a
     problem says so and a first healthy run stays quiet. A failed check changes nothing.
     """
-    told = previous.get('notified_status') if previous.get('notified_status') in STATUSES else 'ok'
-    last = previous.get('last_notified_at')
+    told = previous.get('told_status') if previous.get('told_status') in STATUSES else 'ok'
+    last = previous.get('told_at')
     try:
         since = now - _seconds(last) if isinstance(last, str) else None
     except ValueError:
@@ -231,22 +261,23 @@ def run(vault, state, cli, notify=False, now=None, display=None):
             # The type only: a child's message can quote a note path.
             record['error'] = type(exc).__name__
         record['finished_at'] = _utc(time.time() if now is None else now)
-        for key in ('notified_status', 'last_notified_at'):
+        for key in ('told_status', 'told_at'):
             if key in previous:
                 record[key] = previous[key]
         record['notify'] = bool(notify)
-        if notify:
-            kind, reminder = decide(previous, record['status'], started)
-            if kind:
-                text = message(record['status'], record.get('issues', {}), reminder)
+        kind, reminder = decide(previous, record['status'], started)
+        if kind:
+            text = message(record['status'], record.get('issues', {}), reminder)
+            record['told_status'] = record['status']
+            record['told_at'] = record['finished_at']
+            # The session line is the channel that always works; a recovery takes back an unsaid one.
+            if kind == 'attention':
+                _write(state / NOTICE_FILE, {'schema': 1, 'at': record['finished_at'], 'text': text})
+            else:
+                (state / NOTICE_FILE).unlink(missing_ok=True)
+            if notify:
                 delivery = (display or show)(text)
                 record['notification'] = delivery if delivery in DELIVERIES else 'failed'
-                record['notified_status'] = record['status']
-                record['last_notified_at'] = record['finished_at']
-                if record['notification'] == 'shown':
-                    (state / NOTICE_FILE).unlink(missing_ok=True)
-                else:
-                    _write(state / NOTICE_FILE, {'schema': 1, 'at': record['finished_at'], 'text': text})
         _write(state / RECORD_FILE, record)
         return record, EXIT_CODES[record['status']]
 
@@ -277,18 +308,18 @@ def doctor(state, now=None):
         shown['error'] = 'other'
     if record.get('notification') in DELIVERIES:
         shown['notification'] = record['notification']
-    last = record.get('last_notified_at')
+    last = record.get('told_at')
     if isinstance(last, str):
         try:
             _seconds(last)
-            shown['last_notified_at'] = last
+            shown['told_at'] = last
         except ValueError:
             pass
     return shown
 
 
 def session_notice(state):
-    """The line for a notification that could not be shown; said by one session, once.
+    """The line for a run that found a problem; said by one session, once.
 
     The notice is claimed by renaming it first, so two sessions opening together cannot both
     print it. Only a text this module wrote passes (ASCII, one line, bounded)."""
@@ -308,4 +339,4 @@ def session_notice(state):
     if not isinstance(text, str) or not text.startswith('Beyin') or len(text) > 300 \
             or not text.isascii() or '\n' in text or '\r' in text:
         return ''
-    return 'Zamanlanmis denetim bildirimi gosterilemedi; kullaniciya soyle: ' + text + '\n'
+    return 'Zamanlanmis denetim dikkat gerektiren bir sonuc buldu; kullaniciya soyle: ' + text + '\n'

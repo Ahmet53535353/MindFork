@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """scheduled-check (#267): sync then doctor for an OS scheduler; opt-in OS notification on a change."""
+import base64
 import importlib.util
 import json
 import os
@@ -17,6 +18,7 @@ from v3_package_helpers import inherited_env
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
 PRIVATE = 'Maas-Butce'  # a note name that must never reach a notification
+SECRET = 'sk-ant-api03-parola-GIZLI'  # a conflicted note whose name looks like a secret
 
 
 def load(name, path):
@@ -129,7 +131,7 @@ class CliTest(unittest.TestCase):
         (self.state / 'scheduled-check.json').write_text(json.dumps({
             'schema': 1, 'status': 'error', 'finished_at': '2026-01-01T00:00:00Z', 'error': 'notes/' + PRIVATE + '.md',
             'issues': {'sync_conflict': 2, 'injected': 9, 'task': 'many'}, 'note': PRIVATE,
-            'notification': '<b>x</b>', 'last_notified_at': 'yesterday'}), encoding='utf-8')
+            'notification': '<b>x</b>', 'told_at': 'yesterday'}), encoding='utf-8')
         shown = json.loads(self.cli('doctor').stdout)['scheduled_check']
         self.assertEqual(set(shown), {'status', 'finished_at', 'age_hours', 'notify', 'issues', 'error'})
         self.assertEqual((shown['issues'], shown['error'], shown['notify']), ({'sync_conflict': 2}, 'other', False))
@@ -197,10 +199,11 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(len(self.shown), 3)
         self.assertFalse(any(PRIVATE in text or '.md' in text for text in self.shown))
 
-    def test_without_notify_nothing_is_shown(self):
+    def test_without_notify_nothing_is_shown_but_the_session_line_is_left(self):
         record, code = self.step(TROUBLED, notify=False)
         self.assertEqual((code, self.shown, record['notify']), (4, [], False))
-        self.assertFalse((self.state / 'scheduled-notice.json').exists())
+        self.assertNotIn('notification', record)
+        self.assertIn('kullaniciya soyle: Beyin: sync cakismasi (2)', scheduled.session_notice(self.state))
 
     def test_a_failed_check_is_an_error_not_a_change(self):
         self.step(TROUBLED)
@@ -212,28 +215,59 @@ class NotifyTest(unittest.TestCase):
         self.step(TROUBLED)
         self.assertEqual(len(self.shown), 1, 'still the same problem once the check runs again')
 
-    def test_an_unshown_notification_is_said_once_at_the_next_session(self):
-        self.answer = 'unavailable'
-        record, _ = self.step(TROUBLED)
-        self.assertEqual(record['notification'], 'unavailable')
-        line = scheduled.session_notice(self.state)
-        self.assertTrue(line.startswith('Zamanlanmis denetim bildirimi gosterilemedi; kullaniciya soyle: Beyin: sync'))
-        self.assertTrue(line.endswith('\n') and line.count('\n') == 1)
-        self.assertEqual(scheduled.session_notice(self.state), '', 'said once')
-        self.answer = 'failed'
-        self.step(HEALTHY)
-        self.assertIn('sorunlar giderildi', scheduled.session_notice(self.state))
-        (self.state / 'scheduled-notice.json').write_text(json.dumps({'text': 'Beyin: ' + PRIVATE + '\nrm -rf'}),
-                                                           encoding='utf-8')
-        self.assertEqual(scheduled.session_notice(self.state), '', 'a hand-written multi-line text is not passed on')
+    def test_attention_leaves_a_session_line_whatever_the_notification_did(self):
+        # osascript returns 0 under Focus and a toast can drop silently: "shown" proves nothing.
+        for answer in ('shown', 'failed', 'unavailable'):
+            with self.subTest(answer=answer):
+                self.answer = answer
+                self.step(HEALTHY)
+                record, _ = self.step(TROUBLED)
+                self.assertEqual(record['notification'], answer)
+                line = scheduled.session_notice(self.state)
+                self.assertTrue(line.startswith('Zamanlanmis denetim dikkat gerektiren bir sonuc buldu; '
+                                                'kullaniciya soyle: Beyin: sync cakismasi (2)'), line)
+                self.assertTrue(line.endswith('\n') and line.count('\n') == 1)
+                self.assertEqual(scheduled.session_notice(self.state), '', 'said once')
 
-    def test_a_shown_notification_clears_an_older_pending_one(self):
-        self.answer = 'failed'
+    def test_the_line_follows_the_notification_rhythm_and_a_recovery_takes_it_back(self):
         self.step(TROUBLED)
-        self.assertTrue((self.state / 'scheduled-notice.json').exists())
-        self.answer = 'shown'
+        scheduled.session_notice(self.state)  # a session said it
+        for _ in range(6):
+            self.step(TROUBLED)
+        self.assertEqual(scheduled.session_notice(self.state), '', 'the same problem is not said every night')
+        self.step(TROUBLED)  # the weekly reminder
+        self.assertIn('Beyin (hatirlatma): sync cakismasi (2)', scheduled.session_notice(self.state))
         self.step(HEALTHY)
+        self.step(TROUBLED)  # a new problem, unsaid by any session yet
+        self.assertTrue((self.state / 'scheduled-notice.json').exists())
+        self.step(HEALTHY)
+        self.assertFalse((self.state / 'scheduled-notice.json').exists(), 'a recovery takes back an unsaid line')
         self.assertEqual(scheduled.session_notice(self.state), '')
+        self.assertEqual(self.shown[-1], 'Beyin: sorunlar giderildi, kasa saglikli.')
+
+    def test_a_hand_written_line_is_not_passed_on(self):
+        self.state.mkdir()
+        for text in ('Beyin: ' + PRIVATE + '\nrm -rf', 'Beyin: ' + 'x' * 400, 'Beyin: \u0131', 'Not Beyin', 7):
+            with self.subTest(text=text):
+                (self.state / 'scheduled-notice.json').write_text(json.dumps({'text': text}), encoding='utf-8')
+                self.assertEqual(scheduled.session_notice(self.state), '')
+
+    def test_a_secret_looking_note_name_reaches_no_text_and_no_file(self):
+        troubled = {'sync': {'status': 'conflict', 'warnings': [{'source': 'notes/' + SECRET + '.md'}],
+                             'conflicts': [{'id': SECRET, 'reason': 'diverged ' + SECRET,
+                                            'source': 'notes/' + SECRET + '.md'}]},
+                    'doctor': {'status': 'needs_attention', 'skill_conflicts': [SECRET],
+                               'task_completion': {'strict_issue_count': 1, 'strict_issues': [SECRET]},
+                               'validity': {'ignored_rejection_count': 0, 'error': 'OSError: ' + SECRET}}}
+        record, code = self.step(troubled)
+        self.assertEqual(code, 4)
+        line = scheduled.session_notice(self.state)
+        self.assertTrue(line)
+        written = ''.join(path.read_text(encoding='utf-8') for path in self.state.iterdir() if path.is_file())
+        for text in [line, written, json.dumps(record), json.dumps(scheduled.doctor(self.state))] + self.shown:
+            self.assertNotIn(SECRET, text)
+            self.assertNotIn('parola', text)
+            self.assertNotIn('notes/', text)
 
 
 class IssuesTest(unittest.TestCase):
@@ -281,12 +315,12 @@ class IssuesTest(unittest.TestCase):
 
     def test_an_unreadable_or_future_last_notified_at_reminds_instead_of_staying_silent(self):
         now = 1_800_000_000
-        told = {'notified_status': 'needs_attention'}
-        self.assertEqual(scheduled.decide(dict(told, last_notified_at=scheduled._utc(now - 86400)),
+        told = {'told_status': 'needs_attention'}
+        self.assertEqual(scheduled.decide(dict(told, told_at=scheduled._utc(now - 86400)),
                                           'needs_attention', now), (None, False))
         for last in ('yesterday', '2026-13-45T99:00:00Z', scheduled._utc(now + 3 * 86400), 7, None):
             with self.subTest(last=last):
-                previous = dict(told, last_notified_at=last) if last is not None else dict(told)
+                previous = dict(told, told_at=last) if last is not None else dict(told)
                 self.assertEqual(scheduled.decide(previous, 'needs_attention', now), ('attention', True))
 
 
@@ -305,14 +339,34 @@ class NotifierTest(unittest.TestCase):
                 mock.patch.object(scheduled.shutil, 'which', lambda name: which):
             return scheduled.show('Beyin: sync cakismasi (2)', platform=platform), calls
 
-    def test_windows_uses_powershell_toast_with_the_text_in_the_environment(self):
+    def test_windows_uses_powershell_5_toast_with_the_text_as_a_literal_argument(self):
         result, calls = self.run_show('win32')
         self.assertEqual(result, 'shown')
         argv, options = calls[0]
         self.assertTrue(argv[0].lower().endswith(os.path.join('windowspowershell', 'v1.0', 'powershell.exe')))
-        self.assertIn('ToastNotificationManager', argv[-1])
-        self.assertNotIn('sync cakismasi', ' '.join(argv), 'the text is never part of the script')
-        self.assertEqual(options['env']['BEYIN_NOTIFY_TEXT'], 'Beyin: sync cakismasi (2)')
+        self.assertEqual(argv[1:4], ['-NoProfile', '-NonInteractive', '-EncodedCommand'])
+        self.assertNotIn('BEYIN_NOTIFY_TEXT', options['env'])
+        script = base64.b64decode(argv[4]).decode('utf-16le')
+        self.assertIn('ToastNotificationManager', script)
+        self.assertTrue(script.endswith("} 'Avenox Beyin' 'Beyin: sync cakismasi (2)'\nexit $LASTEXITCODE"), script)
+        self.assertEqual(script.count('sync cakismasi'), 1, 'the text is only the argument literal')
+
+    def test_text_outside_printable_ascii_never_reaches_powershell(self):
+        for text in ('Beyin: \u2019; Write-Output x', 'Beyin: a\nb', 'Beyin: \u0131'):
+            with self.subTest(text=text):
+                calls = []
+                with mock.patch.object(scheduled.subprocess, 'run', lambda argv, **o: calls.append(argv)):
+                    self.assertEqual(scheduled.show(text, platform='win32'), 'failed')
+                self.assertEqual(calls, [])
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1')
+    def test_windows_powershell_receives_quotes_and_subexpressions_literally(self):
+        text = "Beyin: a'b $(Write-Output PWNED); `whoami` \"q\" - ayrinti"
+        probe = "param($Title, $Text)\n[Console]::Out.Write($Title + '|' + $Text)\n"
+        ran = subprocess.run([scheduled._windows_powershell(), '-NoProfile', '-NonInteractive', '-EncodedCommand',
+                              scheduled._encoded(probe, scheduled.TITLE, text)],
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual((ran.returncode, ran.stdout), (0, 'Avenox Beyin|' + text), ran.stderr)
 
     def test_macos_passes_the_text_as_an_argument(self):
         result, calls = self.run_show('darwin')
@@ -357,20 +411,45 @@ class InstalledTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
-    def test_human_mode_says_attention_and_the_session_says_an_unshown_notice_once(self):
+    def scheduled_check(self):
+        return subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'scheduled-check', '--human'],
+                              capture_output=True, text=True, encoding='utf-8', env=self.env, cwd=self.vault, timeout=300)
+
+    def test_human_mode_says_attention_and_the_session_says_it_once(self):
         (self.vault / 'a.md').write_text('---\n{"id": "dup"}\n---\nOne.\n', encoding='utf-8')
         (self.vault / 'b.md').write_text('---\n{"id": "dup"}\n---\nTwo.\n', encoding='utf-8')
-        ran = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'scheduled-check', '--human'],
-                             capture_output=True, text=True, encoding='utf-8', env=self.env, cwd=self.vault, timeout=300)
+        ran = self.scheduled_check()
         self.assertEqual(ran.returncode, 4, ran.stdout + ran.stderr)
         self.assertIn('kontrol gerektiren bir sorun var', ran.stdout + ran.stderr)
+        self.assertIn('oturumunun acilisinda da tek satir', ran.stdout + ran.stderr)
         self.assertNotIn('tamamlanamadi', ran.stdout + ran.stderr)
-        self.assertNotIn('Zamanlanmis denetim', self.session_start())
-        (self.state / 'scheduled-notice.json').write_text(json.dumps(
-            {'schema': 1, 'at': '2026-01-01T00:00:00Z', 'text': 'Beyin: sync cakismasi (1) - ayrinti: beyin.py doctor'}),
-            encoding='utf-8')
         self.assertIn('kullaniciya soyle: Beyin: sync cakismasi (1)', self.session_start())
         self.assertNotIn('Zamanlanmis denetim', self.session_start())
+        again = self.scheduled_check()
+        self.assertEqual(again.returncode, 4)
+        self.assertNotIn('oturumunun acilisinda', again.stdout + again.stderr, 'an already said problem is not announced again')
+
+    def test_update_and_rollback_leave_doctor_and_session_start_working(self):
+        # Everything scheduled-check keeps is in the state folder: the vault preference schema an
+        # older version validates stays untouched, and doctor/SessionStart survive a rollback.
+        (self.vault / 'a.md').write_text('---\n{"id": "dup"}\n---\nOne.\n', encoding='utf-8')
+        (self.vault / 'b.md').write_text('---\n{"id": "dup"}\n---\nTwo.\n', encoding='utf-8')
+        prefs = self.vault / '.beyin-preferences.json'
+        before = prefs.read_bytes() if prefs.exists() else None
+        self.assertEqual(self.scheduled_check().returncode, 4)
+        self.assertEqual(before, prefs.read_bytes() if prefs.exists() else None)
+        package = self.vault.parent / 'upgrade.zip'
+        for argv in ([str(ROOT / 'scripts/build_v3_release.py'), '--output', str(package), '--version', '99.0.0'],
+                     [str(self.vault / 'beyin.py'), 'update', '--package', str(package)],
+                     [str(self.vault / 'beyin.py'), 'rollback']):
+            done = subprocess.run([sys.executable, *argv], capture_output=True, text=True, encoding='utf-8',
+                                  env=self.env, cwd=self.vault, timeout=600)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        doctor = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'doctor'], capture_output=True,
+                                text=True, encoding='utf-8', env=self.env, cwd=self.vault, timeout=300)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        self.assertEqual(json.loads(doctor.stdout)['scheduled_check']['status'], 'needs_attention')
+        self.assertIn('kullaniciya soyle: Beyin: sync cakismasi (1)', self.session_start())
 
 
 if __name__ == '__main__':

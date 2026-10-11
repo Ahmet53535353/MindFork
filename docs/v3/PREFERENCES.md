@@ -115,22 +115,24 @@ Otomatik kontroller bir istemci olayıyla çalışır; hiçbir istemci açılmaz
 
 Çıkış kodu: `0` sağlıklı, `4` dikkat gerekiyor, `1` denetimin kendisi tamamlanamadı, `3` başka bir denetim hâlâ çalışıyor. `2` argparse'ın kullanım hatasıdır (yanlış yazılmış komut, eski sürümde olmayan seçenek); "dikkat" anlamına gelmez. Kilit işletim sisteminin dosya kilididir: çöken bir koşunun kilidi onunla birlikte bırakılır, beklenecek bayat kilit yoktur.
 
-`--notify` eklersen (varsayılan kapalı) sonuç değiştiğinde işletim sistemi bildirimi gösterilir. Ek bağımlılık yoktur: Windows'ta Windows PowerShell toast, macOS'ta `osascript`, Linux'ta `notify-send` (yoksa bildirim atlanır).
+Sonuç dikkat gerektirdiğinde satır runtime klasöründeki `scheduled-notice.json` dosyasına yazılır ve bir sonraki ajan oturumunun açılışında tek satır olarak bir kez söylenir. Bu kanal her zaman çalışır; `--notify` olsun olmasın.
+
+`--notify` eklersen (varsayılan kapalı) aynı anlarda işletim sistemi bildirimi de gösterilir. Ek bağımlılık yoktur: Windows'ta Windows PowerShell 5.1 toast (`pwsh` 7'de bu türler yok), macOS'ta `osascript`, Linux'ta `notify-send` (yoksa bildirim sessizce atlanır, oturum açılışındaki satır yine çıkar). Bildirimin gerçekten görüldüğü bilinemez (`osascript` Odak modunda da başarı döner, Windows toast'ı sessizce düşebilir); bu yüzden bildirim ek kanaldır, oturum satırının yerini tutmaz.
 
 - Yalnız durum değişince: sağlıklıdan dikkate geçişte bir kez, düzelince bir kez (`Beyin: sorunlar giderildi, kasa saglikli.`). Sorun sürdükçe her gece tekrar etmez; yedi günde bir hatırlatır. Denetimin kendisi tamamlanamazsa bildirim değişmez, `doctor` `error` gösterir.
-- Bildirim metni yalnız sorun türünü ve sayısını yazar, not adı ya da yol yazmaz: `Beyin: sync cakismasi (2), hook uyarisi (1) - ayrinti: beyin.py doctor`.
-- Bildirim gösterilemezse (araç yok, oturum yok, hata) satır runtime klasöründeki `scheduled-notice.json` dosyasına yazılır ve bir sonraki ajan oturumunun açılışında tek satır olarak bir kez söylenir.
-- Bütün durum (son koşu, son bildirim zamanı) makineye özel runtime klasöründedir, vault'a yazılmaz; her makine kendi sağlığını kendisi bildirir.
+- Metin sabit kalıplardan ve sayılardan oluşur; not adı, yol ya da proje adı yazmaz: `Beyin: sync cakismasi (2), hook uyarisi (1) - ayrinti: beyin.py doctor`. Metin bildirim aracına kabuk üzerinden değil argüman olarak geçer; her alt süreçte zaman aşımı vardır.
+- Oturum satırını ilk açılan oturum bir kez söyler; sorun düzelirse söylenmemiş satır geri alınır.
+- Bütün durum (son koşu, son söyleme zamanı, bekleyen satır) makineye özel runtime klasöründe ayrı dosyalardadır, vault'a ve `.beyin-preferences.json`'a yazılmaz; rollback bu yüzden bozulmaz ve her makine kendi sağlığını kendisi bildirir. `doctor` bu dosyalardan yalnız bildiği alanları okur, hiçbirine yazmaz; oturum açılışı yalnız küçük satır dosyasını okur, vault taraması yapmaz.
 
 Bildirim yalnız kullanıcı oturumunda çalışan bir zamanlayıcıdan ekrana gelir. Aşağıdaki örnekler bu yüzden kullanıcı oturumunda çalışır; yolları kendi vault'unla değiştir.
 
-**Windows** (Görev Zamanlayıcı; `/RU` verilmeyen görev yalnız kullanıcı oturum açıkken çalışır). PowerShell'de `--%` satırın geri kalanını `schtasks`'a olduğu gibi geçirir; o olmadan Windows PowerShell 5.1 `/TR` içindeki `\"` kaçışlarını bozar ve vault yolu `/TR` değerinden kopar. `cmd.exe`'de `--%` yazılmaz:
+**Windows** (Görev Zamanlayıcı, "yalnız kullanıcı oturum açıkken çalıştır": `/RU` verilmeyen görev böyle kurulur; "oturum açık olsun olmasın" seçilirse toast ekrana gelmez). PowerShell'de `--%` satırın geri kalanını `schtasks`'a olduğu gibi geçirir; o olmadan Windows PowerShell 5.1 `/TR` içindeki `\"` kaçışlarını bozar ve vault yolu `/TR` değerinden kopar. `cmd.exe`'de `--%` yazılmaz:
 
 ```powershell
 schtasks --% /Create /TN "Beyin saglik" /SC DAILY /ST 20:00 /TR "py -3 \"C:\Users\SEN\Beynim\beyin.py\" scheduled-check --notify"
 ```
 
-**macOS** (LaunchAgent). `/usr/bin/python3` macOS'ta 3.9'dur; Beyin 3.11 ve üstünü ister. `python3 --version` ile 3.11+ olan yolu bul (Homebrew: `/opt/homebrew/bin/python3`, python.org: `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3`). Vault iCloud Drive, Belgeler ya da Masaüstü altındaysa macOS bu klasörleri arka plan işlemlerine kapatır; Sistem Ayarları › Gizlilik ve Güvenlik › Tam Disk Erişimi'ne bu `python3`'ü ekle. `~/Library/LaunchAgents/com.avenox.beyin-saglik.plist`:
+**macOS** (LaunchAgent). `/usr/bin/python3` macOS'ta 3.9'dur; Beyin 3.11 ve üstünü ister. `python3 --version` ile 3.11+ olan yolu bul (Homebrew: `/opt/homebrew/bin/python3`, python.org: `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3`). Vault iCloud Drive, Belgeler ya da Masaüstü altındaysa macOS bu klasörleri arka plan işlemlerine kapatır; Sistem Ayarları › Gizlilik ve Güvenlik › Tam Disk Erişimi'ne bu `python3`'ü ekle. Bildirim `osascript` üzerinden geldiği için Bildirim Merkezi'nde "Betik Düzenleyici" (Script Editor) adıyla görünür; ilk bildirimde izin isteyebilir. `~/Library/LaunchAgents/com.avenox.beyin-saglik.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -182,6 +184,14 @@ systemctl --user enable --now beyin-saglik.timer
 Düz `cron` kullanıcı oturumu dışında çalışır; bildirim ekrana gelmez ama kayıt ve oturum açılışındaki satır yine çalışır. Çıktıyı `/dev/null`'a atma, bir günlük dosyasına yönlendir (`>> ~/beyin-saglik.log 2>&1`); macOS'ta cron için de Tam Disk Erişimi gerekir.
 
 Kaldırmak için zamanlayıcı görevini sil; Beyin tarafında kapatılacak bir ayar yoktur.
+
+Nerede nasıl doğrulandı:
+
+| Platform | Gerçek masaüstünde | Yalnız testle |
+|---|---|---|
+| Windows 11 (PowerShell 5.1) | Görev Zamanlayıcı'dan `scheduled-check --notify`: toast göründü, oturum açılışında satır bir kez söylendi | Kilit çakışması, durum geçişleri, argüman literal'i (gerçek `powershell.exe` ile) |
+| macOS | Denenmedi | `osascript` argv biçimi, sahte bildirim aracıyla |
+| Linux | Denenmedi | `notify-send` argv biçimi ve yokken atlanması |
 
 ## Paralel oturum bildirimi
 
