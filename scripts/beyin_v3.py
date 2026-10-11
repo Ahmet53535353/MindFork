@@ -838,7 +838,7 @@ def main(argv=None, return_result=False):
                     result[key] = {'status': 'unavailable', 'error': type(exc).__name__}
             try:  # read-only report of the opt-in parallel-session notice (#170)
                 import beyin_v3_parallel as parallel
-                result['parallel_sessions'] = parallel.doctor(state)
+                result['parallel_sessions'] = parallel.doctor(state, vault=vault)
             except Exception as exc:
                 result['parallel_sessions'] = {'status': 'unavailable', 'error': type(exc).__name__}
             # Information only: the user's index exclusions, an index.json that is not applied, and

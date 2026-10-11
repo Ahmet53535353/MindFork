@@ -20,6 +20,7 @@ import time
 
 SETTINGS_FILE = 'parallel-sessions.json'
 MARKERS = 'session-markers'
+PRESENCE_DIR = '.presence'
 ACTIVE_SECONDS = 45 * 60      # another session counts as open if it was active this recently
 MAX_AGE_SECONDS = 24 * 3600   # older markers are pruned on every write
 MAX_MARKERS = 128
@@ -80,6 +81,17 @@ def _folder(state, create=False):
     return folder
 
 
+def _presence_folder(vault, create=False):
+    if vault is None:
+        return None
+    folder = Path(vault) / PRESENCE_DIR
+    if folder.is_symlink():
+        return None
+    if create:
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return folder
+
+
 def _marker_name(harness, session_id):
     if not isinstance(harness, str) or not isinstance(session_id, str) or session_id in ('', 'unknown') \
             or len(session_id) > 512:
@@ -104,6 +116,22 @@ def _load(path):
         return None
 
 
+def _load_presence(path):
+    try:
+        with open(path, encoding='utf-8') as source:
+            raw = source.read(MAX_MARKER_BYTES + 1)
+        if len(raw) > MAX_MARKER_BYTES:
+            return None
+        value = json.loads(raw)
+        if (not isinstance(value, dict) or value.get('schema') != 1 or
+                not isinstance(value.get('session'), str) or len(value['session']) != 24 or
+                type(value.get('last_at')) not in (int, float)):
+            return None
+        return value
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
 def _ago(seconds):
     minutes = int(seconds // 60)
     return 'az once' if minutes < 1 else str(minutes) + ' dk once'
@@ -119,11 +147,20 @@ def line(others, now):
             '. Ayni dosyaya dokunmadan once diskten yeniden oku; commit oncesi git status.\n')
 
 
-def touch(state, harness, session_id, now=None):
+def _state_key(state):
+    try:
+        resolved = str(Path(state).resolve())
+    except OSError:
+        resolved = str(state)
+    return hashlib.sha256(resolved.encode()).hexdigest()[:16]
+
+
+def touch(state, harness, session_id, now=None, vault=None):
     """Refresh this session's marker; return the notice line for newly seen sessions, or ''.
 
     Runs on a real user prompt only. Prunes markers older than a day and keeps at most
     128. Announces each other session once per session, at most two named per line.
+    When vault is provided, maintains cross-machine presence files in vault/.presence (#205).
     """
     try:
         name = _marker_name(harness, session_id)
@@ -131,9 +168,28 @@ def touch(state, harness, session_id, now=None):
         if folder is None:
             return ''
         now = time.time() if now is None else now
+        session_key = receipt_session(session_id)
+        current_state_key = _state_key(state)
         own = folder / name
         saved = None if own.is_symlink() else _load(own)
         announced = [key for key in (saved or {}).get('announced', []) if isinstance(key, str)][-MAX_MARKERS:]
+
+        # Maintain vault/.presence/<session_key>.json for cross-machine awareness (#205)
+        pfolder = _presence_folder(vault, create=True) if vault is not None else None
+        if pfolder is not None and session_key:
+            pown = pfolder / f"{session_key}.json"
+            psaved = None if pown.is_symlink() else _load_presence(pown)
+            # Throttle writes to at most once per 300 seconds if file exists and is recent
+            if psaved is None or (now - psaved.get('last_at', 0)) >= 300:
+                pmarker = {
+                    'schema': 1,
+                    'session': session_key,
+                    'harness': harness,
+                    'last_at': now,
+                    'state': current_state_key,
+                }
+                _write(pown, pmarker)
+
         entries = []
         with os.scandir(folder) as listing:
             for entry in listing:
@@ -156,20 +212,66 @@ def touch(state, harness, session_id, now=None):
                 os.unlink(entry.path)
             except OSError:
                 pass
+
         fresh = []
+        active_local_sessions = set()
         for modified, entry in entries[:MAX_MARKERS - 1]:
             if entry.name.startswith('.marker-') and entry.name.endswith('.tmp'):
                 continue
             if now - modified > ACTIVE_SECONDS:
                 break  # sorted newest first; last_at never trails the file time
             key = entry.name[:24]
-            if key in announced:
-                continue
             value = _load(entry.path)
             if value is not None and -60 <= now - value['last_at'] <= ACTIVE_SECONDS:
-                fresh.append(dict(value, key=key))
+                active_local_sessions.add(value['session'])
+                if key not in announced:
+                    fresh.append(dict(value, key=key))
+
+        # Also inspect vault/.presence/ for cross-machine peer sessions (#205)
+        if pfolder is not None and pfolder.is_dir():
+            try:
+                with os.scandir(pfolder) as plisting:
+                    for pentry in plisting:
+                        if not pentry.name.endswith('.json') or pentry.is_symlink():
+                            continue
+                        if pentry.name == f"{session_key}.json":
+                            continue
+                        try:
+                            if not pentry.is_file():
+                                continue
+                            pmod = pentry.stat().st_mtime
+                            pdata = _load_presence(pentry.path)
+                            if pdata is None:
+                                continue
+                            peer_session = pdata['session']
+                            # If this presence file was written by this same machine/state:
+                            if pdata.get('state') == current_state_key:
+                                if peer_session not in active_local_sessions:
+                                    try:
+                                        os.unlink(pentry.path)
+                                    except OSError:
+                                        pass
+                                    continue
+                            else:
+                                if now - pmod > MAX_AGE_SECONDS or now - pdata['last_at'] > ACTIVE_SECONDS:
+                                    if now - pmod > MAX_AGE_SECONDS or now - pdata['last_at'] > MAX_AGE_SECONDS:
+                                        try:
+                                            os.unlink(pentry.path)
+                                        except OSError:
+                                            pass
+                                    continue
+                            if peer_session in active_local_sessions:
+                                continue
+                            active_local_sessions.add(peer_session)
+                            if peer_session not in announced:
+                                fresh.append(dict(pdata, key=peer_session))
+                        except OSError:
+                            continue
+            except OSError:
+                pass
+
         fresh.sort(key=lambda item: item['last_at'], reverse=True)
-        marker = {'schema': 1, 'harness': harness, 'session': receipt_session(session_id),
+        marker = {'schema': 1, 'harness': harness, 'session': session_key,
                   'first_at': saved['first_at'] if saved else now, 'last_at': now,
                   'announced': (announced + [item['key'] for item in fresh])[-MAX_MARKERS:]}
         if not _write(own, marker):
@@ -203,32 +305,61 @@ def _write(path, value):
                 pass
 
 
-def end(state, harness, session_id):
+def end(state, harness, session_id, vault=None):
     """SessionEnd removes this session's own marker, so /clear leaves no ghost session."""
     try:
         name = _marker_name(harness, session_id)
         folder = _folder(state) if name else None
         if folder is not None:
             (folder / name).unlink(missing_ok=True)
+        if vault is not None and session_id:
+            pfolder = _presence_folder(vault)
+            if pfolder is not None:
+                session_key = receipt_session(session_id)
+                (pfolder / f"{session_key}.json").unlink(missing_ok=True)
     except OSError:
         pass
 
 
-def doctor(state, now=None):
+def doctor(state, vault=None, now=None):
     """Read-only: the switch and how many markers look active. Never creates the folder."""
     now = time.time() if now is None else now
     value, valid = read_settings(state)
     result = {'enabled': value, 'valid': valid, 'markers': 0, 'active': 0}
     folder = _folder(state)
-    if folder is None or not folder.is_dir():
-        return result
-    try:
-        with os.scandir(folder) as listing:
-            for entry in listing:
-                if entry.name.endswith('.json') and not entry.is_symlink() and entry.is_file():
-                    result['markers'] += 1
-                    if now - entry.stat().st_mtime <= ACTIVE_SECONDS:
-                        result['active'] += 1
-    except OSError:
-        pass
+    all_sessions = {}
+    active_sessions = set()
+    current_state_key = _state_key(state)
+    if folder is not None and folder.is_dir():
+        try:
+            with os.scandir(folder) as listing:
+                for entry in listing:
+                    if entry.name.endswith('.json') and not entry.is_symlink() and entry.is_file():
+                        val = _load(entry.path)
+                        if val is not None:
+                            all_sessions[val['session']] = val
+                            if now - entry.stat().st_mtime <= ACTIVE_SECONDS and -60 <= now - val['last_at'] <= ACTIVE_SECONDS:
+                                active_sessions.add(val['session'])
+        except OSError:
+            pass
+    if vault is not None:
+        pfolder = _presence_folder(vault)
+        if pfolder is not None and pfolder.is_dir():
+            try:
+                with os.scandir(pfolder) as plisting:
+                    for pentry in plisting:
+                        if pentry.name.endswith('.json') and not pentry.is_symlink() and pentry.is_file():
+                            pval = _load_presence(pentry.path)
+                            if pval is not None:
+                                peer = pval['session']
+                                if pval.get('state') == current_state_key and peer not in all_sessions:
+                                    continue
+                                if peer not in all_sessions:
+                                    all_sessions[peer] = pval
+                                    if now - pentry.stat().st_mtime <= ACTIVE_SECONDS and -60 <= now - pval['last_at'] <= ACTIVE_SECONDS:
+                                        active_sessions.add(peer)
+            except OSError:
+                pass
+    result['markers'] = len(all_sessions)
+    result['active'] = len(active_sessions)
     return result

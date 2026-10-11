@@ -289,6 +289,75 @@ class ParallelSessionsTest(unittest.TestCase):
         names = {path.name for path in self.markers.iterdir()}
         self.assertLessEqual(len(names), 128)
 
+    def test_cross_machine_presence_file_detected_and_cleared_on_session_end(self):
+        self.enable()
+        state_b = self.root / 'state-machine-b'
+        from beyin_v3_parallel import save_settings, receipt_session
+        save_settings(state_b, True)
+
+        # Machine A starts a session
+        self.hook('UserPromptSubmit', 'session-on-mac')
+        presence_file = self.vault / '.presence' / (receipt_session('session-on-mac') + '.json')
+        self.assertTrue(presence_file.is_file(), "Presence file must be created in vault/.presence")
+        pdata = json.loads(presence_file.read_text(encoding='utf-8'))
+        self.assertEqual(pdata['schema'], 1)
+        self.assertEqual(pdata['session'], receipt_session('session-on-mac'))
+        self.assertEqual(pdata['harness'], 'claude')
+
+        # Machine B (distinct state directory) submits a prompt on the same vault
+        payload_b = {
+            'hook_event_name': 'UserPromptSubmit', 'session_id': 'session-on-win',
+            'event_id': 'win-prompt-1', 'cwd': str(self.vault), 'prompt': 'test prompt'
+        }
+        res_b = subprocess.run(
+            [sys.executable, str(self.vault / '.claude/scripts/beyin_v3_hook.py'),
+             '--vault', str(self.vault), '--state', str(state_b), '--harness', 'codex'],
+            input=json.dumps(payload_b), capture_output=True, text=True, encoding='utf-8',
+            env=self.env, cwd=self.vault, timeout=60
+        )
+        self.assertEqual(res_b.returncode, 0, res_b.stderr)
+        lines_b = self.notice(json.loads(res_b.stdout.strip()))
+        self.assertEqual(len(lines_b), 1)
+        self.assertIn("1 oturum daha acik: #" + receipt_short('session-on-mac'), lines_b[0])
+
+        # Machine A ends its session
+        self.hook('SessionEnd', 'session-on-mac', prompt=None)
+        self.assertFalse(presence_file.exists(), "SessionEnd must cleanly remove presence file")
+
+        # Machine B submits another prompt; no parallel session notice
+        payload_b2 = {
+            'hook_event_name': 'UserPromptSubmit', 'session_id': 'session-on-win',
+            'event_id': 'win-prompt-2', 'cwd': str(self.vault), 'prompt': 'test prompt 2'
+        }
+        res_b2 = subprocess.run(
+            [sys.executable, str(self.vault / '.claude/scripts/beyin_v3_hook.py'),
+             '--vault', str(self.vault), '--state', str(state_b), '--harness', 'codex'],
+            input=json.dumps(payload_b2), capture_output=True, text=True, encoding='utf-8',
+            env=self.env, cwd=self.vault, timeout=60
+        )
+        self.assertEqual(res_b2.returncode, 0, res_b2.stderr)
+        lines_b2 = self.notice(json.loads(res_b2.stdout.strip()))
+        self.assertEqual(lines_b2, [])
+
+    def test_cross_machine_stale_presence_file_ignored(self):
+        self.enable()
+        from beyin_v3_parallel import receipt_session
+        pfolder = self.vault / '.presence'
+        pfolder.mkdir(parents=True, exist_ok=True)
+        # Simulate a remote machine's presence file that is 46 minutes old (crashed session)
+        remote_session = receipt_session('remote-crashed')
+        remote_file = pfolder / f"{remote_session}.json"
+        then = time.time() - 46 * 60
+        remote_file.write_text(json.dumps({
+            'schema': 1, 'session': remote_session, 'harness': 'claude',
+            'last_at': then, 'state': 'foreign-state-key-xyz'
+        }), encoding='utf-8')
+        os.utime(remote_file, (then, then))
+
+        # Local prompt should NOT announce the stale remote session
+        lines = self.notice(self.hook('UserPromptSubmit', 'local-user'))
+        self.assertEqual(lines, [])
+
 
 class ParallelModuleTest(unittest.TestCase):
     """In-process checks for the failure paths a subprocess cannot reach."""
