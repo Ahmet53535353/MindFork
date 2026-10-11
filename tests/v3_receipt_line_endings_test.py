@@ -65,6 +65,7 @@ class ReceiptLineEndingsTest(unittest.TestCase):
         report = self.report()
         self.assertEqual(report["status"], "warning")
         self.assertIn("receipts/** -text", report["warning"])
+        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md", report["warning"])
 
     def test_unrelated_attributes_still_warn(self):
         self.git("config", "core.autocrlf", "true")
@@ -159,6 +160,7 @@ class ReceiptLineEndingsTest(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         lines[0].encode("ascii")
         self.assertIn("receipts/** -text", lines[0])
+        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md", lines[0])
         quiet = ENTRY.human_result({"status": "never_seen", "receipt_line_endings": {"status": "ok"}}, "doctor", "3.7.1")
         self.assertNotIn("Receipt satir sonu", quiet)
 

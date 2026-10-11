@@ -78,6 +78,7 @@ class StateLocationTest(unittest.TestCase):
         report = self.report()
         self.assertTrue(report["pinned_in_package_container"])
         self.assertIn("pinned_in_package_container", self.codes(report))
+        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md", report["warnings"][0])
 
     def test_plain_local_pin_is_not_a_container(self):
         self.installed(self.state)
@@ -208,13 +209,17 @@ class StateLocationTest(unittest.TestCase):
         entry = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(entry)
         location = {"warnings": ["state_split: x", "pinned_in_package_container: x",
-                                 "pin_resolves_elsewhere: x", "pinned_state_empty: x"],
+                                 "pin_resolves_elsewhere: x", "pinned_state_empty: x",
+                                 "pinned_state_not_absolute: x"],
                     "sibling_state_roots": ["A", "B"], "pinned_resolves_here_to": "C"}
         text = entry.human_result({"status": "observed_metadata", "state_location": location}, "doctor", "3.4.0")
         lines = [line for line in text.splitlines() if line.startswith("State konumu (bilgi): ")]
-        self.assertEqual(len(lines), 4)
+        self.assertEqual(len(lines), 5)
         self.assertIn("(A, B)", lines[0])
+        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md", lines[0])
+        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md", lines[1])
         self.assertIn("(C)", lines[2])
+        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md", lines[3])
         self.assertTrue(all(line.isascii() for line in lines))
         quiet = entry.human_result({"status": "observed_metadata",
                                     "state_location": {"status": "unavailable", "warnings": []}}, "doctor", "3.4.0")
