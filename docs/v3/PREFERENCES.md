@@ -189,7 +189,7 @@ Nerede nasıl doğrulandı:
 
 | Platform | Gerçek masaüstünde | Yalnız testle |
 |---|---|---|
-| Windows 11 (PowerShell 5.1) | Görev Zamanlayıcı'dan `scheduled-check --notify`: toast göründü, oturum açılışında satır bir kez söylendi | Kilit çakışması, durum geçişleri, argüman literal'i (gerçek `powershell.exe` ile) |
+| Windows 11 (PowerShell 5.1) | Görev Zamanlayıcı'dan `scheduled-check --notify`: bildirim Bildirim Merkezi'ne düştü, ama tam ekran video açıkken ekrana açılır pencere olarak gelmedi (Windows bu sırada bildirimleri yalnız merkezde tutar; komut yine 0 döndü). Oturum açılışında satır bir kez söylendi | Kilit çakışması, durum geçişleri, argüman literal'i (gerçek `powershell.exe` ile) |
 | macOS | Denenmedi | `osascript` argv biçimi, sahte bildirim aracıyla |
 | Linux | Denenmedi | `notify-send` argv biçimi ve yokken atlanması |
 
