@@ -737,6 +737,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--uninstall", action="store_true")
     mode.add_argument("--plan", action="store_true", help="report what an install would do; change nothing")
+    mode.add_argument("--reconcile-hooks", action="store_true", help="reconcile stale hook commands with backup")
     parser.add_argument("--accept-customized-legacy", action="append", default=[], metavar="PATH",
                         help="retire one named customized legacy runner (vault-relative); repeatable")
     parser.add_argument("--keep-customized-legacy", action="append", default=[], metavar="PATH",
@@ -751,6 +752,10 @@ def main():
     default_state = defaults.default_state
     os.umask(0o077)
     try:
+        if args.reconcile_hooks:
+            result = defaults.hook_reconcile(args.vault, args.state or default_state(args.vault.resolve()))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         accepted = tuple(name.replace("\\", "/") for name in args.accept_customized_legacy)
         kept = tuple(name.replace("\\", "/") for name in args.keep_customized_legacy)
         excluded = tuple(name.replace("\\", "/") for name in args.exclude_component)

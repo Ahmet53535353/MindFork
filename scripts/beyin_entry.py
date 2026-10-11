@@ -155,6 +155,23 @@ def human_result(result, command, installed_version=None):
     if result.get('error'):
         return ('Islem tamamlanamadi: ' + str(result.get('message', result['error'])) +
                 ('\n' + ascii_text(result['hint']) if result.get('hint') else ''))
+    if command == 'hook-reconcile':
+        status = result.get('status')
+        if status in ('ok', 'noop'):
+            return 'Hook yollari zaten guncel; hicbir dosya degistirilmedi.'
+        if status == 'not_installed':
+            return 'Bu vault\'ta kurulu hook dosyasi bulunamadi.'
+        lines = ['Hook mutabakati tamamlandi: ' + str(len(result.get('files', []))) + ' dosya guncellendi (' +
+                 str(result.get('reconciled_count', 0)) + ' hook komutu bu makineye uyarlandi).']
+        for entry in result.get('files', []):
+            lines.append('- ' + entry['file'] + ' (yedek: ' + entry.get('backup', '') + ', ' +
+                         str(entry.get('reconciled', 0)) + ' hook yenilendi)')
+            for change in entry.get('changes', []):
+                lines.append('  * ' + change['event'] + ':')
+                lines.append('    Eski: ' + plain_text(change.get('old_summary', change.get('old_command', ''))[:80]))
+                lines.append('    Yeni: ' + plain_text(change.get('new_summary', change.get('new_command', ''))[:80]))
+        lines.append('Eski komutlar bu makinenin Python ve vault yollariyla degistirildi.')
+        return '\n'.join(lines)
     if command == 'jev':
         features = result.get('features', {})
         provider = result.get('provider')
@@ -405,6 +422,10 @@ def human_result(result, command, installed_version=None):
                                                             for name in hint.get('names') or []))
         lines += state_location_lines(result.get('state_location'))
         lines += receipt_line_endings_lines(result.get('receipt_line_endings'))
+        paths = result.get('hook_paths') or {}
+        if paths.get('status') == 'stale':
+            lines.append('Hook yollari baska bir kuruluma isaret ediyor (' + str(len(paths.get('stale', []))) + ' eski yol). ' +
+                         'Guncellemek icin: ' + ('py -3' if sys.platform == 'win32' else 'python3') + ' beyin.py hook-reconcile')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))
