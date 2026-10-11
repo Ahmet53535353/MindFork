@@ -126,6 +126,24 @@ def receipt_line_endings_lines(report):
     return []
 
 
+def sync_copy_lines(result):
+    """Sync lines for file-sync copies (#205): a stamped copy is out of the index, a numbered one is only listed."""
+    lines = []
+    stamped = [w for w in result.get('warnings') or [] if isinstance(w, dict) and str(w.get('reason', '')).startswith('file sync')]
+    for warning in stamped:
+        lines.append('Senkron cakisma kopyasi indekse alinmadi: ' + plain_text(warning.get('source')) +
+                     '. Asil notla karsilastir, dogru tarafi tut, digerini sil.')
+    for candidate in result.get('sync_copy_candidates') or []:
+        same = candidate.get('same_content')
+        lines.append('Olasi senkron kopyasi: ' + plain_text(candidate.get('source')) + ' / ' + plain_text(candidate.get('original')) +
+                     {True: ' (icerik ayni)', False: ' (icerik farkli)'}.get(same, '') +
+                     '. Ikisi de indekste; gercek bir notsa adini degistir, kopyaysa birini sil.')
+    extra = (result.get('sync_copy_candidate_count') or 0) - len(result.get('sync_copy_candidates') or [])
+    if extra > 0:
+        lines.append('+' + str(extra) + ' olasi kopya daha; ayrinti icin --json.')
+    return lines
+
+
 def index_exclusion_lines(report, pruned=False):
     """Lines for the user's index exclusions (state/index.json); shared by doctor, sync and preferences."""
     if not isinstance(report, dict):
@@ -441,7 +459,8 @@ def human_result(result, command, installed_version=None):
     else:
         message = 'Islem sonucu: ' + str(status or 'tamamlandi')
         if command == 'sync':
-            message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True))
+            message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True) +
+                                sync_copy_lines(result))
     if result.get('trust_review_required'):
         message += '\nHook tanimi degisti: Codex /hooks guven incelemesini tamamla ve yeni oturum ac.'
     return message

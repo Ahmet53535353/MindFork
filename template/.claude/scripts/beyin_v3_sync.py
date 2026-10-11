@@ -316,6 +316,29 @@ def _has_conflict_markers(text):
     return False
 
 
+# File-sync services keep both sides of a clash as two files (#205). Some name the copy with
+# their own stamp; nothing a person types looks like it, so such a copy is left out of the
+# index with a warning, and never moved: the user decides which side is right.
+_STAMPED_COPY = re.compile(r'.*\((?:[^()]*\bconflicted copy\b[^()]*|[^()]*\bcase conflict\b[^()]*)\)\.md'
+                           r'|.*\.sync-conflict-\d{8}-\d{6}-[0-9A-Za-z]+\.md', re.IGNORECASE)
+# iCloud ("Note 2.md") and Google Drive or Windows ("Note (1).md") number the copy instead. A
+# person names notes like that too ("Sezon 2.md"), so such a file is indexed as usual and only
+# listed, with its sibling and whether the two hold the same bytes.
+_NUMBERED_COPY = re.compile(r'(.+?)(?: (?:[2-9]|[1-9][0-9])| \((?:[1-9]|[1-9][0-9])\))\.md', re.IGNORECASE)
+
+
+def stamped_copy(name):
+    """True when a file-sync service named this file as the other side of a clash."""
+    return _STAMPED_COPY.fullmatch(name) is not None
+
+
+def numbered_copy_of(name, siblings):
+    """The sibling this file may be a numbered copy of, or None. `siblings` maps casefolded names
+    in the same directory to their spelling, so a case-insensitive volume finds it too."""
+    match = _NUMBERED_COPY.fullmatch(name)
+    return siblings.get((match[1] + '.md').casefold()) if match else None
+
+
 # Warm syncs skip reading a source whose bytes were already indexed (#233). The signature is
 # size, mtime, ctime and file id: on POSIX ctime moves with every content or utime change, on
 # Windows st_ctime is the creation time and st_ino the file index, so an atomic save (a new
@@ -725,6 +748,7 @@ class SyncEngine:
         and its value in the returned records is None: sync keeps that record as indexed."""
         records, warnings, conflicts = {}, [], []
         duplicate = set()
+        self.copy_candidates = []
         # Read once per sync, not per directory: the config cannot change mid-walk.
         excluded, self.index_exclusions = index_exclusions(self.state, self.root)
         # A listed name the walk skips anyway is a no-op. One set prunes below and is stored by
@@ -736,11 +760,19 @@ class SyncEngine:
             if excluded:
                 # Pruned here, so an excluded tree is never listed, read or hashed.
                 dirs[:] = prune_excluded(self.root, directory, dirs, excluded, self.index_exclusions)
+            siblings = {name.casefold(): name for name in files}
             for name in sorted(files):
                 if name.startswith('.') or not name.lower().endswith('.md') or name.casefold() in EXCLUDED_FILES or name.casefold().startswith('setup-'):
                     continue
                 path = Path(directory) / name
                 relative = path.relative_to(self.root).as_posix()
+                if stamped_copy(name):
+                    warnings.append({'source': relative, 'reason': 'file sync conflict copy; compare it with the original, '
+                                                                   'keep the right side and delete the other'})
+                    continue
+                original = numbered_copy_of(name, siblings)
+                if original is not None:
+                    self.copy_candidates.append(self._copy_candidate(Path(directory), name, original))
                 try:
                     # Path proof first: an outside-vault or symlinked source keeps its rejection reason.
                     path, resolved = self._scan_path(relative)
@@ -779,6 +811,16 @@ class SyncEngine:
             records.pop(id, None)
             conflicts.append({'id': id, 'reason': 'duplicate source id; all copies quarantined'})
         return records, warnings, conflicts
+
+    def _copy_candidate(self, directory, name, original):
+        """A numbered file beside its possible original, for the report; reads both only here."""
+        candidate = {'source': (directory / name).relative_to(self.root).as_posix(),
+                     'original': (directory / original).relative_to(self.root).as_posix()}
+        try:
+            candidate['same_content'] = (directory / name).read_bytes() == (directory / original).read_bytes()
+        except OSError:
+            candidate['same_content'] = None
+        return candidate
 
     def _recover(self, db):
         completed, conflicts = [], []
@@ -861,8 +903,13 @@ class SyncEngine:
         warnings, conflicts = [], []
         known = {_hash(row[0]) + '.md': json.loads(row[1]) for row in db.execute('SELECT id, payload FROM receipts')}
         for name in names:
-            # Other names were never written by receipt().
             if not re.fullmatch(r'[0-9a-f]{64}\.md', name):
+                # receipt() writes only <hash>.md; that name with anything more is a sync service's
+                # copy of an append-only receipt, never indexed, always shown. Other names were
+                # never written by receipt().
+                if re.fullmatch(r'[0-9a-f]{64}.+\.md', name, re.IGNORECASE):
+                    warnings.append({'source': 'receipts/' + name, 'reason': 'file sync copy of a receipt; '
+                                     'receipts are append-only, compare it with the original and delete the copy'})
                 continue
             rel = 'receipts/' + name
             try:
@@ -946,6 +993,10 @@ class SyncEngine:
         if dead_supersedes:
             result['supersedes_issues'] = dead_supersedes[:20]
             result['supersedes_issue_count'] = len(dead_supersedes)
+        if self.copy_candidates:
+            # Reported, not a degraded scan: both files are notes in the index until the user says otherwise.
+            result['sync_copy_candidates'] = self.copy_candidates[:20]
+            result['sync_copy_candidate_count'] = len(self.copy_candidates)
         if self.index_exclusions is not None:
             # Reported, not a degraded scan: the user chose these names, or the file is not applied.
             result['index_exclusions'] = self.index_exclusions
