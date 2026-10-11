@@ -52,8 +52,10 @@ Kontrol: kurulumdan ya da güncellemeden hemen sonra `git status --short` boş o
 
 `.beyin-runtime.json` yine de başka bir işletim sisteminden geldiyse (Windows'ta `C:\...`,
 macOS ya da Linux'ta `/...` yolu) bu makinede mutlak bir yol değildir. `beyin.py` o zaman bu
-makinenin varsayılan state dizinini kullanır ve `doctor` bunu `pinned_state_not_absolute`
-olarak gösterir. Kurucu da böyle bir yolu değişmiş dosya saymaz, bu makinenin yoluyla yeniden
+makinenin varsayılan state dizinini kullanır; her komut bunu stderr'e tek satırla söyler
+(stdout ve `--json` çıktısı değişmez) ve `doctor` `pinned_state_not_absolute` olarak gösterir.
+Böyle bir vault'un hook dosyaları da öbür makinenin yollarını taşır; `doctor` onları `hook_paths`
+altında listeler, bu makinede kurulum ikisini birlikte düzeltir. Kurucu da böyle bir yolu değişmiş dosya saymaz, bu makinenin yoluyla yeniden
 yazar ([#249](https://github.com/avenoxai/avenoxbeyin/issues/249)). 3.8.1 ve öncesinin
 `beyin.py`'si bu yolu okuyamadığı için `beyin.py update` çalışmaz; bir kez yeni paketin
 kurucusunu çalıştır (`python3 scripts/install_v3.py --vault "<vault>"`; bu makinede özel
