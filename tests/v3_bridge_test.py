@@ -261,7 +261,10 @@ class BridgeTest(unittest.TestCase):
             db.execute("INSERT INTO receipt_checkpoints VALUES ('codex','old',123)")
         hook.drain_queue(self.vault, self.state)
         gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints']
-        self.assertEqual(gaps[0]['session'], 'old')
+        self.assertEqual(gaps, [], 'legacy rows without prompt evidence do not imply missing work')
+        with engine.store._connect() as db:
+            self.assertEqual(db.execute("SELECT harness,session,at FROM receipt_checkpoints WHERE session='old'").fetchone(),
+                             ('codex', 'old', 123.0), 'migration preserves the source row')
 
     def test_installed_zip_config_executes_from_external_project_without_global_writes(self):
         package = self.root / 'candidate.zip'
