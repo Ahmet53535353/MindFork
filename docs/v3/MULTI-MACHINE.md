@@ -121,6 +121,21 @@ göre sıralar, en yenisini korur.
   döner; dosya çözülene kadar bağlamdan çıkar ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
   Kod bloğundaki işaretler de sayılır: notta alıntılanmış bir çakışma örneği de uyarı verir. Önce çakışmayı çöz (`git status` temiz olmalı), sonra
   oturum aç.
+- **Dosya senkron servisinin çakışma kopyaları:** iCloud, Dropbox, Syncthing, Google Drive gibi
+  servisler çakışmada iki tarafı iki dosya olarak bırakır ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
+  `sync` hiçbir dosyayı taşımaz, silmez ya da yeniden adlandırmaz; hangi tarafın doğru olduğuna
+  sen karar verirsin.
+  - Servisin kendi damgasını taşıyan kopya (`Not (… conflicted copy …).md`, `Not (Case Conflict).md`,
+    `Not.sync-conflict-20261006-120000-ABCDEF7.md`) indekse alınmaz; `file sync conflict copy`
+    uyarısıyla `degraded` döner. Asıl not normal indekslenir.
+  - Numaralı ad (`Not 2.md`, `Not (1).md`) aynı klasörde `Not.md` varken yalnız listelenir:
+    `sync_copy_candidates` alanında iki dosya ve içeriklerinin aynı olup olmadığı (`same_content`)
+    görünür, ikisi de indekste kalır ve sync durumu değişmez. Böyle adlandırılmış gerçek bir not
+    (`Sezon 2.md`) düşmez; listeden çıkarmak için adını değiştir. Kopya notun `id`'sini de taşıyorsa
+    iki dosya ayrıca `duplicate source id` çakışmasıyla bağlamdan çıkar.
+  - `receipts/` altında `<özet>.md` adına eklenmiş her şey (`<özet> 2.md`, `<özet> (conflicted copy).md`)
+    receipt kopyasıdır: indekslenmez, `file sync copy of a receipt` uyarısıyla görünür. Receipt'ler
+    yalnız eklenir; kopyayı asılla karşılaştırıp sil.
 - **Receipt `event_id`'sini makineler arasında tekil tut:** `event_id`'yi ajan seçer ve dosya
   adı onun özetidir. İki makine aynı gün aynı konuya aynı adı verirse (`ortak-konu-2026-09-27`)
   iki farklı receipt aynı dosyaya düşer ve `pull --rebase` `CONFLICT (add/add)` ile durur.
