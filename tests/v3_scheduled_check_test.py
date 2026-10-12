@@ -199,6 +199,18 @@ class NotifyTest(unittest.TestCase):
         self.assertEqual(len(self.shown), 3)
         self.assertFalse(any(PRIVATE in text or '.md' in text for text in self.shown))
 
+    def test_checks_in_the_same_second_report_the_actual_pending_notice(self):
+        (self.cli.parent / 'outputs.json').write_text(json.dumps(TROUBLED), encoding='utf-8')
+        entry = load('beyin_entry_notice_probe', ROOT / 'scripts/beyin_entry.py')
+        first, _ = scheduled.run(self.vault, self.state, self.cli, now=self.now)
+        self.assertIn('oturumunun acilisinda', entry.human_result(first, 'scheduled-check'))
+        self.assertTrue(scheduled.session_notice(self.state))
+        repeated, _ = scheduled.run(self.vault, self.state, self.cli, now=self.now)
+        self.assertEqual(first['finished_at'], repeated['finished_at'])
+        self.assertEqual(repeated['told_at'], repeated['finished_at'])
+        self.assertNotIn('oturumunun acilisinda', entry.human_result(repeated, 'scheduled-check'))
+        self.assertFalse(repeated['session_notice_pending'])
+
     def test_without_notify_nothing_is_shown_but_the_session_line_is_left(self):
         record, code = self.step(TROUBLED, notify=False)
         self.assertEqual((code, self.shown, record['notify']), (4, [], False))

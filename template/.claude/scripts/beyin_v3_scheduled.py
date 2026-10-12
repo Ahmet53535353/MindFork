@@ -279,7 +279,12 @@ def run(vault, state, cli, notify=False, now=None, display=None):
                 delivery = (display or show)(text)
                 record['notification'] = delivery if delivery in DELIVERIES else 'failed'
         _write(state / RECORD_FILE, record)
-        return record, EXIT_CODES[record['status']]
+        # A timestamp rounded to a second cannot tell whether this run queued a
+        # notice: repeated checks may finish in the same second, and a session
+        # may already have consumed the previous notice. Report the actual
+        # pending state without adding another persisted setting.
+        result = dict(record, session_notice_pending=_read(state / NOTICE_FILE) is not None)
+        return result, EXIT_CODES[record['status']]
 
 
 def doctor(state, now=None):

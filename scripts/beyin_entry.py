@@ -164,7 +164,7 @@ def human_result(result, command, installed_version=None):
                         'unavailable': 'Bu makinede bildirim araci yok.'}
         if result.get('notification') in notification:
             lines.append(notification[result['notification']])
-        if status == 'needs_attention' and result.get('told_at') == result.get('finished_at'):
+        if status == 'needs_attention' and result.get('session_notice_pending') is True:
             lines.append('Sonraki ajan oturumunun acilisinda da tek satir olarak soylenecek.')
         return '\n'.join(lines)
     if result.get('error'):
