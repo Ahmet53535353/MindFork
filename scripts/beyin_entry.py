@@ -361,6 +361,10 @@ def human_result(result, command, installed_version=None):
                          {'ok': 'saglikli', 'needs_attention': 'dikkat gerekiyor', 'error': 'denetim tamamlanamadi'}[scheduled['status']] + '.')
         for conflict in result.get('instruction_conflicts', []):
             lines.append('Talimat celiskisi: ' + conflict['file'] + ' icinde V2 derleyici ifadesi var ("' + conflict.get('snippet', '') + '"). Bu metin V3 ajan damitmasiyla celisiyor; eski derleyici talimatlarini kaldir.')
+        if result.get('receipt_view_conflicts'):
+            lines.append('Receipt gorunumu cakismasi: ' + ', '.join(plain_text(c['source']) for c in result['receipt_view_conflicts']) +
+                         '. Gorunumleri arsivleyip yeniden uretmek icin: ' +
+                         ('py -3' if sys.platform == 'win32' else 'python3') + ' beyin.py sync --recover-views')
         if result.get('skill_conflicts'):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):
@@ -537,11 +541,18 @@ def human_result(result, command, installed_version=None):
             return 'Kasada bulunmayan ' + str(len(pruned)) + ' klasor kapsamdan cikarildi: ' + ', '.join(plain_text(f) for f in pruned)
     else:
         message = 'Islem sonucu: ' + str(status or 'tamamlandi')
-        if command == 'sync':
+        if command in ('sync', 'recover-views'):
+            if result.get('recovered_views'):
+                recovered_lines = ['Cakisan receipt gorunumleri arsivlendi ve yeniden uretildi:']
+                for item in result['recovered_views']:
+                    recovered_lines.append('  - ' + plain_text(item['source']) + ' -> ' + plain_text(item['archive']))
+                message = '\n'.join([message] + recovered_lines)
             message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True) +
-                                sync_copy_lines(result))
+                                (sync_copy_lines(result) if command == 'sync' else []))
     if result.get('trust_review_required'):
         message += '\nHook tanimi degisti: Codex /hooks guven incelemesini tamamla ve yeni oturum ac.'
+    if result.get('view_conflicts'):
+        message += '\nReceipt gorunumleri korundu: ' + ', '.join(plain_text(c['source']) for c in result['view_conflicts']) + '. Kurtarma: beyin.py sync --recover-views'
     return message
 
 

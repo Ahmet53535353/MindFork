@@ -75,3 +75,17 @@ başka projelere ortak not gibi açılmaması için kapsam sınırı olarak koru
 `project-scope remove --folder "Projeler/Deneme"` ve `project-scope prune` açıkça kapsam
 dosyasını düzenler. `prune` yalnız artık bulunamayan klasör girdilerini çıkarır. Bozuk
 veya symlink yapılandırma üzerine yazılmaz; önce dosyayı onar.
+
+## Receipt görünümü çakışması ve kurtarma
+
+`daily/v3/YYYY-MM-DD.md` ve `knowledge/v3/outcomes.md` değişmez receipt kaynaklarından
+üretilir. Görünüm elle değişmişse veya yerel takip geçmişi yoksa mevcut baytlar korunur
+ve çakışma görünür kalır. Sağlam kaynak bağlamı, lifecycle kayıtları ve yeni receipt
+yazımı devam eder; gerçek kaynak çakışmaları yine engellenir. `receipt`, `context`
+ve `recap` JSON çıktıları görünüm sorunlarını `view_conflicts` altında bildirir.
+
+Açık kurtarma komutu: `python3 beyin.py sync --recover-views` (Windows: `py -3 beyin.py sync --recover-views`).
+Çakışan baytlar görünümün yanındaki `.archive/` içinde her denemeye ayrı bir dosya
+olarak kalıcı yazıldıktan sonra görünüm yeniden üretilir. Kurtarma başarısızsa kaynak
+ve takip kaydı korunur; symlink arşiv hedefleri kabul edilmez. Komut receipt kaynaklarını
+ve runtime veritabanını silmez. Arşivdeki kullanıcı eklemelerini uygun bilgi notlarına taşı.
