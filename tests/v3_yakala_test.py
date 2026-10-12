@@ -59,6 +59,8 @@ if name == 'npx':
 elif name.startswith('whisper'):
     if scenario.get('whisper_error') and value('--device') != scenario.get('whisper_works_on'):
         sys.stderr.write('Detecting language...\n' + scenario['whisper_error'] + '\n')
+        if scenario.get('whisper_empty_output'):
+            Path(value('--output_dir'), 'ses.txt').write_text(' \n', encoding='utf-8')
         raise SystemExit(scenario.get('whisper_exit', 0))
     Path(value('--output_dir'), 'ses.txt').write_text(scenario['audio'], encoding='utf-8')
 elif '-J' in args:
@@ -1406,6 +1408,19 @@ class YakalaVideoLanguageTest(unittest.TestCase):
         self.assertIn('--language', runs[1])  # the retry keeps the language and model it was given
         for part in ('CPU ile', 'cublas64_12.dll'):
             self.assertIn(part, meta.get('uyari', ''))
+
+    def test_empty_whisper_output_also_retries_cuda_and_reports_failure(self):
+        scenario = {'video': video('tr', audio=[('tr', -1)]), 'audio': TURKISH,
+                    'whisper_error': 'RuntimeError: Library cublas64_12.dll is not found',
+                    'whisper_works_on': 'cpu', 'whisper_empty_output': True}
+        entry, meta, raw = self.isle(scenario, npx=False, whisper='whisper-ctranslate2')
+        self.assertEqual(entry['yontem'], 'ses-whisper')
+        self.assertIn(TURKISH, raw)
+        self.assertEqual(len(self.calls('whisper-ctranslate2')), 2)
+        entry, meta, _raw = self.isle(dict(scenario, whisper_works_on='never'),
+                                    npx=False, whisper='whisper-ctranslate2')
+        self.assertEqual(entry['durum'], 'hata')
+        self.assertIn('Whisper metin uretmedi', entry.get('not', ''))
 
     def test_whisper_failure_names_whisper_error_instead_of_a_missing_tool(self):
         # Both runs fail (or the tool is not ctranslate2): the card carries Whisper's own last error line.

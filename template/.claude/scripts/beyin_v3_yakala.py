@@ -612,17 +612,24 @@ def via_audio(url, found, workdir, lang=None, problems=None):
             command = [found['whisper'], str(files[0]), *model, '--output_format', 'txt', '--output_dir', str(workdir)]
         command += language
         _code, _out, err = _run(command, timeout=7200)
-        texts = sorted(Path(workdir).glob('ses*.txt'))
+        def transcript():
+            for path in sorted(Path(workdir).glob('ses*.txt')):
+                words = path.read_text(encoding='utf-8', errors='replace').strip()
+                if words:
+                    return words
+            return None
+
+        words = transcript()
         gpu = _last_line(err, GPU_FAILURE)
-        if not texts and gpu and whisper.startswith('whisper-ctranslate2'):
+        if not words and gpu and whisper.startswith('whisper-ctranslate2'):
             _code, _out, err = _run(command + ['--device', 'cpu'], timeout=7200)
-            texts = sorted(Path(workdir).glob('ses*.txt'))
-            if texts and problems is not None:
+            words = transcript()
+            if words and problems is not None:
                 problems.append('GPU (CUDA) kullanilamadi, ses CPU ile yaziya dokuldu: ' + gpu +
                                 ' Hizlandirmak icin eksik CUDA kutuphanesini kur (or. nvidia-cublas-cu12).')
-        if not texts and problems is not None:
+        if not words and problems is not None:
             problems.append('Whisper metin uretmedi: ' + (_last_line(err) or 'hata ciktisi yok') + '.')
-        return texts[0].read_text(encoding='utf-8', errors='replace').strip() if texts else None
+        return words
     except (OSError, subprocess.TimeoutExpired):
         return None
     finally:
