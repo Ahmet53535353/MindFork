@@ -917,6 +917,9 @@ def main(argv=None, return_result=False):
                 # Without the range flags this is exactly the call recap made before they existed.
                 bounds = {name: bound for name, bound in (('since', args.since), ('until', args.until)) if bound is not None}
                 result = recent_receipts(db, days=days, limit=args.limit, vault=vault, **bounds)
+            view_conflicts = [c for c in refreshed.get('conflicts', []) if is_receipt_view_conflict(c)]
+            if view_conflicts:
+                result['view_conflicts'] = view_conflicts
             if refreshed.get('status') == 'degraded':
                 warnings = refreshed.get('warnings', [])
                 result['partial'] = True
@@ -956,6 +959,9 @@ def main(argv=None, return_result=False):
                     result = advise_context(sync.store, **params)
                 else:
                     result = sync.store.context_for(args.harness, **params)
+                view_conflicts = [c for c in refreshed.get('conflicts', []) if is_receipt_view_conflict(c)]
+                if view_conflicts:
+                    result['view_conflicts'] = view_conflicts
                 if refreshed.get('status') == 'degraded':
                     warnings = refreshed.get('warnings', [])
                     result['partial'] = True

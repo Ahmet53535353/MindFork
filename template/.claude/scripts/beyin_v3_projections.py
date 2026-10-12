@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+import tempfile
 
 
 # metadata row: the folded directory names the last sync kept out of the index, as a JSON list.
@@ -386,27 +387,45 @@ RECEIPT_VIEW_REASONS = frozenset((
     'stale receipt view unreadable; preserved',
     'manual receipt view edit preserved; view no longer generated',
     'stale receipt view could not be removed',
+    'receipt view recovery failed; preserved',
 ))
 
 
 def is_receipt_view_source(source):
-    if not isinstance(source, str):
-        return False
-    return source == 'knowledge/v3/outcomes.md' or source.startswith('daily/v3/')
+    return isinstance(source, str) and (source == 'knowledge/v3/outcomes.md' or
+        re.fullmatch(r'daily/v3/[0-9]{4}-[0-9]{2}-[0-9]{2}\.md', source) is not None)
 
 
 def is_receipt_view_conflict(item):
-    if not isinstance(item, dict):
-        return False
-    if item.get('kind') == 'receipt_view_conflict':
-        return True
-    source = item.get('source')
-    reason = item.get('reason')
-    if is_receipt_view_source(source):
-        return True
-    if reason in RECEIPT_VIEW_REASONS:
-        return True
-    return False
+    # Both provenance and diagnosis are required. A source conflict must never
+    # become writable merely because its name falls under a generated directory.
+    return (isinstance(item, dict) and is_receipt_view_source(item.get('source')) and
+            item.get('reason') in RECEIPT_VIEW_REASONS)
+
+
+def _archive_receipt_view(engine, path, expected_hash, _hash):
+    """Durably preserve one proven view in a unique, vault-local archive."""
+    relative = path.relative_to(engine.root).as_posix()
+    path = engine._path(relative, existing=True)
+    raw = path.read_bytes()
+    if _hash(raw) != expected_hash:
+        raise ValueError('receipt view changed before archive')
+    archive_dir = path.parent / '.archive'
+    # _path proves all parents, even when the prospective leaf does not exist.
+    engine._path((archive_dir / 'probe.md').relative_to(engine.root).as_posix())
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    engine._path((archive_dir / 'probe.md').relative_to(engine.root).as_posix())
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+    fd, filename = tempfile.mkstemp(prefix=path.stem + '-' + stamp + '-', suffix=path.suffix, dir=archive_dir)
+    with os.fdopen(fd, 'wb') as out:
+        out.write(raw)
+        out.flush()
+        os.fsync(out.fileno())
+    # Preserve a concurrent user edit as a conflict; the first bytes remain archived.
+    path = engine._path(relative, existing=True)
+    if _hash(path.read_bytes()) != expected_hash:
+        raise ValueError('receipt view changed after archive')
+    return Path(filename)
 
 
 def receipt_day(created_at, zone=None):
@@ -464,19 +483,16 @@ def project_receipts(engine, db, warnings=None, recover_views=False, recovered=N
         tracked = tracked_views.get(relative)
         if old != desired_hash and old is not None and (tracked is None or old != tracked):
             if recover_views:
-                archive_dir = path.parent / '.archive'
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-                archive_path = archive_dir / f"{path.stem}-{stamp}{path.suffix}"
-                archive_path.write_bytes(path.read_bytes())
-                atomic(path, content)
+                try:
+                    archive_path = _archive_receipt_view(engine, path, old, _hash)
+                    atomic(path, content)
+                except (OSError, ValueError):
+                    conflicts.append({'source': relative, 'reason': 'receipt view recovery failed; preserved'})
+                    continue
                 db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
                 if recovered is not None:
-                    recovered.append({
-                        'source': relative,
-                        'archive': archive_path.relative_to(engine.root).as_posix(),
-                        'status': 'recovered',
-                    })
+                    recovered.append({'source': relative, 'archive': archive_path.relative_to(engine.root).as_posix(),
+                                      'status': 'recovered'})
                 continue
             reason = 'manual receipt view edit preserved' if tracked is not None else 'untracked receipt view preserved'
             conflicts.append({'source': relative, 'reason': reason})
@@ -504,6 +520,9 @@ def _retire_stale_views(engine, db, desired, _hash, recover_views=False, recover
     for relative, tracked in db.execute('SELECT path, hash FROM receipt_views ORDER BY path').fetchall():
         if relative in desired:
             continue
+        if not is_receipt_view_source(relative):
+            conflicts.append({'source': relative, 'reason': 'unexpected receipt view path; preserved'})
+            continue
         try:
             path = engine._path(relative)
             current = _hash(path.read_bytes()) if path.is_file() else None
@@ -515,22 +534,16 @@ def _retire_stale_views(engine, db, desired, _hash, recover_views=False, recover
             continue
         if current != tracked:
             if recover_views:
-                archive_dir = path.parent / '.archive'
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-                archive_path = archive_dir / f"{path.stem}-{stamp}{path.suffix}"
-                archive_path.write_bytes(path.read_bytes())
                 try:
+                    archive_path = _archive_receipt_view(engine, path, current, _hash)
                     path.unlink()
-                except OSError:
-                    pass
+                except (OSError, ValueError):
+                    conflicts.append({'source': relative, 'reason': 'receipt view recovery failed; preserved'})
+                    continue
                 db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
                 if recovered is not None:
-                    recovered.append({
-                        'source': relative,
-                        'archive': archive_path.relative_to(engine.root).as_posix(),
-                        'status': 'archived_and_retired',
-                    })
+                    recovered.append({'source': relative, 'archive': archive_path.relative_to(engine.root).as_posix(),
+                                      'status': 'archived_and_retired'})
                 continue
             conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved; view no longer generated'})
             continue

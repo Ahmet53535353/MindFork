@@ -453,6 +453,8 @@ def human_result(result, command, installed_version=None):
             message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True))
     if result.get('trust_review_required'):
         message += '\nHook tanimi degisti: Codex /hooks guven incelemesini tamamla ve yeni oturum ac.'
+    if result.get('view_conflicts'):
+        message += '\nReceipt gorunumleri korundu: ' + ', '.join(plain_text(c['source']) for c in result['view_conflicts']) + '. Kurtarma: beyin.py sync --recover-views'
     return message
 
 

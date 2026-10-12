@@ -54,3 +54,17 @@ V3 writes exclusively to its explicit managed vault files:
 - Companion instruction blocks: `AGENTS.md`, `CLAUDE.md`.
 
 All other paths belong to the user. In particular, `.brain/` and `custom/` directories are reserved as an untouched, unmanaged user layer. Installer, updater, and `doctor` checks never treat files under `.brain/` or `custom/` as conflicts or unmanaged system intrusions.
+
+## Receipt görünümü çakışması ve kurtarma
+
+`daily/v3/YYYY-MM-DD.md` ve `knowledge/v3/outcomes.md` değişmez receipt kaynaklarından
+üretilir. Görünüm elle değişmişse veya yerel takip geçmişi yoksa mevcut baytlar korunur
+ve çakışma görünür kalır. Sağlam kaynak bağlamı, lifecycle kayıtları ve yeni receipt
+yazımı devam eder; gerçek kaynak çakışmaları yine engellenir. `receipt`, `context`
+ve `recap` JSON çıktıları görünüm sorunlarını `view_conflicts` altında bildirir.
+
+Açık kurtarma komutu: `python3 beyin.py sync --recover-views` (Windows: `py -3 beyin.py sync --recover-views`).
+Çakışan baytlar görünümün yanındaki `.archive/` içinde her denemeye ayrı bir dosya
+olarak kalıcı yazıldıktan sonra görünüm yeniden üretilir. Kurtarma başarısızsa kaynak
+ve takip kaydı korunur; symlink arşiv hedefleri kabul edilmez. Komut receipt kaynaklarını
+ve runtime veritabanını silmez. Arşivdeki kullanıcı eklemelerini uygun bilgi notlarına taşı.

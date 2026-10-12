@@ -8,6 +8,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from datetime import datetime, timezone
+from v3_package_helpers import inherited_env
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
@@ -20,19 +23,19 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='beyin-proj-test-')
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.vault = self.root / 'vault'
         self.vault.mkdir()
         self.state = self.root / 'state'
+        self.env = inherited_env(BEYIN_UPDATES_OFF='1', PYTHONDONTWRITEBYTECODE='1')
         (self.vault / 'notes').mkdir(parents=True)
         (self.vault / 'notes/canary.md').write_text(
             '---\nkind: fact\nvisibility: internal\n---\n# Nebula memory canary\nNebula memory canary code is NC-7319.\n',
             encoding='utf-8',
         )
 
-    def _invoke_hook(self, vault, state, prompt='What is the Nebula memory canary code?'):
-        env = {k: v for k, v in os.environ.items() if not k.startswith('BEYIN_')}
-        env.update(BEYIN_UPDATES_OFF='1', PYTHONDONTWRITEBYTECODE='1')
+    def _invoke_hook(self, vault, state, prompt='What is the Nebula memory canary code?', scripts=SCRIPTS):
+        env = self.env
         payload = {
             'hook_event_name': 'UserPromptSubmit',
             'session_id': 'isolated-session',
@@ -41,7 +44,7 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             'prompt': prompt,
         }
         return subprocess.run(
-            [sys.executable, str(SCRIPTS / 'beyin_v3_hook.py'), '--vault', str(vault), '--state', str(state), '--harness', 'codex'],
+            [sys.executable, str(scripts / 'beyin_v3_hook.py'), '--vault', str(vault), '--state', str(state), '--harness', 'codex'],
             input=json.dumps(payload),
             text=True,
             capture_output=True,
@@ -182,13 +185,13 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
     def test_cli_recover_views_command(self):
         """CLI recover-views subcommand and sync --recover-views archive and restore."""
         cli = ROOT / 'scripts/beyin_v3.py'
-        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'init'], check=True)
-        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'sync'], check=True)
+        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'init'], check=True, env=self.env)
+        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'sync'], check=True, env=self.env)
 
         receipt_data = {'event_id': 'cli-ev', 'summary': 'CLI seed outcome', 'refs': ['notes/canary.md']}
         r_file = self.root / 'receipt.json'
         r_file.write_text(json.dumps(receipt_data), encoding='utf-8')
-        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'receipt', '--file', str(r_file)], check=True)
+        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'receipt', '--file', str(r_file)], check=True, env=self.env)
 
         view = self.vault / 'knowledge/v3/outcomes.md'
         view.write_text(view.read_text(encoding='utf-8') + '\nManual CLI modification.\n', encoding='utf-8')
@@ -198,7 +201,7 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             [sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'recover-views'],
             capture_output=True,
             text=True,
-            check=True,
+            check=True, env=self.env,
         )
         data = json.loads(res.stdout)
         self.assertEqual(data['status'], 'succeeded')
@@ -208,13 +211,13 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
     def test_cli_recap_and_context_not_blocked_by_receipt_view_conflict(self):
         """CLI recap and context work when only receipt view conflicts exist."""
         cli = ROOT / 'scripts/beyin_v3.py'
-        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'init'], check=True)
-        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'sync'], check=True)
+        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'init'], check=True, env=self.env)
+        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'sync'], check=True, env=self.env)
 
         receipt_data = {'event_id': 'cli-ev2', 'summary': 'CLI outcome for recap', 'refs': ['notes/canary.md']}
         r_file = self.root / 'receipt2.json'
         r_file.write_text(json.dumps(receipt_data), encoding='utf-8')
-        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'receipt', '--file', str(r_file)], check=True)
+        subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'receipt', '--file', str(r_file)], check=True, env=self.env)
 
         view = self.vault / 'knowledge/v3/outcomes.md'
         view.write_text(view.read_text(encoding='utf-8') + '\nTampered view.\n', encoding='utf-8')
@@ -224,7 +227,7 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             [sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'recap', '--limit', '5'],
             capture_output=True,
             text=True,
-            check=True,
+            check=True, env=self.env,
         )
         recap_data = json.loads(recap_res.stdout)
         self.assertTrue(any('CLI outcome for recap' in item['summary'] for item in recap_data.get('items', [])))
@@ -234,7 +237,7 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             [sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'context', 'Nebula memory canary'],
             capture_output=True,
             text=True,
-            check=True,
+            check=True, env=self.env,
         )
         ctx_data = json.loads(ctx_res.stdout)
         self.assertTrue(any('NC-7319' in r.get('text', '') for r in ctx_data.get('records', [])))
@@ -263,6 +266,114 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
         self.assertEqual(result['failed'], 1)
         self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), 1)
 
+
+    def test_view_classification_requires_both_known_path_and_reason(self):
+        self.assertFalse(is_receipt_view_conflict({'source': 'daily/v3/user.md', 'reason': 'manual receipt view edit preserved'}))
+        self.assertFalse(is_receipt_view_conflict({'source': 'knowledge/v3/outcomes.md', 'reason': 'receipt divergence'}))
+        self.assertFalse(is_receipt_view_conflict({'kind': 'receipt_view_conflict', 'source': 'notes/source.md'}))
+
+    def test_installed_cli_and_hook_deliver_turkish_source_with_preserved_view(self):
+        installed = subprocess.run([sys.executable, str(ROOT / 'scripts/install_v3.py'), '--vault', str(self.vault),
+                                    '--state', str(self.state)], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        note = self.vault / 'Paylaşım/Özet.md'
+        note.parent.mkdir()
+        note.write_text('---\nkind: fact\nvisibility: internal\n---\n# Nebula memory canary\nNebula memory canary code is NC-7319.\n', encoding='utf-8')
+        receipt_file = self.root / 'receipt-installed.json'
+        receipt_file.write_text(json.dumps({'event_id': 'installed-seed', 'summary': 'Installed outcome',
+                                           'refs': ['Paylaşım/Özet.md']}), encoding='utf-8')
+        entry = self.vault / 'beyin.py'
+        receipt = subprocess.run([sys.executable, str(entry), 'receipt', '--file', str(receipt_file)], env=self.env,
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(receipt.returncode, 0, receipt.stderr)
+        view = self.vault / 'knowledge/v3/outcomes.md'
+        view.write_bytes(view.read_bytes() + b'\nInstalled user annotation')
+        before = view.read_bytes()
+        context = subprocess.run([sys.executable, str(entry), 'context', 'Nebula memory canary'], env=self.env,
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(context.returncode, 0, context.stderr)
+        result = json.loads(context.stdout)
+        self.assertTrue(any(row['source'] == 'Paylaşım/Özet.md' for row in result['records']))
+        self.assertEqual(result['view_conflicts'][0]['source'], 'knowledge/v3/outcomes.md')
+        hook = self._invoke_hook(self.vault, self.state, scripts=self.vault / '.claude/scripts')
+        self.assertIn('NC-7319', hook.stdout)
+        self.assertIn('V3 receipt view conflicted', hook.stdout)
+        self.assertEqual(view.read_bytes(), before)
+        with SyncEngine(self.vault, self.state).store._connect() as db:
+            self.assertIsNotNone(db.execute('SELECT id FROM markdown_sources WHERE source=?', ('Paylaşım/Özet.md',)).fetchone())
+
+    def test_repeated_recovery_keeps_every_archive_in_the_same_second(self):
+        engine = SyncEngine(self.vault, self.state)
+        engine.receipt('seed', 'Seed', ['notes/canary.md'], 'codex')
+        view = self.vault / 'knowledge/v3/outcomes.md'
+        archives = []
+        with patch('beyin_v3_projections.datetime', wraps=datetime) as clock:
+            clock.now.return_value = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
+            for suffix in ('First user annotation', 'Second user annotation'):
+                view.write_bytes(view.read_bytes() + ('\n' + suffix).encode())
+                raw = view.read_bytes()
+                result = engine.sync(recover_views=True)
+                self.assertEqual(result['status'], 'succeeded')
+                archive = self.vault / result['recovered_views'][0]['archive']
+                archives.append((archive, raw))
+        self.assertNotEqual(archives[0][0], archives[1][0])
+        for archive, raw in archives:
+            self.assertEqual(archive.read_bytes(), raw)
+
+    def test_recovery_rejects_archive_symlink_without_touching_user_data(self):
+        engine = SyncEngine(self.vault, self.state)
+        engine.receipt('seed', 'Seed', ['notes/canary.md'], 'codex')
+        view = self.vault / 'knowledge/v3/outcomes.md'
+        view.write_bytes(view.read_bytes() + b'\nUser annotation')
+        before = view.read_bytes()
+        outside = self.root / 'outside-archive'
+        outside.mkdir()
+        try:
+            (view.parent / '.archive').symlink_to(outside, target_is_directory=True)
+        except OSError:
+            self.skipTest('symlinks unavailable')
+        result = engine.sync(recover_views=True)
+        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(view.read_bytes(), before)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(result['recovered_views'], [])
+
+    def test_recovery_preserves_user_edit_during_archive(self):
+        engine = SyncEngine(self.vault, self.state)
+        engine.receipt('seed', 'Seed', ['notes/canary.md'], 'codex')
+        view = self.vault / 'knowledge/v3/outcomes.md'
+        view.write_bytes(view.read_bytes() + b'\nFirst user annotation')
+        raw = view.read_bytes()
+        fsync = os.fsync
+        def editing(fd):
+            fsync(fd)
+            view.write_bytes(raw + b'\nConcurrent user annotation')
+        with patch('beyin_v3_projections.os.fsync', editing):
+            result = engine.sync(recover_views=True)
+        self.assertEqual(result['status'], 'conflict')
+        self.assertTrue(view.read_bytes().endswith(b'Concurrent user annotation'))
+        self.assertEqual(next((view.parent / '.archive').iterdir()).read_bytes(), raw)
+
+    def test_stale_recovery_unlink_failure_keeps_tracking_and_conflict(self):
+        engine = SyncEngine(self.vault, self.state)
+        engine.receipt('seed', 'Seed', ['notes/canary.md'], 'codex')
+        view = self.vault / 'knowledge/v3/outcomes.md'
+        view.write_bytes(view.read_bytes() + b'\nUser annotation')
+        raw = view.read_bytes()
+        (self.state / 'v2-migration.json').write_text(json.dumps({'historical_receipts': [
+            'receipts/' + hashlib.sha256(b'seed').hexdigest() + '.md'
+        ]}), encoding='utf-8')
+        unlink = Path.unlink
+        def deny(path, *args, **kwargs):
+            if path == view:
+                raise PermissionError('User view cannot be removed')
+            return unlink(path, *args, **kwargs)
+        with patch.object(Path, 'unlink', deny):
+            result = engine.sync(recover_views=True)
+        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(view.read_bytes(), raw)
+        with engine.store._connect() as db:
+            self.assertIsNotNone(db.execute('SELECT hash FROM receipt_views WHERE path=?', ('knowledge/v3/outcomes.md',)).fetchone())
 
 if __name__ == '__main__':
     unittest.main()
