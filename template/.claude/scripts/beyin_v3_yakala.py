@@ -565,8 +565,24 @@ def via_subtitles(found, workdir, track, automatic):
     return text if len(text) > 80 else None
 
 
-def via_audio(url, found, workdir):
-    """Last resort: download only the audio, transcribe locally, delete the audio."""
+def _whisper_options(lang):
+    """`--model` from BEYIN_WHISPER_MODEL and `--language` for a spoken language yt-dlp named.
+
+    whisper-ctranslate2 defaults to `small`, which garbles many non-English words; the variable lets
+    the user pick a larger model without editing code. The language is taken only as a plain ISO 639
+    code: it comes from video metadata, and skipping Whisper's own guess from the first 30 seconds
+    (often music or an intro) keeps the transcript in the language actually spoken.
+    """
+    model = os.environ.get('BEYIN_WHISPER_MODEL', '').strip()
+    lang = _base(lang)
+    return ((['--model', model] if model else []), (['--language', lang] if re.fullmatch(r'[a-z]{2,3}', lang) else []))
+
+
+def via_audio(url, found, workdir, lang=None):
+    """Last resort: download only the audio, transcribe locally, delete the audio.
+
+    `lang` is the spoken language when yt-dlp could tell it; see `_whisper_options`.
+    """
     if not (found['yt_dlp'] and found['whisper']):
         return None
     audio = Path(workdir) / 'ses'
@@ -576,11 +592,13 @@ def via_audio(url, found, workdir):
         if not files:
             return None
         whisper = Path(found['whisper']).name.lower()
+        model, language = _whisper_options(lang)
         if whisper.startswith('mlx_whisper'):
-            command = [found['whisper'], str(files[0]), '--model', 'mlx-community/whisper-large-v3-turbo',
+            command = [found['whisper'], str(files[0]), *(model or ['--model', 'mlx-community/whisper-large-v3-turbo']),
                        '-f', 'txt', '-o', str(workdir)]
         else:
-            command = [found['whisper'], str(files[0]), '--output_format', 'txt', '--output_dir', str(workdir)]
+            command = [found['whisper'], str(files[0]), *model, '--output_format', 'txt', '--output_dir', str(workdir)]
+        command += language
         _run(command, timeout=7200)
         texts = sorted(Path(workdir).glob('ses*.txt'))
         return texts[0].read_text(encoding='utf-8', errors='replace').strip() if texts else None
@@ -627,7 +645,7 @@ def via_youtube(url, found, allow_audio=True, info=None):
                     info['uyari'] = unsure + 'kullanilan altyazi izi: ' + info['altyazi'] + '.'
                 return lead + subtitles, 'yt-dlp-altyazi', info['uyari']
         if allow_audio and not section:
-            words = via_audio(url, found, workdir)
+            words = via_audio(url, found, workdir, spoken)
             if words:
                 info['dil'] = spoken
                 if unsure:

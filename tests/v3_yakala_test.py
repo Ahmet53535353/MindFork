@@ -1369,6 +1369,31 @@ class YakalaVideoLanguageTest(unittest.TestCase):
         self.assertEqual((entry['yontem'], meta.get('dil'), meta.get('uyari')), ('ses-whisper', 'tr', None))
         self.assertNotIn('not', entry)
 
+    def whisper_call(self):
+        return next(call for call in self.calls() if call[0] == 'whisper')
+
+    def test_audio_fallback_names_the_spoken_language_and_the_chosen_model(self):
+        # yt-dlp named the spoken language: Whisper is told it instead of guessing from the intro.
+        scenario = {'video': video('tr', audio=[('tr', -1)]), 'audio': TURKISH}
+        with patch.dict(os.environ, {'BEYIN_WHISPER_MODEL': ''}):
+            entry, meta, raw = self.isle(scenario, npx=False, whisper=True)
+        call = self.whisper_call()
+        self.assertEqual((entry['yontem'], call[call.index('--language') + 1]), ('ses-whisper', 'tr'))
+        self.assertNotIn('--model', call)  # the tool's own default unless the user picks one
+        with patch.dict(os.environ, {'BEYIN_WHISPER_MODEL': 'large-v3-turbo'}):
+            self.isle(scenario, npx=False, whisper=True)
+        call = self.whisper_call()
+        self.assertEqual(call[call.index('--model') + 1], 'large-v3-turbo')
+        # Unknown or dubbed: no language flag, Whisper detects it as before.
+        with patch.dict(os.environ, {'BEYIN_WHISPER_MODEL': ''}):
+            self.isle(dict(scenario, video=video(None, audio=[('tr', 5), ('en', -1)])), npx=False, whisper=True)
+        self.assertNotIn('--language', self.whisper_call())
+
+    def test_whisper_language_flag_takes_only_a_plain_language_code(self):
+        self.assertEqual(yakala._whisper_options('pt-BR')[1], ['--language', 'pt'])
+        for odd in (None, '', 'und&calc', 'x' * 9):
+            self.assertEqual(yakala._whisper_options(odd)[1], [])
+
     def test_refused_metadata_request_keeps_defuddle_and_asks_for_no_track(self):
         entry, meta, raw = self.isle({'video': None, 'defuddle': {'': defuddle('ar', ARABIC)}})
         self.assertEqual((entry['yontem'], meta.get('dil')), ('defuddle', 'ar'))

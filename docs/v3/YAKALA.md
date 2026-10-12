@@ -201,6 +201,10 @@ Hiçbiri zorunlu değil; varsa işleme genişler, yoksa elde olanla devam edilir
 - **Node.js** (`npx`): Defuddle için. Sabit sürüm (`defuddle@0.19.4`) çalıştırılır.
 - **yt-dlp**: videoda konuşulan dil, altyazı ve ses.
 - **Whisper**: Mac'te `mlx_whisper`, diğerlerinde `whisper` ya da `whisper-ctranslate2`. Ses indirmeyi istemezsen `isle --ses-yok`.
+  Videoda konuşulan dili `yt-dlp` söyleyebildiyse Whisper'a `--language` olarak verilir; dil bilinmiyor ya da video
+  dublajlıysa Whisper dili kendisi tanır. Model seçmek için `BEYIN_WHISPER_MODEL` ortam değişkeni
+  (ör. `large-v3-turbo`) `--model` olarak geçer. `whisper-ctranslate2`'nin varsayılanı `small`; Türkçe gibi
+  dillerde terimleri bozabilir (likidite → "liquidite"). GPU varsa daha büyük bir model seç.
 - **pdftotext** (Poppler): PDF metni.
 
 Windows'ta bu araçlar bir `.cmd`/`.bat` sarmalayici olarak kuruluysa, argumanlar komut
