@@ -26,7 +26,7 @@ spec.loader.exec_module(hygiene)
 
 class BoundaryTest(unittest.TestCase):
     def test_notebook_edit_path_is_recognized_without_scanning(self):
-        notebook = Path('/synthetic/vault/notebook.ipynb')
+        notebook = (self.vault / 'notebook.ipynb').resolve()
         paths = hygiene.edited_paths({'tool_name': 'NotebookEdit',
                                       'tool_input': {'notebook_path': str(notebook)}})
         self.assertEqual(paths, [notebook])

@@ -1,5 +1,6 @@
 """Sensitive-directory privacy against an installed release and persisted legacy SQLite rows."""
 import json
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -51,7 +52,7 @@ engine.store.close()
         result = subprocess.run([sys.executable, '-c', seed, str(self.vault), str(self.state)],
                                 capture_output=True, env=self.env, timeout=40)
         self.assertEqual(result.returncode, 0, result.stderr)
-        with sqlite3.connect(self.state / 'memory.sqlite3') as db:
+        with closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db, db:
             sources = [json.loads(row[0])['source'] for row in db.execute('SELECT payload FROM records')]
             self.assertTrue(all(source in sources for source in self.sources))
 
@@ -79,7 +80,7 @@ store.close()
         self.cli('doctor')
         self.assertEqual((snapshot(self.vault), snapshot(self.state)), before)
         # Read-only delivery does not silently delete the legacy rows.
-        with sqlite3.connect(self.state / 'memory.sqlite3') as db:
+        with closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db, db:
             sources = [json.loads(row[0])['source'] for row in db.execute('SELECT payload FROM records')]
             self.assertTrue(all(source in sources for source in self.sources))
 
@@ -95,7 +96,7 @@ store.close()
     def test_installed_sync_removes_sensitive_rows_and_preserves_source_files(self):
         result = self.cli('sync')
         self.assertEqual(result['status'], 'succeeded')
-        with sqlite3.connect(self.state / 'memory.sqlite3') as db:
+        with closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db, db:
             sources = [json.loads(row[0])['source'] for row in db.execute('SELECT payload FROM records')]
         self.assertTrue(all(source not in sources for source in self.sources[1:]))
         for source in self.sources:

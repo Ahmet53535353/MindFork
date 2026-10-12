@@ -152,7 +152,7 @@ class CrossPlatformPinTest(unittest.TestCase):
             self.skipTest('The regression is Windows user-profile path portability')
         expected = Path(self.env['LOCALAPPDATA']) / 'beyin-v3' / hashlib.sha256(
             str(self.vault.resolve()).encode()).hexdigest()[:16]
-        foreign = self.root / 'other-user' / 'localappdata' / 'beyin-v3' / expected.name
+        foreign = Path('C:/Users/foreign-user/AppData/Local/beyin-v3') / expected.name
         pin(self.vault, str(foreign))
         doctor = run_python(self.vault / 'beyin.py', ['doctor'], self.vault, self.env)
         self.assertEqual(doctor.returncode, 0, doctor.stderr)

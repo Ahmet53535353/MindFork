@@ -1,5 +1,6 @@
 """Context must refresh source state without lifecycle hooks."""
 from datetime import datetime, timezone
+from contextlib import closing
 import json
 import hashlib
 import sqlite3
@@ -51,7 +52,7 @@ class ContextRefreshTest(unittest.TestCase):
         private = self.vault / 'notes/Özel/decision.md'
         private.parent.mkdir()
         private.write_text('synthetic calibration PRIVATE_CANARY', encoding='utf-8')
-        with sqlite3.connect(self.state / 'memory.sqlite3') as db:
+        with closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db, db:
             payload = json.loads(db.execute('SELECT payload FROM records WHERE id=?', ('calibration',)).fetchone()[0])
             payload.update(id='private-old-row', source='notes/Özel/decision.md',
                            text=private.read_text(encoding='utf-8'),
