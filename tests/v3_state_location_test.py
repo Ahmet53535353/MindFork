@@ -78,7 +78,8 @@ class StateLocationTest(unittest.TestCase):
         report = self.report()
         self.assertTrue(report["pinned_in_package_container"])
         self.assertIn("pinned_in_package_container", self.codes(report))
-        self.assertIn("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md", report["warnings"][0])
+        self.assertTrue(any("https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md" in warning
+                            for warning in report["warnings"]))
 
     def test_plain_local_pin_is_not_a_container(self):
         self.installed(self.state)
