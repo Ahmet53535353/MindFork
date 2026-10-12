@@ -116,7 +116,7 @@ def state_location(vault: Path, state: Path, windows=None) -> dict:
             "machine. The installer pins an absolute path, so this one was written by another OS "
             "through a synced vault or edited by hand (#249); the installed beyin.py reads this "
             "machine's default state instead. Installation files are per machine and stay out of "
-            "the sync; see docs/v3/MULTI-MACHINE.md.")
+            "the sync; see https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md.")
     try:
         resolved = Path(pinned).expanduser().resolve()
     except (OSError, ValueError, RuntimeError):
@@ -132,7 +132,7 @@ def state_location(vault: Path, state: Path, windows=None) -> dict:
             "container (Packages\\...\\LocalCache). That path carries the package "
             "identity and goes away when the package is reset or reinstalled under another "
             "identity. Moving the state to a plain local directory is the durable fix; "
-            "see docs/v3/UPDATE.md.")
+            "see https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md.")
     if report["pin_resolves_elsewhere"] and windows:
         report["warnings"].append(
             "pin_resolves_elsewhere: this process resolves the pinned path to " + str(resolved) +
@@ -153,7 +153,7 @@ def state_location(vault: Path, state: Path, windows=None) -> dict:
             "state_split: this vault has an installed state root on both sides of the package "
             "redirect (" + ", ".join(report["sibling_state_roots"]) + "). Each one carries its own "
             "database, so which half a session reads depends on whether it runs inside the "
-            "package. Keep one and move it out of the container; see docs/v3/UPDATE.md.")
+            "package. Keep one and move it out of the container; see https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md.")
     return report
 
 
@@ -184,7 +184,7 @@ def receipt_line_endings(vault: Path) -> dict:
                 "warning": "line_endings: core.autocrlf=true and receipts/ is not pinned, so a receipt synced "
                            "from another machine can be checked out as CRLF, which changes its bytes and makes "
                            "the same receipt fail as an event id collision. Add 'receipts/** -text' to the "
-                           "vault's .gitattributes and check the receipts out again; see docs/v3/MULTI-MACHINE.md."}
+                           "vault's .gitattributes and check the receipts out again; see https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md."}
     except Exception as exc:  # no git, a hung git or a broken config must never hide the rest of doctor
         return {"status": "unavailable", "error": type(exc).__name__}
 
@@ -344,7 +344,7 @@ def hook_paths(vault: Path) -> dict:
         result["hint"] = ("Hook commands point to another install location (vault moved, or hook files synced "
                           "from another machine). Run the installer again on this machine with this vault; if the "
                           "vault moved from another account or folder, pass the old state folder (or a copy) with "
-                          "--state. Keep hook files out of sync (docs/v3/MULTI-MACHINE.md).")
+                          "--state. Keep hook files out of sync: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md")
     return result
 
 

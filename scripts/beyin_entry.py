@@ -97,10 +97,10 @@ def state_location_lines(location):
         lines.append(prefix + 'bu vault icin paket yonlendirmesinin iki tarafinda da kurulu state var (' +
                      ', '.join(plain_text(root) for root in location.get('sibling_state_roots') or []) +
                      '). Oturumun hangi yariyi okudugu paket icinde calisip calismamasina bagli;'
-                     ' guncel olani secip tasi, docs/v3/UPDATE.md.')
+                     ' guncel olani secip tasi: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md')
     if 'pinned_in_package_container' in codes:
         lines.append(prefix + 'sabitlenmis state koku MSIX paket kapsayicisinin (Packages\\...\\LocalCache) icinde;'
-                     ' paket sifirlanir ya da baska kimlikle kurulursa bu yol kaybolur. Tasima: docs/v3/UPDATE.md.')
+                     ' paket sifirlanir ya da baska kimlikle kurulursa bu yol kaybolur. Tasima: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md')
     if 'pin_resolves_elsewhere' in codes:
         lines.append(prefix + 'sabitlenmis yol bu surecte baska bir dizine cozumleniyor (' +
                      plain_text(location.get('pinned_resolves_here_to')) +
@@ -108,7 +108,7 @@ def state_location_lines(location):
     if 'pinned_state_not_absolute' in codes:
         lines.append(prefix + '.beyin-runtime.json icindeki state yolu bu makinede mutlak bir yol degil; baska bir'
                      ' isletim sisteminden esitlenmis olabilir. beyin.py bu makinenin varsayilan state dizinini'
-                     ' kullaniyor. Kurulum dosyalari makineye ozeldir, esitleme: docs/v3/MULTI-MACHINE.md.')
+                     ' kullaniyor. Kurulum dosyalari makineye ozeldir, esitleme: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md')
     if 'pinned_state_empty' in codes:
         lines.append(prefix + 'sabitlenmis state kokunde kurulum bulunamadi. State tasindiysa kurucuyu yeni'
                      ' --state ile yeniden calistir.')
@@ -122,7 +122,7 @@ def receipt_line_endings_lines(report):
     if isinstance(report, dict) and report.get('status') == 'warning':
         return ['Receipt satir sonu (bilgi): core.autocrlf=true ve receipts/ sabitlenmemis; baska makineden gelen'
                 ' receipt CRLF ile cikip ayni receipt\'in "event id collision" vermesine yol acabilir.'
-                ' .gitattributes dosyasina "receipts/** -text" ekle, docs/v3/MULTI-MACHINE.md.']
+                ' .gitattributes dosyasina "receipts/** -text" ekle: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md']
     return []
 
 
