@@ -47,7 +47,10 @@ class ProductInstallationTest(unittest.TestCase):
         self.assertIn('.claude/settings.local.json', plan['planned'])
         self.assertIn('.codex/hooks.json', plan['manifest']['files'])
         self.assertTrue(all('\\' not in name for name in plan['planned']))
-        self.assertEqual(set(plan['planned']), set(plan['manifest']['files']))
+        seed = installer.PERSON_TEMPLATE_PATH
+        self.assertIn(seed, plan['planned'])
+        self.assertNotIn(seed, plan['manifest']['files'])
+        self.assertEqual(set(plan['planned']) - {seed}, set(plan['manifest']['files']))
 
     def test_installer_retry_recovers_before_root_entrypoint_exists(self):
         import importlib.util
