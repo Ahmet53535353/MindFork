@@ -214,6 +214,39 @@ class AutoContextTest(unittest.TestCase):
         self.filtered()
         self.assertTrue(all(len(n['excerpt']) <= advisor.AUTO_EXCERPT for n in self.calls[0][0]['state']['notes'].values()))
 
+    def test_strict_precedence_in_auto_pool_evaluates_all_strict_candidates(self):
+        # 5 strict candidates (sharing 2+ words with query: 'how do we deploy the quartz site')
+        for i in range(1, 6):
+            self.record(f'strict{i}', f'Quartz deploy site documentation part {i}.')
+            self.answers[f'strict{i}'] = 0.9
+        # 4 loose candidates (sharing only 1 word: 'deploy')
+        for i in range(1, 5):
+            self.record(f'loose{i}', f'Single word deploy step variation {i}.')
+            self.answers[f'loose{i}'] = 0.9
+        self.config('shadow')
+        self.filtered()
+        sent_notes = self.calls[0][0]['state']['notes']
+        sent_titles = {n['title'] for n in sent_notes.values()}
+        # All 5 strict candidates must be in the pool sent to the advisor
+        for i in range(1, 6):
+            self.assertIn(f'strict{i}', sent_titles)
+        # Exactly 3 loose candidates fill the remaining slots of AUTO_POOL (8 total)
+        self.assertEqual(len(sent_notes), 8)
+        scored = [row for row in self.log() if row.get('event') == 'auto_context']
+        self.assertEqual(scored[0]['strict'], 5)
+        self.assertEqual(scored[0]['loose'], 3)
+
+    def test_strict_exclude_applied_to_loose_candidates(self):
+        (self.state / 'retrieval.json').write_text(json.dumps({'strict_exclude': ['archive/']}), encoding='utf-8')
+        # Loose candidate in archive/ folder
+        self.record('archived_loose', 'Single word deploy archived note.', source='archive/archived_deploy.md')
+        self.answers['archived_loose'] = 0.99
+        self.config()
+        result = self.filtered()
+        self.assertNotIn('archived_loose', self.ids(result))
+        sent_titles = {n['title'] for n in self.calls[0][0]['state']['notes'].values()}
+        self.assertNotIn('archived_loose', sent_titles)
+
 
 class HookWiringTest(unittest.TestCase):
     """The hook reaches the advisor only behind jev.json, and survives its failure."""
