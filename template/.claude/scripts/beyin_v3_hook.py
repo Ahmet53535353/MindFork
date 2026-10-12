@@ -478,14 +478,14 @@ def main():
             # Without that file a prompt costs one stat; SessionEnd still removes its own marker.
             try:
                 if event == 'SessionEnd':
-                    if (state / 'session-markers').is_dir():
+                    if (state / 'session-markers').is_dir() or (vault / '.presence').is_dir():
                         from beyin_v3_parallel import end
-                        end(state, args.harness, payload.get('session_id'))
+                        end(state, args.harness, payload.get('session_id'), vault=vault)
                 elif (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity'))) \
                         and (state / 'parallel-sessions.json').is_file() and not is_synthetic_prompt(payload):
                     from beyin_v3_parallel import enabled, touch
                     if enabled(state):
-                        notice += touch(state, args.harness, payload.get('session_id'))
+                        notice += touch(state, args.harness, payload.get('session_id'), vault=vault)
             except Exception:
                 pass  # a marker can never cost the turn
         if not settings['auto_sync']:

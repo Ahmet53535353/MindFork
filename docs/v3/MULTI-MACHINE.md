@@ -110,11 +110,12 @@ göre sıralar, en yenisini korur.
 - **Git adımları:** çalışmaya başlamadan önce `pull`; bitince `commit`, `pull --rebase`,
   `push`. Aynı vault'ta birden çok oturum açıksa git komutlarını aynı anda birden çok
   oturumdan çalıştırma; bir oturumdan ya da günün sonunda tek seferde gönder.
-- **Aynı makinede paralel oturumlar:** `preferences --parallel-sessions on` açıkken ajan,
+- **Paralel oturumlar ve çapraz cihaz farkındalığı:** `preferences --parallel-sessions on` açıkken ajan,
   aynı vault'ta son 45 dakikada etkin başka bir oturum varsa ilk isteminde tek satırlık bir
-  uyarı alır ([PREFERENCES.md](PREFERENCES.md#paralel-oturum-bildirimi)). İşaretler makineye
-  özel runtime klasöründe durur; öbür makinedeki oturumları görmez, onlar için yukarıdaki git
-  adımları geçerlidir.
+  uyarı alır ([PREFERENCES.md](PREFERENCES.md#paralel-oturum-bildirimi)). Oturumlar vault kökündeki
+  hafif `.presence/<session_id[:24]>.json` dosyaları ve makine-yerel runtime işaretleri ile
+  senkronize edilir; oturum kapandığında (`SessionEnd`) dosya temizce silinir, 45 dakikadan eski
+  işaretler otomatik elenir ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
 - **Çakışma çözülmeden oturum açma:** `pull --rebase` çakışmada durduğunda dosyada
   `<<<<<<<`, `=======`, `>>>>>>>` işaretleri kalır. `sync` bu üç işareti sırayla taşıyan
   dosyayı (receipt dahil) indekslemez ve `unresolved git conflict markers` uyarısıyla `degraded`
@@ -212,3 +213,8 @@ Uyarıyı gördüysen:
    `python3 beyin.py sync` çalıştır; indeks Markdown'dan yeniden kurulur.
 
 Kontrol: `git check-attr text -- receipts/x.md` çıktısı `text: unset` olmalıdır.
+
+Presence eşitlemesi varsayılan olarak kapalıdır. Her cihazda `preferences --parallel-sessions on`
+ile açılır. Yerel `<state>/parallel-presence-device.json` dosyası rastgele bir cihaz kimliği
+tutar; iki cihaz aynı kullanıcı ve state yolunu kullansa da diğerinin açık kaydını silmez.
+Bu kimlik dosyasını vault ile eşitleme. `doctor` kimlik veya presence dosyası oluşturmaz.
