@@ -583,6 +583,26 @@ class CompactionPlanTest(unittest.TestCase):
         self.assertIn('## Önceki oturumlar\n\n' + self.POINTER, result['live'])
         self.assertLessEqual(len(result['live']), 350)
 
+    def test_written_out_dates_are_entries_ordered_by_their_day(self):
+        # A Turkish vault writes `## 12 Ekim 2026: ...`; without this nothing was dated and the
+        # whole file ended in needs_rewrite. A range counts by its last day; the order is the
+        # calendar, not the text (`4→5 Ekim` is older than `12 Ekim`, `26–27 Eylül` older still).
+        text = ('# Son oturum\n\n'
+                '## 12 Ekim 2026 (gece): EN_YENİ\nkarar\n\n'
+                '## 2026-10-11 21:00 · ev · 1a2b3c4d\nISO_KART ' + FILLER * 3 + '\n\n'
+                '## 4→5 Ekim 2026: ARALIK ' + FILLER * 3 + '\n\n'
+                '## 26–27 Eylül 2026: EYLÜL ' + FILLER * 3 + '\n\n'
+                '## 3 October 2025: ENGLISH ' + FILLER * 3 + '\n')
+        result = self.plan(text, 'Last-Session.md', 200)
+        self.assertEqual(result['moved_entries'], 4)
+        self.assertIn('EN_YENİ', result['live'])
+        for old in ('ISO_KART', 'ARALIK', 'EYLÜL', 'ENGLISH'):
+            self.assertNotIn(old, result['live'])
+        self.assertEqual(compact_module.stamp('## 4→5 Ekim 2026: x', heading=True), ('2026-10-05', ''))
+        self.assertEqual(compact_module.stamp('- 9 MAYIS 2026 14:05 not'), ('2026-05-09', '14:05'))
+        for undated in ('## 31 Şubat 2026: x', '**Durum:** 12 Ekim 2026', '## Kasım planı 2026', '## 12 Ekimde 2026'):
+            self.assertIsNone(compact_module.stamp(undated, heading=undated.startswith('#')), undated)
+
     def test_thread_fields_with_dates_code_fences_and_crlf_stay(self):
         text = ('# Threads\r\n## Active Threads\r\n### Thread: A\r\n**Status:** waiting, 2026-10-01\r\n'
                 'Next action: 2026-09-30 tarihine kadar karar.\r\n- 2026-09-24 A_YENİ\r\n- 2026-09-10 A_ESKİ ' + FILLER * 3 + '\r\n'

@@ -91,8 +91,9 @@ Düzeltme dört parçadır:
   worker veya zamanlayıcı onu kendiliğinden çalıştırmaz. Yalnız sınırı aşan dosyada önce
   `## Previous`/`## Önceki` (Last-Session) veya `## Closed`/`## Kapanan`/`## Kapalı`
   (Threads) bölümünün gövdesini, sonra dosya sınıra inene kadar en eski tarihli kayıtları
-  taşır. Tarihli kayıt, ilk karakterlerinde ISO tarih bulunan bir başlık, paragraf veya
-  liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Tarihli bir
+  taşır. Tarihli kayıt, ilk karakterlerinde ISO (`2026-10-12`) ya da yazıyla
+  (`12 Ekim 2026`, `12 October 2026`; aralıkta son gün: `4→5 Ekim 2026`) tarih bulunan bir
+  başlık, paragraf veya liste maddesidir ve bir sonraki kayda ya da tarihsiz başlığa kadar sürer. Tarihli bir
   başlık bir kart açar: aynı ya da daha üst seviyedeki bir sonraki başlığa kadar içindeki
   tarihli satırlar ve alt başlıklar o kartındır; kart bölünmeden ya kalır ya da bütün
   halde taşınır (#118). Devir kartının

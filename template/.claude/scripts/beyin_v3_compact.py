@@ -20,10 +20,20 @@ from beyin_v3_companion import LIMITS, directory, read_limits
 LINE = re.compile(r'[^\n]*\n|[^\n]+$')
 HEADING = re.compile(r'(#{1,6})[ \t]')
 FENCE = re.compile(r' {0,3}(`{3,}|~{3,})')
-DATE = re.compile(r'(?<!\d)\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?!\d)')
+# Month names for dates written out as `12 Ekim 2026` or `12 October 2026`. A day range such
+# as `4→5 Ekim 2026` or `26–27 Eylül 2026` dates the entry by its last day.
+MONTHS = {name: number for number, names in enumerate((
+    ('ocak', 'january'), ('şubat', 'subat', 'february'), ('mart', 'march'), ('nisan', 'april'),
+    ('mayıs', 'mayis', 'may'), ('haziran', 'june'), ('temmuz', 'july'), ('ağustos', 'agustos', 'august'),
+    ('eylül', 'eylul', 'september'), ('ekim', 'october'), ('kasım', 'kasim', 'november'),
+    ('aralık', 'aralik', 'december')), 1) for name in names}
+_DATE = (r'(?:\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])'
+         r'|(?:\d{1,2}[ \t]*[-–→][ \t]*)?(\d{1,2})[ \t]+('
+         + '|'.join(sorted(MONTHS, key=len, reverse=True)) + r')[ \t]+(\d{4}))(?!\d)')
+DATE = re.compile(r'(?<!\d)' + _DATE, re.IGNORECASE)
 CLOCK = re.compile(r'(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)')
 ITEM = re.compile(r'(?:[-*+]|\d{1,3}[.)])[ \t]')
-LEADING = re.compile(r'(?:(?:[-*+>]|\d{1,3}[.)])[ \t]+)?[*_`\[(]*\d{4}-\d{2}-\d{2}(?!\d)')
+LEADING = re.compile(r'(?:(?:[-*+>]|\d{1,3}[.)])[ \t]+)?[*_`\[(]*' + _DATE, re.IGNORECASE)
 # The same section names the context extractor already treats as history.
 HISTORY = {'Last-Session.md': re.compile(r'(?i)## (?:Previous|Önceki)'),
            'Threads.md': re.compile(r'(?i)## (?:Closed|Kapan|Kapalı)')}
@@ -45,21 +55,33 @@ class _LockError(Exception):
     pass
 
 
-def stamp(line, heading=False):
-    """(date, time) of an entry-opening line, or None.
+def _iso(match):
+    """`2026-10-12` for a DATE match, written-out dates included; None for an impossible day."""
+    if not match[1]:
+        return match[0]
+    try:
+        return datetime(int(match[3]), MONTHS[match[2].lower()], int(match[1])).strftime('%Y-%m-%d')
+    except (KeyError, ValueError):
+        return None
 
-    The ISO date must be among the first 48 characters and, outside headings, before any
-    colon: `**Status:** active, 2026-10-01` is a field, `2026-09-24 14:05: ...` an entry.
+
+def stamp(line, heading=False):
+    """(ISO date, time) of an entry-opening line, or None.
+
+    The date (ISO, or written out as in MONTHS) must be among the first 48 characters and,
+    outside headings, before any colon: `**Status:** active, 2026-10-01` is a field,
+    `2026-09-24 14:05: ...` and `12 Ekim 2026: ...` are entries.
     """
     text = line.strip()
     date = DATE.search(text, 0, 48)
-    if not date:
+    iso = _iso(date) if date else None
+    if not iso:
         return None
     colon = text.find(':')
     if not heading and 0 <= colon < date.start():
         return None
     clock = CLOCK.search(text, date.end(), date.end() + 12)
-    return date[0], (clock[1].zfill(2) + ':' + clock[2]) if clock else ''
+    return iso, (clock[1].zfill(2) + ':' + clock[2]) if clock else ''
 
 
 def _frontmatter_end(lines):
