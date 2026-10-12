@@ -153,6 +153,19 @@ class AutoContextTest(unittest.TestCase):
         self.assertEqual(result['records'], [])
         self.assertTrue(result['abstained'])
 
+    def test_gate_failure_cannot_drop_a_local_only_strict_record_it_never_scored(self):
+        self.config()
+        self.record('local', 'Quartz deploy site local policy.', remote_allowed=False)
+        self.answers.update(topical=0.1)
+        local = self.local()
+        self.assertIn('local', self.ids(local))
+        result = self.filtered(context=local)
+        self.assertEqual(self.ids(result), ['local'])
+        sent = {note['title'] for note in self.calls[0][0]['state']['notes'].values()}
+        self.assertNotIn('local', sent)
+        scored = [row for row in self.log() if row.get('event') == 'auto_context']
+        self.assertEqual(scored[0]['dropped'], len(local['records']) - 1)
+
     def test_shadow_calls_but_changes_nothing_and_logs_counters(self):
         self.config('shadow')
         self.assertEqual(self.filtered(), self.local())

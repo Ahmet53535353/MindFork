@@ -238,7 +238,7 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
     remote_pool = evaluated_strict + evaluated_loose
     records = list(remote_pool)
     # Overflow or local-only strict records remain eligible locally without consuming remote slots.
-    unevaluated_strict = [r for r in strict if r not in remote_pool][:AUTO_LIMIT]
+    unevaluated_strict = [r for r in strict if r not in remote_pool]
     records += unevaluated_strict
 
     keys = {'k' + str(i): r for i, r in enumerate(remote_pool) if str(r.get('text', '')).strip()}
@@ -272,8 +272,10 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
     bar = limits(mode)
     passed = scores['topical'] >= bar['gate']
     by_record = {r['id']: scores[k] for k, r in keys.items()}
-    keep = [r for r in records if passed and by_record.get(r['id'], 1.0 if r['id'] in known else 0.0)
-            >= (bar['keep'] if r['id'] in known else bar['rescue'])]
+    unscored_strict = known - {r['id'] for r in keys.values()}
+    keep = [r for r in records if r['id'] in unscored_strict or
+            (passed and by_record.get(r['id'], 0.0)
+             >= (bar['keep'] if r['id'] in known else bar['rescue']))]
     dropped = len([r for r in strict if r not in keep])
     rescued = len([r for r in keep if r['id'] not in known])
     # Laya never reaches `on` (client.SHADOW_ONLY); unmeasured thresholds would only log as well.
