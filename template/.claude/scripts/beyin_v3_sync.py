@@ -817,8 +817,12 @@ class SyncEngine:
         candidate = {'source': (directory / name).relative_to(self.root).as_posix(),
                      'original': (directory / original).relative_to(self.root).as_posix()}
         try:
-            candidate['same_content'] = (directory / name).read_bytes() == (directory / original).read_bytes()
-        except OSError:
+            # Reporting must obey the same source boundary as indexing. In particular,
+            # never follow an external sibling symlink merely to compare its contents.
+            copy_path, _ = self._scan_path(candidate['source'])
+            original_path, _ = self._scan_path(candidate['original'])
+            candidate['same_content'] = copy_path.read_bytes() == original_path.read_bytes()
+        except (OSError, ValueError):
             candidate['same_content'] = None
         return candidate
 
