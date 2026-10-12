@@ -105,6 +105,24 @@ class CrossPlatformPinTest(unittest.TestCase):
         self.assertEqual(human.returncode, 0, human.stderr)
         self.assertIn('mutlak bir yol degil', human.stdout.decode('utf-8'))
 
+    def test_every_command_says_it_on_stderr_and_stdout_stays_the_result(self):
+        # #205: the fallback was visible only in doctor; sync, context and receipt changed state silently.
+        valid = run_python(self.vault / 'beyin.py', ['sync'], self.vault, self.env)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        self.assertNotIn(b'.beyin-runtime.json', valid.stderr, 'a usable pin adds nothing')
+        pin(self.vault, FOREIGN_PIN)
+        for argv in (['sync'], ['context', 'nebula'], ['sync', '--human']):
+            with self.subTest(argv=argv):
+                done = run_python(self.vault / 'beyin.py', argv, self.vault, self.env)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                stderr = done.stderr.decode('utf-8')
+                self.assertEqual(stderr.count('\n'), 1, stderr)
+                self.assertIn('mutlak bir yol degil', stderr)
+                self.assertIn('install_v3.py', stderr)
+                self.assertNotIn(b'mutlak bir yol degil', done.stdout)
+                if '--human' not in argv:
+                    json.loads(done.stdout)  # the JSON contract holds
+
     @unittest.skipIf(sys.platform == 'win32', 'a colon is not a valid Windows path character')
     def test_absolute_posix_pin_with_colon_and_backslash_is_used_as_is(self):
         vault, state = self.root / 'other-vault', self.root / ('st:a' + chr(92) + 'te')

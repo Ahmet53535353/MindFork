@@ -505,9 +505,14 @@ def main(argv=None):
             # here came from another OS through a synced vault (a Windows C:\ path on POSIX,
             # a /home path on Windows, #249) or was edited by hand. Read as a relative path it
             # would put the state under the working directory, so this machine's default
-            # state is used instead; doctor reports the pin it could not use.
+            # state is used instead; doctor reports the pin it could not use, and every command says
+            # so on stderr (#205): stdout stays the command's own result, JSON included.
             cli = load_cli(directory)
             state = cli.default_state(vault)
+            print('Uyari: .beyin-runtime.json icindeki state yolu (' + plain_text(raw_state) + ') bu makinede '
+                  'mutlak bir yol degil; vault baska bir isletim sisteminden esitlenmis olabilir. Bu makinenin '
+                  'varsayilan state klasoru kullaniliyor: ' + plain_text(state) + '. Kalici duzeltme: bu makinede '
+                  'install_v3.py ile kur; hook komutlari da boylece bu makineye baglanir.', file=sys.stderr)
         if argv and argv[0] == 'yakala':
             # Optional capture tool: its own small CLI, no index or sync engine.
             import beyin_v3_yakala as yakala
