@@ -753,7 +753,13 @@ def main():
     os.umask(0o077)
     try:
         if args.reconcile_hooks:
-            result = defaults.hook_reconcile(args.vault, args.state or default_state(args.vault.resolve()))
+            selected_state = args.state
+            if selected_state is None:
+                pin_path = args.vault / '.beyin-runtime.json'
+                pin_data = json.loads(pin_path.read_text(encoding='utf-8')) if pin_path.is_file() else {}
+                pinned = pin_data.get('state') if isinstance(pin_data, dict) else None
+                selected_state = Path(pinned).expanduser() if isinstance(pinned, str) and Path(pinned).expanduser().is_absolute() else default_state(args.vault.resolve())
+            result = defaults.hook_reconcile(args.vault, selected_state)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         accepted = tuple(name.replace("\\", "/") for name in args.accept_customized_legacy)

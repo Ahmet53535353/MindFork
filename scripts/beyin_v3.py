@@ -368,6 +368,43 @@ def _hook_commands(argv):
     return posix, windows
 
 
+def _local_hook_file(root, path):
+    root = root.resolve()
+    path.relative_to(root)
+    cursor = path
+    while cursor != root:
+        if cursor.is_symlink():
+            raise ValueError('hook configuration paths must not be symlinks')
+        cursor = cursor.parent
+    return path
+
+
+def _backup_hook_file(path, raw):
+    # Existing backups are user data too. Exclusive creation preserves all prior copies.
+    index = 0
+    while True:
+        backup = path.with_name(path.name + '.bak' + ('.' + str(index) if index else ''))
+        try:
+            with backup.open('xb') as out:
+                out.write(raw); out.flush(); os.fsync(out.fileno())
+            return backup
+        except FileExistsError:
+            index += 1
+
+
+def _write_hook_json(path, data):
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix='.hook-reconcile-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as out:
+            json.dump(data, out, ensure_ascii=False, indent=2)
+            out.write('\n'); out.flush(); os.fsync(out.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
     """Explicitly reconcile hook commands pointing to another install location (#205).
 
@@ -378,9 +415,13 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
     vault = vault.resolve()
     state = state.resolve()
     hook_script = vault / ".claude/scripts/beyin_v3_hook.py"
+    _local_hook_file(vault, hook_script)
     if not hook_script.is_file():
         raise RuntimeError(f"Hook script not found at {hook_script}. Reinstall or repair the vault first.")
 
+    for name in HOOK_FILES:
+        _local_hook_file(vault, vault / name)
+    _local_hook_file(state, state / "v3-install.json")
     paths_report = hook_paths(vault)
     if paths_report.get("status") == "not_installed":
         return {
@@ -413,7 +454,10 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
             continue
 
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            original_bytes = path.read_bytes()
+            data = json.loads(original_bytes.decode("utf-8"))
+            if not isinstance(data, dict):
+                continue
         except (OSError, ValueError, UnicodeError):
             continue
 
@@ -433,6 +477,11 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
                         for handler in managed[event]:
                             if isinstance(handler, dict):
                                 old_cmd = handler.get("command", "")
+                                if not isinstance(old_cmd, str):
+                                    continue
+                                args = _hook_arguments(old_cmd)
+                                if not any(a.replace("\\", "/").endswith("/beyin_v3_hook.py") for a in args):
+                                    continue
                                 if old_cmd != target_cmd or force:
                                     old_args = _hook_arguments(old_cmd)
                                     changes.append({
@@ -466,6 +515,8 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
                             if not isinstance(handler, dict):
                                 continue
                             old_cmd = handler.get("command", "")
+                            if not isinstance(old_cmd, str):
+                                continue
                             args = _hook_arguments(old_cmd)
                             script = next((a for a in args if a.replace("\\", "/").endswith("/beyin_v3_hook.py")), None)
                             if script is None:
@@ -487,9 +538,13 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
                                 file_reconciled += 1
 
         if file_reconciled > 0:
-            backup_path = path.with_name(path.name + ".bak")
-            backup_path.write_bytes(path.read_bytes())
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            if path.read_bytes() != original_bytes:
+                raise RuntimeError("Hook configuration changed during reconciliation; preserved")
+            backup_path = _backup_hook_file(path, original_bytes)
+            _local_hook_file(vault, path)
+            if path.read_bytes() != original_bytes:
+                raise RuntimeError("Hook configuration changed after backup; preserved")
+            _write_hook_json(path, data)
             reconciled_files.append({
                 "file": name,
                 "backup": str(backup_path.relative_to(vault).as_posix()),
@@ -505,7 +560,7 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
             cmds = set(manifest.get("commands", []))
             cmds.update(all_new_commands)
             manifest["commands"] = sorted(cmds)
-            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            _write_hook_json(manifest_path, manifest)
         except (OSError, ValueError, UnicodeError):
             pass
 

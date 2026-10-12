@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from v3_package_helpers import clean_environ, isolated_path
+from v3_package_helpers import clean_environ, isolated_path, inherited_env
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "template/.claude/scripts"
@@ -49,6 +49,7 @@ class HookReconcileTest(unittest.TestCase):
         for key in ("SYSTEMROOT", "WINDIR"):
             if key in os.environ:
                 self.env[key] = os.environ[key]
+        self.env = inherited_env(**self.env)
         environment = clean_environ()
         environment.start()
         self.addCleanup(environment.stop)
@@ -195,6 +196,59 @@ class HookReconcileTest(unittest.TestCase):
         recon_data = json.loads(result.stdout)
         self.assertEqual(recon_data["status"], "reconciled")
         self.assertTrue((self.vault / ".claude/settings.local.json.bak").is_file())
+
+    def test_force_preserves_custom_managed_group_and_every_old_backup(self):
+        self.install()
+        path = self.vault / '.agents/hooks.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        custom = {'command': 'echo user-owned-agent-command', 'timeout': 77}
+        data['beyin-v3']['PreInvocation'].append(custom)
+        path.write_text(json.dumps(data), encoding='utf-8')
+        backup = path.with_name(path.name + '.bak')
+        backup.write_bytes(b'Old backup is user data')
+        def reconcile():
+            result = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'hook-reconcile', '--force'],
+                                    env=self.env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+        first = reconcile()
+        self.assertEqual(backup.read_bytes(), b'Old backup is user data')
+        first_archive = path.with_name(path.name + '.bak.1')
+        archived = first_archive.read_bytes()
+        reconcile()
+        self.assertEqual(first_archive.read_bytes(), archived)
+        self.assertTrue(path.with_name(path.name + '.bak.2').is_file())
+        self.assertIn(custom, json.loads(path.read_text(encoding='utf-8'))['beyin-v3']['PreInvocation'])
+
+    def test_symlinked_hook_config_is_preserved(self):
+        self.install()
+        path = self.vault / '.codex/hooks.json'
+        outside = self.root / 'outside-hooks.json'
+        path.rename(outside)
+        try:
+            path.symlink_to(outside)
+        except OSError:
+            outside.rename(path)
+            self.skipTest('symlink unavailable')
+        raw = outside.read_bytes()
+        result = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'hook-reconcile', '--force'],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(outside.read_bytes(), raw)
+
+    def test_installer_reconcile_without_state_uses_existing_custom_pin(self):
+        self.install()
+        stale_posix, stale_win = self.stale_hook_commands()
+        path = self.vault / '.claude/settings.local.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        data['hooks']['SessionStart'][0]['hooks'][0]['command'] = stale_win if os.name == 'nt' else stale_posix
+        path.write_text(json.dumps(data), encoding='utf-8')
+        result = subprocess.run([sys.executable, str(INSTALLER), '--vault', str(self.vault), '--reconcile-hooks'],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = json.loads(path.read_text(encoding='utf-8'))['hooks']['SessionStart'][0]['hooks'][0]['command']
+        self.assertIn(str(self.state.resolve()), decoded_command(command))
 
 
 if __name__ == "__main__":
