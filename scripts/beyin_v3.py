@@ -21,27 +21,49 @@ def default_state(vault: Path) -> Path:
         base = Path.home() / "Library/Application Support"
     else:
         base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
-    key = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
+    key = hashlib.sha256(str(Path(vault).resolve()).encode()).hexdigest()[:16]
     return base / "beyin-v3" / key
 
 
 def resolve_state(vault: Path, pinned: Path) -> Path:
-    """Use this machine's default state when a synced pin belongs to another user.
+    """Use this machine's default state when a synced pin belongs to another user or OS.
 
     The older cross-platform fallback only rejected pins that were not absolute. A
-    Windows vault copied from another account still has an absolute path, but the
-    default layout is recognizable by its final ``beyin-v3/<vault-key>`` suffix.
-    Do not reinterpret explicit state paths or MSIX package paths.
+    vault copied from another user account or another OS (Windows, Linux, macOS)
+    may carry an absolute path from the source system or a foreign path format, but
+    the default layout is recognizable across platforms by its final
+    ``beyin-v3/<vault-key>`` suffix under an OS default state directory (``AppData/Local``,
+    ``.local/state``, or ``Library/Application Support``).
+    Do not reinterpret explicit custom state paths or MSIX package paths.
     """
-    vault, pinned = Path(vault).resolve(), Path(pinned).expanduser()
+    vault = Path(vault).resolve()
     expected = default_state(vault).resolve()
-    if not pinned.is_absolute() or _in_package_container(str(pinned)):
-        return pinned
-    candidate = [part.casefold() for part in pinned.parts[-3:]]
-    default = [part.casefold() for part in expected.parts[-3:]]
-    if candidate == default and os.path.normcase(str(pinned)) != os.path.normcase(str(expected)):
+    pinned_str = str(pinned).strip()
+    if not pinned_str:
         return expected
-    return pinned
+    parts = [part.lower() for part in pinned_str.replace("\\", "/").split("/") if part]
+    if _in_package_container(pinned_str):
+        return Path(pinned).expanduser().resolve()
+
+    expected_parts = [part.lower() for part in str(expected).replace("\\", "/").split("/") if part]
+    expected_key = expected_parts[-1]
+    default_parents = {"local", "state", "application support"}
+    if len(expected_parts) >= 3:
+        default_parents.add(expected_parts[-3])
+
+    if (len(parts) >= 3 and
+            parts[-1] == expected_key and
+            parts[-2] == "beyin-v3" and
+            parts[-3] in default_parents):
+        return expected
+
+    if not Path(pinned).expanduser().is_absolute():
+        if re.match(r"^[a-zA-Z]:[/\\]", pinned_str):
+            return expected
+        if sys.platform == "win32" and pinned_str.startswith(("/", "\\")):
+            return expected
+
+    return Path(pinned).expanduser().resolve()
 
 
 def _in_package_container(pinned: str) -> bool:

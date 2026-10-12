@@ -59,11 +59,11 @@ yazar ([#249](https://github.com/avenoxai/avenoxbeyin/issues/249)). 3.8.1 ve ön
 kurucusunu çalıştır (`python3 scripts/install_v3.py --vault "<vault>"`; bu makinede özel
 state kullandıysan `--state` ile onu ver), sonra dosyayı `.gitignore`'a ekle.
 
-Aynı işletim sisteminde başka bir kullanıcıdan gelen varsayılan Windows state yolu da
-(`C:\Users\<eski-kullanıcı>\AppData\Local\beyin-v3\<vault-hash>`) yabancı pin sayılır;
-CLI ve lifecycle hook bu makinenin `%LOCALAPPDATA%` altındaki aynı hash'li state'ine geri
-döner. Özel `--state` dizinleri bu sezgisel eşlemeden etkilenmez; taşınan vault'ta
-`doctor` ile pin ve etkin state'i ayrıca doğrula.
+Aynı veya farklı işletim sisteminden (Windows, Linux, macOS) ya da başka bir kullanıcı hesabından
+gelen varsayılan state yolları (`AppData/Local/beyin-v3/<vault-hash>`, `.local/state/beyin-v3/<vault-hash>`
+veya `Library/Application Support/beyin-v3/<vault-hash>`) yabancı pin sayılır; CLI ve lifecycle hook bu
+makinenin ve kullanıcının yerel varsayılan state dizinine geri döner. Özel `--state` dizinleri bu
+sezgisel eşlemeden etkilenmez; taşınan vault'ta `doctor` ile pin ve etkin state'i ayrıca doğrula.
 
 `companion-compact` kilit dosyasını companion klasöründe kalıcı bırakır. Dosyanın
 silinmemesi, POSIX üzerinde kilit tutulurken aynı yolda yeni bir inode açılmasını önler.

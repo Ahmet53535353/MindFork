@@ -29,6 +29,12 @@ REJECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::
 RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")
 
 
+def _in_package_container(pinned: str) -> bool:
+    """True when a pinned path runs through an MSIX package container."""
+    parts = [part.lower() for part in pinned.replace("\\", "/").split("/") if part]
+    return "packages" in parts and "localcache" in parts[parts.index("packages") + 1:]
+
+
 def default_state(vault: Path) -> Path:
     """Keep mutable state outside the vault, separated by canonical vault path."""
     if sys.platform == "win32":
@@ -42,16 +48,35 @@ def default_state(vault: Path) -> Path:
 
 
 def resolve_state(vault: Path, pinned: Path) -> Path:
-    """Use this machine's default state when a synced pin belongs to another user."""
+    """Use this machine's default state when a synced pin belongs to another user or OS."""
+    vault = Path(vault).resolve()
     expected = default_state(vault).resolve()
-    pinned = Path(pinned).expanduser()
-    if not pinned.is_absolute() or "packages" in [part.casefold() for part in pinned.parts]:
-        return pinned
-    if ([part.casefold() for part in pinned.parts[-3:]] ==
-            [part.casefold() for part in expected.parts[-3:]] and
-            os.path.normcase(str(pinned)) != os.path.normcase(str(expected))):
+    pinned_str = str(pinned).strip()
+    if not pinned_str:
         return expected
-    return pinned
+    parts = [part.lower() for part in pinned_str.replace("\\", "/").split("/") if part]
+    if _in_package_container(pinned_str):
+        return Path(pinned).expanduser().resolve()
+
+    expected_parts = [part.lower() for part in str(expected).replace("\\", "/").split("/") if part]
+    expected_key = expected_parts[-1]
+    default_parents = {"local", "state", "application support"}
+    if len(expected_parts) >= 3:
+        default_parents.add(expected_parts[-3])
+
+    if (len(parts) >= 3 and
+            parts[-1] == expected_key and
+            parts[-2] == "beyin-v3" and
+            parts[-3] in default_parents):
+        return expected
+
+    if not Path(pinned).expanduser().is_absolute():
+        if re.match(r"^[a-zA-Z]:[/\\]", pinned_str):
+            return expected
+        if sys.platform == "win32" and pinned_str.startswith(("/", "\\")):
+            return expected
+
+    return Path(pinned).expanduser().resolve()
 
 
 class RevisionConflict(ValueError):

@@ -142,6 +142,29 @@ class CrossPlatformPinTest(unittest.TestCase):
         self.assertEqual(Path(location['effective_state']).resolve(), expected.resolve())
         self.assertIn('effective_state_differs', codes(location))
 
+    def test_resolve_state_across_linux_macos_and_windows(self):
+        spec = importlib.util.spec_from_file_location('v3_cli_entry_test', ROOT / 'scripts/beyin_v3.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        expected = cli.default_state(self.vault).resolve()
+        key = expected.name
+
+        # Foreign Windows pin
+        win_pin = Path(r"C:\Users\other\AppData\Local\beyin-v3") / key
+        self.assertEqual(cli.resolve_state(self.vault, win_pin), expected)
+
+        # Foreign Linux pin
+        linux_pin = Path(f"/home/other/.local/state/beyin-v3/{key}")
+        self.assertEqual(cli.resolve_state(self.vault, linux_pin), expected)
+
+        # Foreign macOS pin
+        mac_pin = Path(f"/Users/other/Library/Application Support/beyin-v3/{key}")
+        self.assertEqual(cli.resolve_state(self.vault, mac_pin), expected)
+
+        # Explicit custom state is preserved
+        custom = (self.root / "custom-state").resolve()
+        self.assertEqual(cli.resolve_state(self.vault, custom), custom)
+
     def test_only_the_pin_may_differ(self):
         spec = importlib.util.spec_from_file_location('install_v3_cross_pin', ROOT / 'scripts/install_v3.py')
         installer = importlib.util.module_from_spec(spec)
