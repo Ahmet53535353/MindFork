@@ -205,6 +205,12 @@ def human_result(result, command, installed_version=None):
                 lines.append('    Yeni: ' + plain_text(change.get('new_summary', change.get('new_command', ''))[:80]))
         lines.append('Eski komutlar bu makinenin Python ve vault yollariyla degistirildi.')
         return '\n'.join(lines)
+    if command == 'triage':
+        try:
+            from beyin_v3_triage import format_human
+            return format_human(result)
+        except Exception:
+            return json.dumps(result, ensure_ascii=False, indent=2)
     if command == 'jev':
         features = result.get('features', {})
         provider = result.get('provider')
