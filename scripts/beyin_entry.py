@@ -463,6 +463,20 @@ def human_result(result, command, installed_version=None):
         if paths.get('status') == 'stale':
             lines.append('Hook yollari baska bir kuruluma isaret ediyor (' + str(len(paths.get('stale', []))) + ' eski yol). ' +
                          'Guncellemek icin: ' + ('py -3' if sys.platform == 'win32' else 'python3') + ' beyin.py hook-reconcile')
+        scopes = result.get('project_scopes') or {}
+        if scopes.get('status') == 'error':
+            lines.append('Proje kapsamlari (.beyin-projects.json) gecersiz: ' + str(scopes.get('error', 'hata')))
+        elif scopes.get('status') == 'warning':
+            details = []
+            if scopes.get('missing_folders'):
+                details.append('kasada bulunamayan klasorler: ' + ', '.join(plain_text(f) for f in scopes['missing_folders']))
+            if scopes.get('duplicate_folders'):
+                details.append('birden fazla projeye atanan klasorler: ' + ', '.join(plain_text(f) for f in scopes['duplicate_folders']))
+            if scopes.get('invalid_entries'):
+                details.append('gecersiz girdiler: ' + ', '.join(plain_text(f) for f in scopes['invalid_entries']))
+            lines.append('Proje kapsamlari (.beyin-projects.json) dikkat gerektiriyor: ' + '; '.join(details) +
+                         '. Duzenlemek veya temizlemek icin: ' + ('py -3' if sys.platform == 'win32' else 'python3') +
+                         ' beyin.py project-scope prune')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))
@@ -496,6 +510,31 @@ def human_result(result, command, installed_version=None):
     elif command == 'context':
         records = result.get('records', [])
         message = '\n\n'.join(str(r.get('source', '')) + '\n' + str(r.get('text', '')) for r in records) or 'Eslesen kaynak bulunamadi.'
+    elif command == 'project-scope':
+        action = result.get('action', 'list')
+        if action == 'list':
+            if result.get('status') == 'absent':
+                return 'Proje kapsamlari (.beyin-projects.json) bulunamadi.'
+            lines = ['Proje kapsamlari (.beyin-projects.json):']
+            folders = result.get('folders', {})
+            missing = set(result.get('missing_folders', []))
+            for f, p in sorted(folders.items()):
+                extra = ' (kasada bulunamadi)' if f in missing else ''
+                lines.append('  ' + plain_text(f) + ' -> ' + plain_text(p) + extra)
+            for f in result.get('missing_folders', []):
+                if f not in folders:
+                    lines.append('  ' + plain_text(f) + ' (kasada bulunamadi)')
+            lines.append('  shared_unscoped: ' + ('acik' if result.get('shared_unscoped') else 'kapali'))
+            return '\n'.join(lines)
+        elif action == 'add':
+            return 'Klasor proje kapsamina eklendi: ' + plain_text(result.get('folder', '')) + ' -> ' + plain_text(result.get('project', ''))
+        elif action == 'remove':
+            return 'Klasor proje kapsamindan cikarildi: ' + plain_text(result.get('folder', ''))
+        elif action == 'prune':
+            pruned = result.get('pruned', [])
+            if not pruned:
+                return 'Temizlenecek eksik klasor bulunmadi; tum klasorler kasada mevcut.'
+            return 'Kasada bulunmayan ' + str(len(pruned)) + ' klasor kapsamdan cikarildi: ' + ', '.join(plain_text(f) for f in pruned)
     else:
         message = 'Islem sonucu: ' + str(status or 'tamamlandi')
         if command == 'sync':

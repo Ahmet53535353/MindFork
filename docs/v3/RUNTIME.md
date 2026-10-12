@@ -64,3 +64,14 @@ V3 writes exclusively to its explicit managed vault files:
 - Companion instruction blocks: `AGENTS.md`, `CLAUDE.md`.
 
 All other paths belong to the user. In particular, `.brain/` and `custom/` directories are reserved as an untouched, unmanaged user layer. Installer, updater, and `doctor` checks never treat files under `.brain/` or `custom/` as conflicts or unmanaged system intrusions.
+
+## Proje klasörü kapsamlarını yönetme
+
+`.beyin-projects.json` içindeki bulunamayan klasörler uyarı ve doctor tanısı üretir; diğer
+projelerin sorguları devam eder. Eksik klasör eşlemesi eski `--no-sync` indeks satırlarının
+başka projelere ortak not gibi açılmaması için kapsam sınırı olarak korunur.
+
+`project-scope list` yalnız okur. `project-scope add --folder "Projeler/Deneme" --project deneme`,
+`project-scope remove --folder "Projeler/Deneme"` ve `project-scope prune` açıkça kapsam
+dosyasını düzenler. `prune` yalnız artık bulunamayan klasör girdilerini çıkarır. Bozuk
+veya symlink yapılandırma üzerine yazılmaz; önce dosyayı onar.

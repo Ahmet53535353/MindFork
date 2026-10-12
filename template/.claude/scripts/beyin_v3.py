@@ -306,9 +306,6 @@ def _scope_path(value):
 
 
 def _scope_key(value):
-    # macOS and Windows vaults are case-insensitive and macOS may store names decomposed
-    # (NFD): a folder typed as "projeler/arşiv" must still claim "Projeler/Arşiv", or its
-    # notes fall through to the shared scope of every project.
     return unicodedata.normalize("NFC", value.replace("\\", "/")).casefold()
 
 
@@ -338,6 +335,7 @@ def read_project_scopes(vault_root):
     folders maps a vault-relative folder to a project; a record's own non-empty project
     field wins. shared_unscoped lets a project query also see records no folder or field
     assigns to any project. Another project's records never enter a project's scope.
+    Missing folders are skipped with a warning so unrelated projects remain fully functional (#317).
     """
     path = Path(vault_root) / PROJECT_SCOPES_FILE
     if path.is_symlink():
@@ -360,7 +358,9 @@ def read_project_scopes(vault_root):
             raise ValueError("project scope names must be non-empty strings")
         folder = _scope_path(folder)
         if not _scope_folder_exists(vault_root, folder):
-            raise ValueError("project scope folder not found in the vault: " + folder)
+            print(f"Warning: project scope folder not found in the vault: {folder}", file=sys.stderr)
+            # Keep the boundary for stale indexed rows used by explicit --no-sync.
+            # Dropping it would expose the other project's notes as shared_unscoped.
         key = _scope_key(folder)
         if mapped.get(key, project) != project:
             raise ValueError("project scope folder is assigned twice: " + folder)
