@@ -1,5 +1,6 @@
 """Receipt field flags and JSON modes through the installed public entry point."""
 from contextlib import closing
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -188,6 +189,32 @@ class ReceiptCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8'))
         for flag in ('--file', '--harness', '--event-id', '--summary', '--summary-file', '--ref', '--link', '--session'):
             self.assertIn(flag, result.stdout.decode('utf-8'))
+
+    def test_synced_links_have_the_same_secret_and_count_gate(self):
+        token = 'github_pat_' + 'A1b2C3d4E5' * 4
+        cases = [
+            ['https://example.com/?token=' + token],
+            ['https://example.com/?token=' + token.replace('_', '%5F')],
+            ['https://example.com/' + str(n) for n in range(21)],
+        ]
+        receipts = self.vault / 'receipts'
+        receipts.mkdir(exist_ok=True)
+        for index, links in enumerate(cases):
+            ident = 'remote-unsafe-' + str(index)
+            path = receipts / (hashlib.sha256(ident.encode()).hexdigest() + '.md')
+            data = {'kind': 'receipt', 'event_id': ident, 'harness': 'codex', 'refs': ['notes/ilk.md'],
+                    'links': links, 'visibility': 'internal', 'created_at': '2026-10-12T12:00:00+00:00'}
+            path.write_text('---\n' + json.dumps(data) + '\n---\nRemote outcome\n', encoding='utf-8')
+        before = snapshot(receipts)
+        result = run_python(self.vault / 'beyin.py', ['sync'], self.vault, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['status'], 'degraded')
+        self.assertEqual(snapshot(receipts), before)
+        with closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM receipts').fetchone()[0], 0)
+        recap = run_python(self.vault / 'beyin.py', ['recap'], self.vault, self.env)
+        self.assertNotIn(token.encode(), recap.stdout)
+        self.assertEqual(json.loads(recap.stdout)['items'], [])
 
 
 if __name__ == '__main__':

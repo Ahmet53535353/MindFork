@@ -833,8 +833,9 @@ class SyncEngine:
         event = {'event_id': event_id, 'summary': summary, 'refs': [Path(ref).as_posix() for ref in refs], 'harness': harness}
         links = metadata.get('links')
         if links is not None:
-            if not isinstance(links, list) or not links or not all(isinstance(link, str) and _plain_link(link) for link in links):
+            if not isinstance(links, list) or not links:
                 raise ValueError('invalid receipt links')
+            self._links(links)  # Synced/restored receipts obey the same unconditional secret gate.
             event['links'] = links
         created_at, session = metadata.get('created_at'), metadata.get('session')
         if created_at is not None:
@@ -1176,7 +1177,8 @@ class SyncEngine:
         for link in links:
             if not isinstance(link, str) or not _plain_link(link):
                 raise ValueError('link must be an http(s) URL without spaces or credentials')
-            if redact_secrets(link, self.state)[1]:
+            import urllib.parse
+            if redact_secrets(urllib.parse.unquote(link), self.state)[1]:
                 raise ValueError('link contains a secret')
             if link not in kept:
                 kept.append(link)
