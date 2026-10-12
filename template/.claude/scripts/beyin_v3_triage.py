@@ -142,7 +142,7 @@ def _find_top_matching_dirs(vault: Path, matcher, extra_exact: tuple[str, ...] =
                 resolved = entry.resolve()
                 if resolved not in seen:
                     seen.add(resolved)
-                    matched.append(entry)
+                    matched.append(resolved)
             except OSError:
                 pass
     return matched
@@ -152,6 +152,8 @@ def scan_inbox(vault: Path, now: float) -> dict:
     vault = Path(vault).resolve()
     items = []
     companions = companion_names(vault)
+    seen_dirs = set()
+    inbox_folders = []
 
     def is_inbox(name: str, folded: str) -> bool:
         if name in companions or sensitive_excluded(name):
@@ -162,13 +164,26 @@ def scan_inbox(vault: Path, now: float) -> dict:
             or any(w in folded for w in ('inbox', 'gelenkutusu', 'gelenkutum'))
         )
 
-    inbox_folders = _find_top_matching_dirs(vault, is_inbox, extra_exact=('000-inbox', 'sources', 'kaynaklar'))
+    for folder in _find_top_matching_dirs(vault, is_inbox, extra_exact=('000-inbox', 'sources', 'kaynaklar')):
+        try:
+            res = folder.resolve()
+            if res not in seen_dirs:
+                seen_dirs.add(res)
+                inbox_folders.append(res)
+        except OSError:
+            pass
 
     # If vault has a default starter folder not matched yet:
     for starter in ('📥 000-Inbox', '000-Inbox', 'sources', 'Sources', 'Kaynaklar'):
         folder = vault / starter
-        if folder.is_dir() and not folder.is_symlink() and folder not in inbox_folders:
-            inbox_folders.append(folder)
+        if folder.is_dir() and not folder.is_symlink():
+            try:
+                res = folder.resolve()
+                if res not in seen_dirs:
+                    seen_dirs.add(res)
+                    inbox_folders.append(res)
+            except OSError:
+                pass
 
     for folder in inbox_folders:
         for root, dirs, files in os.walk(folder):
@@ -223,15 +238,31 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
     vault = Path(vault).resolve()
     open_tasks = []
     stale_tasks = []
+    seen_dirs = set()
+    task_folders = []
 
     def is_task_dir(name: str, folded: str) -> bool:
         return 'task' in folded or 'gorev' in folded
 
-    task_folders = _find_top_matching_dirs(vault, is_task_dir, extra_exact=('tasks', '500-tasks', 'gorevler'))
+    for folder in _find_top_matching_dirs(vault, is_task_dir, extra_exact=('tasks', '500-tasks', 'gorevler')):
+        try:
+            res = folder.resolve()
+            if res not in seen_dirs:
+                seen_dirs.add(res)
+                task_folders.append(res)
+        except OSError:
+            pass
+
     for starter in ('tasks', 'Tasks', '500-Tasks', 'Görevler', 'Gorevler', '✅ 500-Tasks'):
         f = vault / starter
-        if f.is_dir() and not f.is_symlink() and f not in task_folders:
-            task_folders.append(f)
+        if f.is_dir() and not f.is_symlink():
+            try:
+                res = f.resolve()
+                if res not in seen_dirs:
+                    seen_dirs.add(res)
+                    task_folders.append(res)
+            except OSError:
+                pass
 
     for folder in task_folders:
         for root, dirs, files in os.walk(folder):
@@ -304,18 +335,34 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
 def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict:
     vault = Path(vault).resolve()
     recent_items = []
+    seen_dirs = set()
+    knowledge_folders = []
 
     def is_knowledge_dir(name: str, folded: str) -> bool:
         return 'knowledge' in folded or 'bilgi' in folded or 'decision' in folded or 'karar' in folded
 
-    knowledge_folders = _find_top_matching_dirs(
+    for folder in _find_top_matching_dirs(
         vault, is_knowledge_dir,
         extra_exact=('knowledge', '500-knowledge', 'decisions', 'bilgiler', 'kararlar')
-    )
+    ):
+        try:
+            res = folder.resolve()
+            if res not in seen_dirs:
+                seen_dirs.add(res)
+                knowledge_folders.append(res)
+        except OSError:
+            pass
+
     for starter in ('knowledge', 'Knowledge', '🧠 500-Knowledge', '500-Knowledge', 'decisions', 'Decisions'):
         f = vault / starter
-        if f.is_dir() and not f.is_symlink() and f not in knowledge_folders:
-            knowledge_folders.append(f)
+        if f.is_dir() and not f.is_symlink():
+            try:
+                res = f.resolve()
+                if res not in seen_dirs:
+                    seen_dirs.add(res)
+                    knowledge_folders.append(res)
+            except OSError:
+                pass
 
     for folder in knowledge_folders:
         for root, dirs, files in os.walk(folder):
@@ -409,7 +456,38 @@ def scan_companion(vault: Path, state: Path | None = None, now: float | None = N
         if threads_file.is_file():
             try:
                 text = threads_file.read_text(encoding='utf-8', errors='replace')
-                info['active_threads'] = len(re.findall(r'(?i)\*\*status:\*\*\s*active|durum:\s*aktif', text))
+                lines = text.splitlines()
+                in_active = False
+                has_active_section = False
+                active_lines = []
+                for line in lines:
+                    sline = line.strip()
+                    if re.match(r'(?i)^##\s+(?:active|aktif|acik|açık)', sline):
+                        in_active = True
+                        has_active_section = True
+                        continue
+                    elif in_active and re.match(r'(?i)^##\s+(?:closed|kapan|onceki|önceki|arsiv|arşiv)', sline):
+                        in_active = False
+                        break
+                    elif in_active:
+                        active_lines.append(line)
+
+                if not has_active_section:
+                    for line in lines:
+                        sline = line.strip()
+                        if re.match(r'(?i)^##\s+(?:closed|kapan|onceki|önceki|arsiv|arşiv)', sline):
+                            break
+                        active_lines.append(line)
+
+                active_text = '\n'.join(active_lines)
+                headers = re.findall(r'(?m)^###\s+', active_text)
+                if headers:
+                    info['active_threads'] = len(headers)
+                else:
+                    info['active_threads'] = len(re.findall(
+                        r'(?i)\*\*(?:status|durum):\*\*[ \t]*(?:[^\w\n]*)[ \t]*(?:active|aktif)',
+                        active_text or text
+                    ))
             except OSError:
                 pass
 
