@@ -117,7 +117,9 @@ def project_context(vault, state, project_id, project_name, budget=1200, today_i
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         summary = ''
         if {'receipt_checkpoints', 'receipts'} <= tables:
-            sessions = {row[0] for row in db.execute('SELECT session FROM receipt_checkpoints WHERE project_id=?', (project_id,))}
+            cols = {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}
+            sessions = ({row[0] for row in db.execute('SELECT session FROM receipt_checkpoints WHERE project_id=?', (project_id,))}
+                        if 'project_id' in cols else set())
             found = next(latest_receipts(db, vault, sessions), None) if sessions else None
             if found:
                 summary = _one_line(found[1]['summary'], 600)

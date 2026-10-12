@@ -446,6 +446,24 @@ class BridgeTest(unittest.TestCase):
             self.assertTrue(line.startswith('- TASK_'))
             self.assertIn(': Action', line)
 
+    def test_project_context_handles_legacy_schema_without_project_id_column(self):
+        engine = SyncEngine(self.vault, self.state)
+        engine.task_create('tasks/legacy_due.md', 'Body', {
+            'id': 'legacy_due', 'title': 'LEGACY_DUE_TASK', 'status': 'active',
+            'due_at': '2026-09-01', 'project': self.project.name, 'owner': 'user'
+        })
+        engine.sync()
+        import sqlite3
+        db = sqlite3.connect(self.state / 'memory.sqlite3')
+        try:
+            db.execute('DROP TABLE IF EXISTS receipt_checkpoints')
+            db.execute('CREATE TABLE receipt_checkpoints(harness TEXT, session TEXT, at REAL, turn_at REAL DEFAULT 0, PRIMARY KEY(harness,session))')
+        finally:
+            db.close()
+        ctx = bridge.project_context(self.vault, self.state, 'test-id', self.project.name, budget=1200)
+        self.assertIn('Project context (' + self.project.name + '):', ctx)
+        self.assertIn('- LEGACY_DUE_TASK', ctx)
+
     def raw(self, data):
         command = [sys.executable, str(SCRIPTS / 'beyin_v3_bridge.py'), '--vault', str(self.vault), '--state',
                    str(self.state), '--harness', 'claude', '--project-root', str(self.root / 'Projects')]
