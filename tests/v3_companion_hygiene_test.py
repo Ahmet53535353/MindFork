@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unicodedata
 from unittest import mock
 
 from v3_package_helpers import inherited_env
@@ -600,7 +601,9 @@ class CompactionPlanTest(unittest.TestCase):
             self.assertNotIn(old, result['live'])
         self.assertEqual(compact_module.stamp('## 4→5 Ekim 2026: x', heading=True), ('2026-10-05', ''))
         self.assertEqual(compact_module.stamp('- 9 MAYIS 2026 14:05 not'), ('2026-05-09', '14:05'))
-        for undated in ('## 31 Şubat 2026: x', '**Durum:** 12 Ekim 2026', '## Kasım planı 2026', '## 12 Ekimde 2026'):
+        self.assertEqual(compact_module.stamp('## 12 EKİM 2026: x', heading=True), ('2026-10-12', ''))
+        self.assertEqual(compact_module.stamp(unicodedata.normalize('NFD', '## 12 Şubat 2026: x'), heading=True), ('2026-02-12', ''))
+        for undated in ('## 2026-02-31: x', '## 31 Şubat 2026: x', '**Durum:** 12 Ekim 2026', '## Kasım planı 2026', '## 12 Ekimde 2026'):
             self.assertIsNone(compact_module.stamp(undated, heading=undated.startswith('#')), undated)
 
     def test_thread_fields_with_dates_code_fences_and_crlf_stay(self):

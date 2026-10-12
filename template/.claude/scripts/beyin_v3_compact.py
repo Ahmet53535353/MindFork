@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import time
+import unicodedata
 
 from beyin_v3_companion import LIMITS, directory, read_limits
 
@@ -57,10 +58,11 @@ class _LockError(Exception):
 
 def _iso(match):
     """`2026-10-12` for a DATE match, written-out dates included; None for an impossible day."""
-    if not match[1]:
-        return match[0]
     try:
-        return datetime(int(match[3]), MONTHS[match[2].lower()], int(match[1])).strftime('%Y-%m-%d')
+        if not match[1]:
+            return datetime.strptime(match[0], '%Y-%m-%d').strftime('%Y-%m-%d')
+        month = match[2].replace('İ', 'i').lower()
+        return datetime(int(match[3]), MONTHS[month], int(match[1])).strftime('%Y-%m-%d')
     except (KeyError, ValueError):
         return None
 
@@ -72,7 +74,7 @@ def stamp(line, heading=False):
     outside headings, before any colon: `**Status:** active, 2026-10-01` is a field,
     `2026-09-24 14:05: ...` and `12 Ekim 2026: ...` are entries.
     """
-    text = line.strip()
+    text = unicodedata.normalize('NFC', line.strip())
     date = DATE.search(text, 0, 48)
     iso = _iso(date) if date else None
     if not iso:
@@ -155,7 +157,7 @@ def blocks(lines, name):
         if in_history:
             continue
         key = stamp(bare) if bare.strip() and not card else None
-        if key and (boundary or ITEM.match(bare) or LEADING.match(bare)):
+        if key and (boundary or ITEM.match(bare) or LEADING.match(unicodedata.normalize('NFC', bare))):
             begin('entry', index, key)
         boundary = not bare.strip()
     found[-1]['end'] = len(lines)
