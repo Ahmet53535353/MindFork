@@ -1,5 +1,6 @@
 """Person notes (`kind: person`): the beyin skill's convention must survive sync and retrieval."""
 import json
+import zipfile
 from pathlib import Path
 import re
 import sys
@@ -9,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 
+from v3_package_helpers import build_package, inherited_env, run_python
 from beyin_v3_sync import SyncEngine, parse
 
 TEMPLATE = ROOT / 'template/📋 Templates/Kisi.md'
@@ -23,7 +25,9 @@ class PersonNotesTest(unittest.TestCase):
         self.vault = root / 'vault'
         self.vault.mkdir()
         (root / 'state').mkdir()
-        self.engine = SyncEngine(self.vault, root / 'state')
+        self.state = root / 'state'
+        self.engine = SyncEngine(self.vault, self.state)
+        self.addCleanup(self.engine.store.close)
 
     def create(self, source, text, metadata):
         result = self.engine.note_create(source, text, metadata=metadata)
@@ -66,6 +70,52 @@ class PersonNotesTest(unittest.TestCase):
         self.assertEqual(set(metadata['facts']), {'kurum', 'rol', 'iliski', 'son_temas'})
         for heading in ('## Beyan', '## Çıkarım (onay bekliyor)', '## Temaslar', '## Kaynaklar'):
             self.assertIn(heading, body)
+
+    def test_release_installs_user_owned_template_and_rollback_preserves_edits(self):
+        root = Path(self.tmp.name)
+        env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1')
+        package = build_package(root / 'release.zip', '3.0.1', env)
+        extracted = root / 'package'
+        with zipfile.ZipFile(package) as archive:
+            self.assertNotIn('template/📋 Templates/Kisi.md', archive.namelist())
+            archive.extractall(extracted)
+        result = run_python(extracted / 'scripts/install_v3.py',
+                            ['--vault', self.vault, '--state', self.state], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installed = self.vault / '📋 Templates/Kisi.md'
+        self.assertEqual(installed.read_bytes(), TEMPLATE.read_bytes())
+        manifest = json.loads((self.state / 'v3-install.json').read_text(encoding='utf-8'))
+        self.assertNotIn('📋 Templates/Kisi.md', manifest['files'])
+        installed.write_text('USER_TEMPLATE_EDIT', encoding='utf-8')
+        result = run_python(self.vault / 'beyin.py', ['rollback'], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed.read_text(encoding='utf-8'), 'USER_TEMPLATE_EDIT')
+        result = run_python(extracted / 'scripts/install_v3.py',
+                            ['--vault', self.vault, '--state', self.state], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed.read_text(encoding='utf-8'), 'USER_TEMPLATE_EDIT')
+
+    def test_package_update_seeds_missing_template_and_preserves_user_edits_on_rollback(self):
+        root = Path(self.tmp.name)
+        env = inherited_env(BEYIN_V3_NO_SPAWN='1', PYTHONDONTWRITEBYTECODE='1')
+        first = build_package(root / 'old.zip', '3.0.1', env)
+        extracted = root / 'old'
+        with zipfile.ZipFile(first) as archive:
+            archive.extractall(extracted)
+        result = run_python(extracted / 'scripts/install_v3.py',
+                            ['--vault', self.vault, '--state', self.state], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installed = self.vault / '📋 Templates/Kisi.md'
+        installed.unlink()  # Older installations do not have this optional note template.
+        package = build_package(root / 'new.zip', '3.0.2', env)
+        result = run_python(self.vault / 'beyin.py', ['update', '--package', package], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed.read_bytes(), TEMPLATE.read_bytes())
+        installed.write_text('USER_TEMPLATE_AFTER_UPDATE', encoding='utf-8')
+        result = run_python(self.vault / 'beyin.py', ['rollback'], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(installed.read_text(encoding='utf-8'), 'USER_TEMPLATE_AFTER_UPDATE')
+        self.assertEqual((self.vault / '.beyin-version').read_text(encoding='utf-8').strip(), '3.0.1')
 
     def test_skill_example_is_valid_note_create_json(self):
         skill = SKILL.read_text(encoding='utf-8')

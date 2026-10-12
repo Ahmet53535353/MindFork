@@ -48,6 +48,41 @@ WINDOWS_STOCK_DOCTOR_HASH = "4b0e9aeae1067ae084380f7f179f12b9090213f3990c2973adb
 RETIRED_STUB = b"# BEYIN_V3_LEGACY_RETIRED: canonical source runtime owns new outcomes.\n"
 
 
+# User-owned starter embedded in an already-allowed package file. Old V3 updaters
+# accept only runtime/installer payloads, so adding a standalone template ZIP member
+# would prevent existing installations from updating.
+PERSON_TEMPLATE_PATH = "📋 Templates/Kisi.md"
+PERSON_TEMPLATE = """---
+# Kişi notu şablonu. Yeni kişi notunu notes/kisiler/<ad-soyad>.md olarak aç ve
+# aşağıdaki satırın başındaki "# " işaretini kaldır (şablonun kendisi kişi sayılmasın diye kapalı).
+# kind: person
+title:
+aliases:
+facts:
+  kurum:
+  rol:
+  iliski:
+  son_temas:
+visibility: internal
+created: {{TODAY}}
+modified: {{TODAY}}
+---
+# 
+
+## Beyan
+<!-- Kullanıcının doğrudan söyledikleri, tarihli: "2026-10-12 (kullanıcı): ..." -->
+
+## Çıkarım (onay bekliyor)
+<!-- Ajanın tahmini. Kullanıcı onaylarsa Beyan'a taşınır, reddederse silinmez: "reddedildi" diye işaretlenir. -->
+
+## Temaslar
+<!-- Tarih, kanal, kısa özet. -->
+
+## Kaynaklar
+<!-- Bilginin geldiği not, receipt veya açık kaynak bağlantısı. -->
+"""
+
+
 def managed_handler(handler, previous, kept=()):
     command = handler.get("command", "")
     serialized = command + " " + " ".join(str(arg) for arg in handler.get("args", []))
@@ -346,6 +381,10 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         if source.exists():
             add(".agents/skills/" + name + "/SKILL.md", source.read_bytes())
             add(".claude/skills/" + name + "/SKILL.md", source.read_bytes())
+    # Seed once; a customized template is never a managed upgrade target.
+    person_template = vault / PERSON_TEMPLATE_PATH
+    if not person_template.exists() and not person_template.is_symlink():
+        add(PERSON_TEMPLATE_PATH, PERSON_TEMPLATE.encode("utf-8"))
     launcher = ROOT / "template/.claude/scripts/beyin_v3_launchers.py"
     if launcher.exists():
         spec = importlib.util.spec_from_file_location("beyin_release_launchers", launcher)
@@ -584,6 +623,9 @@ not knowledge synthesis.
         else:
             preserved_excluded.append(name)
     for name, content in planned.items():
+        if name == PERSON_TEMPLATE_PATH:
+            next_manifest["files"].pop(name, None)
+            continue
         if name in removed: continue
         if "agents_block" in user_excluded and name in ("AGENTS.md", "CLAUDE.md"): continue
         path = vault / name
