@@ -167,6 +167,8 @@ class ParallelSessionsTest(unittest.TestCase):
         self.assertEqual(self.cli('preferences')['parallel_sessions'], 'off')
         default = scenario()
         self.assertFalse(self.markers.exists(), 'default install writes no marker')
+        self.assertFalse((self.vault / '.presence').exists(), 'default off never writes synced presence')
+        self.assertFalse((self.state / 'parallel-presence-device.json').exists())
         self.cli('preferences', '--parallel-sessions', 'off')
         self.assertEqual(json.loads((self.state / 'parallel-sessions.json').read_text()), {'schema': 1, 'enabled': False})
         self.assertEqual(scenario(), default)
@@ -395,6 +397,30 @@ class ParallelModuleTest(unittest.TestCase):
         for session in (None, '', 'unknown', 'x' * 513):
             self.assertEqual(self.module.touch(self.state, 'claude', session), '')
         self.assertFalse((self.state / 'session-markers').exists())
+
+    def test_devices_with_identical_state_paths_keep_remote_session(self):
+        vault = self.state / 'vault'
+        vault.mkdir()
+        state = self.state / 'device-state'
+        state.mkdir()
+        self.module.touch(state, 'claude', 'device-a-session', vault=vault)
+        device_a = self.module._state_key(state)
+        own_a = vault / '.presence' / (self.module.receipt_session('device-a-session') + '.json')
+        before = own_a.read_bytes()
+        # Two devices can share the same username, mount and vault pathname. Their
+        # independent runtime roots have different identity files, even at this spelling.
+        state.rename(self.state / 'saved-device-a')
+        state.mkdir()
+        notice = self.module.touch(state, 'codex', 'device-b-session', vault=vault)
+        self.assertNotEqual(device_a, self.module._state_key(state))
+        self.assertIn('#' + receipt_short('device-a-session'), notice)
+        self.assertEqual(own_a.read_bytes(), before)
+        self.assertEqual(self.module.doctor(state, vault=vault)['active'], 2)
+
+    def test_doctor_does_not_create_presence_identity(self):
+        self.module.doctor(self.state, vault=self.state)
+        self.assertFalse((self.state / 'parallel-presence-device.json').exists())
+        self.assertFalse((self.state / '.presence').exists())
 
 
 if __name__ == '__main__':

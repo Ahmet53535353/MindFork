@@ -196,3 +196,8 @@ Uyarıyı gördüysen:
    `python3 beyin.py sync` çalıştır; indeks Markdown'dan yeniden kurulur.
 
 Kontrol: `git check-attr text -- receipts/x.md` çıktısı `text: unset` olmalıdır.
+
+Presence eşitlemesi varsayılan olarak kapalıdır. Her cihazda `preferences --parallel-sessions on`
+ile açılır. Yerel `<state>/parallel-presence-device.json` dosyası rastgele bir cihaz kimliği
+tutar; iki cihaz aynı kullanıcı ve state yolunu kullansa da diğerinin açık kaydını silmez.
+Bu kimlik dosyasını vault ile eşitleme. `doctor` kimlik veya presence dosyası oluşturmaz.

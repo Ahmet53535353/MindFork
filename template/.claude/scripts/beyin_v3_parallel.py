@@ -13,10 +13,13 @@ error drops the line, never the hook. The doctor reads, never writes.
 """
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
 import time
+import re
+import uuid
 
 SETTINGS_FILE = 'parallel-sessions.json'
 MARKERS = 'session-markers'
@@ -124,8 +127,9 @@ def _load_presence(path):
             return None
         value = json.loads(raw)
         if (not isinstance(value, dict) or value.get('schema') != 1 or
-                not isinstance(value.get('session'), str) or len(value['session']) != 24 or
-                type(value.get('last_at')) not in (int, float)):
+                not isinstance(value.get('session'), str) or not re.fullmatch(r'[0-9a-f]{24}', value['session']) or
+                not isinstance(value.get('state'), str) or not re.fullmatch(r'[0-9a-f]{16,32}', value['state']) or
+                type(value.get('last_at')) not in (int, float) or not math.isfinite(value['last_at'])):
             return None
         return value
     except (OSError, ValueError, UnicodeDecodeError):
@@ -147,12 +151,32 @@ def line(others, now):
             '. Ayni dosyaya dokunmadan once diskten yeniden oku; commit oncesi git status.\n')
 
 
-def _state_key(state):
+def _state_key(state, create=False):
+    """A local identity, since two devices can use exactly the same state pathname.
+
+    Doctor only reads. Creation happens only on an enabled, real prompt; state is
+    machine-local and this file must stay out of the vault's sync.
+    """
+    path = Path(state) / 'parallel-presence-device.json'
+    if path.is_symlink():
+        return None
     try:
-        resolved = str(Path(state).resolve())
-    except OSError:
-        resolved = str(state)
-    return hashlib.sha256(resolved.encode()).hexdigest()[:16]
+        value = json.loads(path.read_text(encoding='utf-8'))
+        key = value.get('device') if isinstance(value, dict) else None
+        return key if isinstance(key, str) and re.fullmatch(r'[0-9a-f]{32}', key) else None
+    except FileNotFoundError:
+        if not create:
+            return None
+        key = uuid.uuid4().hex
+        try:
+            with path.open('x', encoding='utf-8') as out:
+                json.dump({'schema': 1, 'device': key}, out)
+                out.flush(); os.fsync(out.fileno())
+            return key
+        except FileExistsError:
+            return _state_key(state)
+    except (OSError, ValueError):
+        return None
 
 
 def touch(state, harness, session_id, now=None, vault=None):
@@ -169,13 +193,13 @@ def touch(state, harness, session_id, now=None, vault=None):
             return ''
         now = time.time() if now is None else now
         session_key = receipt_session(session_id)
-        current_state_key = _state_key(state)
+        current_state_key = _state_key(state, create=True) if vault is not None else None
         own = folder / name
         saved = None if own.is_symlink() else _load(own)
         announced = [key for key in (saved or {}).get('announced', []) if isinstance(key, str)][-MAX_MARKERS:]
 
         # Maintain vault/.presence/<session_key>.json for cross-machine awareness (#205)
-        pfolder = _presence_folder(vault, create=True) if vault is not None else None
+        pfolder = _presence_folder(vault, create=True) if vault is not None and current_state_key else None
         if pfolder is not None and session_key:
             pown = pfolder / f"{session_key}.json"
             psaved = None if pown.is_symlink() else _load_presence(pown)
@@ -241,7 +265,7 @@ def touch(state, harness, session_id, now=None, vault=None):
                                 continue
                             pmod = pentry.stat().st_mtime
                             pdata = _load_presence(pentry.path)
-                            if pdata is None:
+                            if pdata is None or pentry.name != pdata['session'] + '.json':
                                 continue
                             peer_session = pdata['session']
                             # If this presence file was written by this same machine/state:
@@ -253,7 +277,7 @@ def touch(state, harness, session_id, now=None, vault=None):
                                         pass
                                     continue
                             else:
-                                if now - pmod > MAX_AGE_SECONDS or now - pdata['last_at'] > ACTIVE_SECONDS:
+                                if now - pmod > MAX_AGE_SECONDS or not -60 <= now - pdata['last_at'] <= ACTIVE_SECONDS:
                                     if now - pmod > MAX_AGE_SECONDS or now - pdata['last_at'] > MAX_AGE_SECONDS:
                                         try:
                                             os.unlink(pentry.path)
