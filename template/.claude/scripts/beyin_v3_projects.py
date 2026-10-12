@@ -80,7 +80,7 @@ def read_project_scopes(vault_root):
                 sys.stderr.flush()
             except Exception:
                 pass
-            continue
+            # Retain the mapping so stale --no-sync rows never become shared notes.
         key = _scope_key(folder)
         if mapped.get(key, project) != project:
             raise ValueError("project scope folder is assigned twice: " + folder)
@@ -96,7 +96,7 @@ def read_project_scopes(vault_root):
 def check_project_scopes(vault_root):
     """Inspect .beyin-projects.json for doctor. Reads only local file and vault directory names."""
     path = Path(vault_root) / PROJECT_SCOPES_FILE
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return {"status": "absent", "folders": {}, "shared_unscoped": False,
                 "missing_folders": [], "duplicate_folders": [], "invalid_entries": [], "warnings": []}
     if path.is_symlink():
@@ -197,8 +197,22 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
         report["action"] = "list"
         return report
 
+    if path.is_symlink():
+        raise ValueError('project scopes must be a regular vault-local file')
+    if path.exists():
+        # Never replace malformed user configuration with an empty object.
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if (not isinstance(data, dict) or set(data) - {'folders', 'shared_unscoped'} or
+                not isinstance(data.get('folders', {}), dict) or
+                not isinstance(data.get('shared_unscoped', False), bool)):
+            raise ValueError('invalid project scopes configuration; preserve and repair it first')
+        for configured_folder, configured_project in data.get('folders', {}).items():
+            _scope_path(configured_folder)
+            if not isinstance(configured_project, str) or not configured_project.strip():
+                raise ValueError('project scope names must be non-empty strings')
+
     if action == "add":
-        if not folder or not project:
+        if not folder or not isinstance(project, str) or not project.strip():
             raise ValueError("project-scope add requires both --folder and --project")
         folder_norm = _scope_path(folder)
         if not _scope_folder_exists(vault_root, folder_norm):
@@ -214,6 +228,10 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
         folders = data.get("folders", {})
         if not isinstance(folders, dict):
             folders = {}
+        # An explicit add reassigns this folder's existing normalized spelling.
+        for existing in list(folders):
+            if _scope_key(existing) == _scope_key(folder_norm):
+                del folders[existing]
         folders[folder_norm] = project.strip()
         data["folders"] = folders
         if shared_unscoped is not None:

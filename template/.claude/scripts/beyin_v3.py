@@ -317,7 +317,8 @@ def read_project_scopes(vault_root):
         folder = _scope_path(folder)
         if not _scope_folder_exists(vault_root, folder):
             print(f"Warning: project scope folder not found in the vault: {folder}", file=sys.stderr)
-            continue
+            # Keep the boundary for stale indexed rows used by explicit --no-sync.
+            # Dropping it would expose the other project's notes as shared_unscoped.
         key = _scope_key(folder)
         if mapped.get(key, project) != project:
             raise ValueError("project scope folder is assigned twice: " + folder)

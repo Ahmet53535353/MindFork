@@ -1,13 +1,14 @@
 """Opt-in folder project scopes (.beyin-projects.json) for explicit-project gates."""
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
 import unicodedata
 import unittest
 from unittest.mock import patch
-from v3_package_helpers import clean_environ
+from v3_package_helpers import clean_environ, inherited_env
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
@@ -132,6 +133,50 @@ class ProjectScopesTest(unittest.TestCase):
         self.scopes('{broken')
         self.assertEqual(self.ids(None), ['archive', 'game', 'rules', 'tagged'])
         self.assertTrue(self.store.retrieve('kaynak notu', limit=10)['records'])
+
+    def test_missing_folder_keeps_stale_index_rows_out_of_shared_scope(self):
+        note = self.note('private-project', ARCHIVE + '/Plan.md')
+        self.note('game', GAME + '/Plan.md')
+        self.scopes({'folders': {ARCHIVE: 'arsiv', GAME: 'oyun'}, 'shared_unscoped': True})
+        (self.vault / ARCHIVE / 'Plan.md').unlink()
+        (self.vault / ARCHIVE).rmdir()
+        # Exercise actual persisted rows with the deleted folder, as --no-sync does.
+        self.assertEqual(self.ids('oyun'), ['game'])
+        import beyin_v3_projects as projects
+        self.assertIn((runtime._scope_key(ARCHIVE), 'arsiv'), projects.read_project_scopes(self.vault)['folders'])
+
+    def test_management_preserves_invalid_or_symlinked_user_configuration(self):
+        import beyin_v3_projects as projects
+        (self.vault / 'Projeler/Alpha').mkdir(parents=True)
+        path = self.vault / runtime.PROJECT_SCOPES_FILE
+        for raw in ('[]', '{"folders": []}', '{"shared_unscoped": "yes"}'):
+            path.write_text(raw, encoding='utf-8')
+            for action in ('add', 'remove', 'prune'):
+                with self.assertRaises(ValueError):
+                    projects.manage(self.vault, action, folder='Projeler/Alpha', project='alpha')
+                self.assertEqual(path.read_text(encoding='utf-8'), raw)
+        path.unlink()
+        outside = self.vault.parent / 'outside-scopes.json'
+        outside.write_text('{"folders": {}}', encoding='utf-8')
+        try:
+            path.symlink_to(outside)
+        except OSError:
+            return
+        with self.assertRaises(ValueError):
+            projects.manage(self.vault, 'add', folder='Projeler/Alpha', project='alpha')
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(outside.read_text(encoding='utf-8'), '{"folders": {}}')
+
+    def test_cli_scope_list_does_not_initialize_runtime(self):
+        state = self.vault.parent / 'uninitialized-runtime'
+        before = sorted(path.relative_to(self.vault).as_posix() for path in self.vault.rglob('*'))
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(state), 'project-scope', 'list'], env=inherited_env(),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['status'], 'absent')
+        self.assertFalse(state.exists())
+        self.assertEqual(before, sorted(path.relative_to(self.vault).as_posix() for path in self.vault.rglob('*')))
 
     def test_invalid_files_fail_closed_for_explicit_projects(self):
         self.vault_notes()
