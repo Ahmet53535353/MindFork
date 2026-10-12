@@ -39,6 +39,20 @@ def load_hook():
 
 
 class HookInstallerTest(unittest.TestCase):
+    def test_install_matches_direct_editor_tools_without_matching_shell_commands(self):
+        self.install()
+        for relative in ('.claude/settings.local.json', '.codex/hooks.json'):
+            config = json.loads((self.vault / relative).read_text(encoding='utf-8'))
+            groups = config['hooks']['PostToolUse']
+            owned = [group for group in groups if any('beyin_v3_hook.py' in decoded_command(h['command'])
+                                                     for h in group.get('hooks', []))]
+            self.assertEqual(len(owned), 1)
+            matcher = re.compile('^(?:' + owned[0]['matcher'] + ')$')
+            for tool in ('Edit', 'Write', 'apply_patch', 'MultiEdit', 'NotebookEdit'):
+                self.assertIsNotNone(matcher.fullmatch(tool))
+            for tool in ('Bash', 'exec_command', 'Read'):
+                self.assertIsNone(matcher.fullmatch(tool))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v3-hook-test-')
         self.addCleanup(self.tmp.cleanup)
