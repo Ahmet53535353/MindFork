@@ -30,7 +30,8 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
   parça Receipt session kimliğinin ilk 8 karakteri); aynı oturumdaki güncellemelerde yalnız kendi
   kartını baştan yeniden yaz, başka oturumların kartlarını ezme, dosyanın tamamını yeniden yazma.
   Kartta: ne yaptık, neden o kararı verdik, ne açık kaldı, sonraki somut adım, kaynak bağlantıları
-  ve belirsizlikler. Ayrıntısı receipt, `daily/` ve knowledge notlarında yaşar, gerekirse oraya tek
+  ve belirsizlikler. Kullanıcının verdiği kararı `**Karar:**` (ya da `**Karar (Ad):**`) ile başlayan
+  tek satıra yaz; kart arşive taşınırken bu satır `Kararlar.md`'ye kopyalanır. Ayrıntısı receipt, `daily/` ve knowledge notlarında yaşar, gerekirse oraya tek
   bağlantı ver. Varsa `## Previous`/`## Önceki` bölümüne ve arşiv bağlantısına dokunma; eski kartları
   yalnız `companion-compact` taşır. Varsayılan sınır 3.000 karakter.
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her

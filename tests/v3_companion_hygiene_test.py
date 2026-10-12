@@ -410,6 +410,56 @@ class HygieneCliTest(unittest.TestCase):
         archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
         self.assertIn('CARD_11', archive, 'oldest session card is safely preserved in archive')
 
+    def test_decision_lines_of_moved_cards_are_copied_to_kararlar_once(self):
+        moment = datetime(2026, 9, 26, 16, 30)
+        cards = ['# Son oturum\n\n']
+        for i in range(12):
+            stamp = (moment - timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M')
+            cards.append(f'## {stamp} · session_{i:02d} · a{i:07x}\n'
+                         f'**Karar (Umut):** DECISION_{i:02d} ayrı repo.\n'
+                         f'- **Decision:** EN_{i:02d} kept.\n'
+                         f'**Kararsız:** NOT_{i:02d}\n'
+                         f'```\n**Karar:** FENCED_{i:02d}\n```\n' + FILLER * 5 + '\n\n')
+        last = self.write('Last-Session.md', ''.join(cards))
+        decisions = self.directory / 'Kararlar.md'
+        planned = self.run_cli('companion-compact', '--dry-run')
+        self.assertGreater(planned['files']['Last-Session.md']['decisions_planned'], 0)
+        self.assertFalse(decisions.exists(), 'a dry run writes nothing')
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'compacted')
+        report = result['files']['Last-Session.md']
+        text = decisions.read_text(encoding='utf-8')
+        live = last.read_text(encoding='utf-8')
+        month = datetime.now(timezone.utc).strftime('%Y-%m')
+        archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
+        moved = [i for i in range(12) if f'DECISION_{i:02d}' in archive]
+        self.assertTrue(moved)
+        self.assertEqual(report['decisions_added'], 2 * len(moved))
+        self.assertIn('DECISION_00', live)
+        self.assertNotIn('DECISION_00', text, 'a card that stays keeps its decision in place only')
+        for i in moved:
+            stamp = (moment - timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M')
+            self.assertIn(f'## {stamp} · session_{i:02d} · a{i:07x}\n'
+                          f'Arşiv: `{COMPANION}/Arşiv/Last-Session-{month}.md`\n'
+                          f'**Karar (Umut):** DECISION_{i:02d} ayrı repo.\n'
+                          f'- **Decision:** EN_{i:02d} kept.\n', text)
+        for absent in ('NOT_', 'FENCED_'):
+            self.assertNotIn(absent, text)
+        # A later compaction adds only new decisions; nothing is copied twice.
+        last.write_bytes(live.replace('# Son oturum\n\n', '# Son oturum\n\n' + ''.join(
+            f'## 2026-09-27 {h:02d}:00 · yeni_{h} · b{h:07x}\n**Karar:** NEW_{h}\n' + FILLER * 5 + '\n\n'
+            for h in range(9, 3, -1)), 1).encode('utf-8'))
+        self.run_cli('companion-compact')
+        again = decisions.read_text(encoding='utf-8')
+        self.assertTrue(again.startswith(text), 'Kararlar.md only grows by appending')
+        for i in moved:
+            self.assertEqual(again.count(f'DECISION_{i:02d}'), 1)
+        self.assertIn('DECISION_00', again)
+        # Kararlar.md is an ordinary internal note: sync indexes it like any other source.
+        synced = self.run_cli('sync')
+        self.assertEqual(synced['status'], 'succeeded')
+        self.assertFalse([w for w in synced.get('warnings', []) if 'Kararlar' in str(w)])
+
     def test_instructions_ask_for_a_rewrite_not_an_append(self):
         skill = (ROOT / 'template/.agents/skills/beyin/SKILL.md').read_text(encoding='utf-8')
         installer = (ROOT / 'scripts/install_v3.py').read_text(encoding='utf-8')

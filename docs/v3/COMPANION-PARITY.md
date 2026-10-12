@@ -110,6 +110,13 @@ Düzeltme dört parçadır:
   yazıldıktan sonra canlı dosya değişmişse arşiv eski baytlarına döner ve `conflict`
   raporlanır. `--dry-run` hiçbir şey yazmadan planı gösterir. Komut model çağırmaz ve
   bitince yeni boyutları indekslemek için `sync` çalıştırır.
+- **Karar defteri.** Taşınan metindeki karar satırları (`**Karar:**`, `**Karar (Ad):**`,
+  `**Karar 2 (Ad):**`, `**Decision:**`; liste maddesi olabilir, kod bloğu içindekiler sayılmaz)
+  ayrıca companion klasöründeki `Kararlar.md` dosyasına, geldikleri kartın başlığı ve arşiv
+  yoluyla kelimesi kelimesine eklenir. Aynı satır ikinci kez eklenmez; dosya yalnız eklenerek
+  büyür. `Kararlar.md` `visibility: internal` bir nottur, arşivin aksine aramaya ve bağlama
+  girer; böylece kartı arşive giden bir karar görünür kalır. Canlı kartta kalan karar
+  kopyalanmaz. Rapor `decisions_added` (`--dry-run`'da `decisions_planned`) sayısını verir.
 
 `tests/v3_companion_hygiene_test.py` sentetik verilerle #96'daki iki biçimi (en üste eklenen
 tarihli paragraflar ve budanmamış `## Previous Sessions`; konu başına onlarca tarihli

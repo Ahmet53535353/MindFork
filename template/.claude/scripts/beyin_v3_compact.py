@@ -6,6 +6,10 @@ Previous/Closed history section and then the oldest dated entries move verbatim 
 private monthly archive beside the companion files, until the file fits. The newest entry
 of every container (the handoff, each thread) always stays. Every line either stays or
 moves; nothing is rewritten, summarized or dropped.
+
+Decision lines (`**Karar:**`, `**Karar (Ad):**`, `**Decision:**`) in the moved text are also
+copied, verbatim and once each, to Kararlar.md beside the companion files with the heading of
+the card they came from, so a decision stays in plain sight after its card is archived.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -39,6 +43,8 @@ POINTER = 'Arşivlenen metin: `{}`'
 BACKUP = '{} karakter tam metin yedeği (needs_rewrite)'
 POINTER_LINE = re.compile(r'Arşivlenen metin: `[^`\n]+`[ \t]*\r?\n?$')
 LOCK_NAME = '.beyin-compact.lock'
+DECISIONS = 'Kararlar.md'
+DECISION = re.compile(r'[ \t]*(?:[-*+][ \t]+)?\*\*(?:Karar|Decision)(?![^\W\d_])[^*\n]{0,60}\*\*', re.I)
 
 
 class _LockError(Exception):
@@ -228,6 +234,61 @@ def plan(text, name, limit, pointer):
             'moved_entries': len(moved_blocks), 'moved_history': bool(history_moved)}
 
 
+def decisions(text, moved_lines):
+    """(card heading, decision line) pairs among the moved lines, in file order.
+
+    The heading is the nearest level-2+ heading above the line; fenced code is skipped like
+    everywhere else in the companion files.
+    """
+    found, heading, fence = [], None, None
+    moved = set(moved_lines)
+    for index, line in enumerate(LINE.findall(text)):
+        bare = line.rstrip('\r\n')
+        if fence:  # same fence rule as blocks()
+            if re.match(r' {0,3}' + re.escape(fence[0]) + '{' + str(len(fence)) + r',}[ \t]*$', bare):
+                fence = None
+            continue
+        opened = FENCE.match(bare)
+        if opened and not (opened[1][0] == '`' and '`' in bare[opened.end():]):
+            fence = opened[1]
+            continue
+        level = HEADING.match(line)
+        if level and len(level[1]) >= 2:
+            heading = line.strip()
+        elif index in moved and DECISION.match(line):
+            found.append((heading, line.strip()))
+    return found
+
+
+def _record_decisions(target, vault, found, archive_relative, newline):
+    """Append decisions not yet in Kararlar.md; returns how many were added."""
+    path = target / DECISIONS
+    _inside(path, vault)
+    if path.is_symlink():
+        return 0
+    existing = path.read_bytes().decode('utf-8') if path.exists() else None
+    known = {line.strip() for line in LINE.findall(existing or '')}
+    fresh = [(heading, line) for heading, line in found if line not in known]
+    if not fresh:
+        return 0
+    if existing is None:
+        existing = newline.join([
+            '---', '{"kind": "note", "visibility": "internal", "title": "Kararlar"}', '---', '# Kararlar', '',
+            '`beyin.py companion-compact` arşive taşıdığı kartlardaki karar satırlarını buraya, kartın başlığı '
+            've arşiv yoluyla kelimesi kelimesine ekler. Dosya yalnız eklenerek büyür; elle düzenleyebilirsin.', ''])
+    elif not existing.endswith('\n'):
+        existing += newline
+    added, last = [], None
+    for heading, line in fresh:
+        if heading != last:
+            added.append(newline + (heading if heading else '## (başlıksız)') + newline +
+                         'Arşiv: `' + archive_relative + '`' + newline)
+            last = heading
+        added.append(line + newline)
+    _write(path, existing + ''.join(added))
+    return len(fresh)
+
+
 def _write(path, text):
     from beyin_v3_sync import atomic
     atomic(path, text)
@@ -363,7 +424,10 @@ def _compact_files(vault, target, configured, dry_run=False, now=None):
         # #168: a file that stays over the limit is rewritten by the agent next, which may
         # summarize. Its full remaining text goes to the archive first, verbatim, so the
         # rewrite can never be the only copy of anything.
+        found = decisions(text, result['moved_lines']) if result is not None else []
         if dry_run:
+            if found:
+                report.update(decisions_planned=len(found))
             if backup is not None:
                 report.update(backup='planned')
             if result is None:
@@ -432,6 +496,8 @@ def _compact_files(vault, target, configured, dry_run=False, now=None):
                                       'the archive. Rewrite the file within the limit.')
             continue
         _write(path, result['live'])
+        if found:
+            report.update(decisions_added=_record_decisions(target, vault, found, archive_relative, result['newline']))
         files[name] = dict(report, status='compacted')
     statuses = {entry['status'] for entry in files.values()}
     still_over = any(entry.get('within_limit_after') is False for entry in files.values())
