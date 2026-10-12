@@ -294,6 +294,27 @@ class YakalaUnitTest(unittest.TestCase):
         self.assertEqual(read('empty'), 'tk panosu: Şifre')
         self.assertEqual(read('stuck', timeout=0.5), 'tk panosu: Şifre')
 
+    def test_fit_keeps_the_longest_prefix_that_fits(self):
+        # A fake font: every character is 10 px, so the answer is known without a display.
+        class Font:
+            def __init__(self, root=None, font=None):
+                pass
+
+            def measure(self, text):
+                return 10 * len(text)
+        class Canvas:  # stands in for a Tk canvas: the cache lives on it
+            pass
+        first, second = Canvas(), Canvas()
+        with patch('tkinter.font.Font', Font):
+            self.assertEqual(yakala._fit(first, 'kisa', ('f', 12), 100), 'kisa')
+            self.assertEqual(yakala._fit(first, 'abcdefghijkl', ('f', 12), 60), 'abcde…')
+            self.assertEqual(yakala._fit(first, 'ab   cdefgh', ('f', 12), 60), 'ab…')
+            self.assertEqual(yakala._fit(first, 'abc', ('f', 12), 5), '…')
+            self.assertEqual(list(first._fit_fonts), [('f', 12)])
+            # Another window's canvas, even in the same process, builds its own font.
+            yakala._fit(second, 'kisa', ('f', 12), 100)
+            self.assertIsNot(second._fit_fonts[('f', 12)], first._fit_fonts[('f', 12)])
+
     def test_kind_and_slug(self):
         self.assertEqual(yakala.kind_of('https://m.youtube.com/watch?v=1'), 'youtube')
         self.assertEqual(yakala.kind_of('https://x.com/a/status/1'), 'x')
@@ -384,6 +405,7 @@ class YakalaUnitTest(unittest.TestCase):
         for field in ('name', 'behavior', 'properties', 'noteContentFormat', 'noteNameFormat', 'path'):
             self.assertIn(field, template)
         self.assertEqual(template['path'], INBOX)
+        self.assertEqual(template['noteNameFormat'], '{{date|date:"YYYY-MM-DD-HHmm"}}-{{title|safe_name|kebab|slice:0,48}}')
         names = {prop['name']: prop['value'] for prop in template['properties']}
         self.assertEqual((names['tur'], names['durum']), ('yakala', 'bekliyor'))
         self.assertTrue(all(prop['type'] in ('text', 'multitext', 'number', 'checkbox', 'date', 'datetime')
