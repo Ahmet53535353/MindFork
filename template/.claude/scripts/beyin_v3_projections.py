@@ -344,8 +344,8 @@ def refresh_gaps(engine, db):
     _checkpoint_schema(db)
     latest = _latest_receipts(db)
     gaps = []
-    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,edit_at FROM receipt_checkpoints'):
-        if not row[2] or row[2] < row[3]:
+    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,edit_at,prompt_at FROM receipt_checkpoints'):
+        if not row[2] or row[2] < row[3] or not row[7]:
             continue
         threshold = _coverage_threshold(row[2], row[3], row[6])
         matched = latest.get((row[0], row[1]), float('-inf')) >= threshold

@@ -366,7 +366,7 @@ def edited_paths(payload):
     tool_input = payload.get('tool_input')
     if not isinstance(tool_input, dict):
         return []
-    found = [value for value in (tool_input.get('file_path'), tool_input.get('path'))
+    found = [value for value in (tool_input.get('file_path'), tool_input.get('path'), tool_input.get('notebook_path'))
              if isinstance(value, str) and value.strip()]
     command = tool_input.get('command')
     if isinstance(command, str) and '*** Begin Patch' in command:

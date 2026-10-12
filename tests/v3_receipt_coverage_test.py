@@ -85,6 +85,9 @@ class ReceiptCoverageTest(unittest.TestCase):
         self.assertEqual(coverage['covered'], 1, "Only sess_interactive_1 has a receipt")
         self.assertEqual(coverage['missing'], 1, "sess_interactive_2 is missing a receipt")
         self.assertEqual(coverage['ratio'], 0.5)
+        self.assertEqual(data['potential_missing_receipts'], coverage['missing'])
+        self.assertEqual(len(data['checkpoints']), 1,
+                         'promptless sessions must not inflate the gap count (#212)')
 
     def test_coverage_zero_sessions_returns_none_ratio(self):
         """When there are zero sessions with user prompts, ratio is None."""

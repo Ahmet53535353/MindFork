@@ -238,7 +238,7 @@ def _has_knowledge_update(vault, receipt, since):
 def receipt_reminder(payload, state, harness, event, vault=None):
     """Track edits per session and return a one-time Stop block, or None.
 
-    Installed PostToolUse hooks match only Edit|Write|apply_patch for Claude and
+    Installed PostToolUse hooks match Edit|Write|apply_patch|MultiEdit|NotebookEdit for Claude and
     Codex, so that event marks the session as edited without reading transcripts.
     Stop then looks for a receipt of this harness and session in the runtime store.
     If a receipt declared learnings but no note under knowledge/ was touched,

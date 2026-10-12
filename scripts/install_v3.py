@@ -400,7 +400,7 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
                 handler["commandWindows"] = windows
             group = {"hooks": [handler]}
             if event == "PostToolUse":
-                group["matcher"] = "Edit|Write|apply_patch"
+                group["matcher"] = "Edit|Write|apply_patch|MultiEdit|NotebookEdit"
             hooks.setdefault(event, []).append(group)
         add(name, jbytes(data))
         manifest.setdefault("new_commands", []).extend([posix, windows])
