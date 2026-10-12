@@ -69,6 +69,28 @@ def resolve_state(vault: Path, pinned: Path) -> Path:
         if re.match(r"^[A-Za-z]:[/\\]", raw) or (sys.platform == "win32" and raw.startswith(("/", "\\"))):
             return expected
     return Path(pinned).expanduser().resolve()
+# Privacy must work in the contracted standalone core/no-sync checkout too.
+# Hygiene imports this same predicate instead of making retrieval depend on it.
+SENSITIVE_WORDS = re.compile(
+    r'(?:kasa|sifre|parola|kimlik|kimlig|finans|finansal|musteri|vergi|fatura|maas|ozel|gizli|gizlilik)'
+    r'(?:ler|lar)?(?:i|im|in|imiz|leri|lari)?'
+    r'|(?:private|secret|password|credential)s?')
+_SENSITIVE_FOLD = str.maketrans({'ş': 's', 'ğ': 'g', 'ü': 'u', 'ö': 'o', 'ç': 'c', 'ı': 'i', 'â': 'a', 'î': 'i', 'û': 'u'})
+
+def sensitive_fold(name):
+    """NFC, Turkish-aware casefold and ASCII-fold a name: 'MÜŞTERİLER' and NFD 'Şifre' both fold."""
+    text = unicodedata.normalize('NFC', str(name)).replace('İ', 'i').replace('I', 'i').lower()
+    return unicodedata.normalize('NFC', text.replace('̇', '')).translate(_SENSITIVE_FOLD)
+
+
+def sensitive_excluded(name):
+    """True when a directory name carries a kasa-class word (any position, any case/normal form)."""
+    return any(SENSITIVE_WORDS.fullmatch(word) for word in re.findall(r'[^\W\d_]+', sensitive_fold(name)))
+
+
+def sensitive_source(source):
+    """A vault-relative source inside a sensitive folder must not enter the memory index or context."""
+    return isinstance(source, str) and any(sensitive_excluded(part) for part in Path(source).parts[:-1])
 
 
 class RevisionConflict(ValueError):
@@ -828,6 +850,8 @@ class MemoryStore:
         candidates = {name: [] for name in source_names}
         stale_count = 0
         for record in records:
+            if sensitive_source(record.get("source")):
+                continue
             if (record.get("visibility") not in allowed or record.get("trust") == "untrusted" or
                     record.get("trusted") is False or record.get("status") == "untrusted" or
                     record.get("kind") == "untrusted" or _rejected_inference(record)):
@@ -990,7 +1014,6 @@ class MemoryStore:
         scopes = read_project_scopes(self.vault_root) if project is not None else None
         eligible = []
         stale_count = 0
-        from beyin_v3_hygiene import sensitive_source
         for record in records:
             # Old indexes can still hold these notes until the next sync. Never deliver them.
             if sensitive_source(record.get("source")):

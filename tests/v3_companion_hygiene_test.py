@@ -434,6 +434,13 @@ class HygieneCliTest(unittest.TestCase):
         self.assertEqual(last.read_bytes(), before)
         self.assertFalse((self.directory / 'Arşiv').exists())
 
+    def test_decisions_keep_the_dated_card_heading_through_equal_subheadings(self):
+        text = ('# Son oturum\n## 2026-09-24 · A\n### Details\n**Karar:** same\n'
+                '## 2026-09-25 · B\n### Details\n**Karar:** same\n')
+        found = compact_module.decisions(text, range(len(compact_module.LINE.findall(text))))
+        self.assertEqual(found, [('## 2026-09-24 · A', '**Karar:** same'),
+                                 ('## 2026-09-25 · B', '**Karar:** same')])
+
     def test_decision_identity_preserves_equal_lines_from_distinct_cards_and_dedupes_retries(self):
         line = '  - **Karar:** Aynı söz farklı iki toplantıda söylendi.'
         first = [('## 2026-09-24 · kart A', line), ('## 2026-09-24 · kart A', line)]
