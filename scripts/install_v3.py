@@ -67,7 +67,7 @@ visibility: internal
 created: {{TODAY}}
 modified: {{TODAY}}
 ---
-# 
+#
 
 ## Beyan
 <!-- Kullanıcının doğrudan söyledikleri, tarihli: "2026-10-12 (kullanıcı): ..." -->
