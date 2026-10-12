@@ -779,6 +779,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--uninstall", action="store_true")
     mode.add_argument("--plan", action="store_true", help="report what an install would do; change nothing")
+    mode.add_argument("--reconcile-hooks", action="store_true", help="reconcile stale hook commands with backup")
     parser.add_argument("--accept-customized-legacy", action="append", default=[], metavar="PATH",
                         help="retire one named customized legacy runner (vault-relative); repeatable")
     parser.add_argument("--keep-customized-legacy", action="append", default=[], metavar="PATH",
@@ -793,6 +794,16 @@ def main():
     default_state = defaults.default_state
     os.umask(0o077)
     try:
+        if args.reconcile_hooks:
+            selected_state = args.state
+            if selected_state is None:
+                pin_path = args.vault / '.beyin-runtime.json'
+                pin_data = json.loads(pin_path.read_text(encoding='utf-8')) if pin_path.is_file() else {}
+                pinned = pin_data.get('state') if isinstance(pin_data, dict) else None
+                selected_state = Path(pinned).expanduser() if isinstance(pinned, str) and Path(pinned).expanduser().is_absolute() else default_state(args.vault.resolve())
+            result = defaults.hook_reconcile(args.vault, selected_state)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         accepted = tuple(name.replace("\\", "/") for name in args.accept_customized_legacy)
         kept = tuple(name.replace("\\", "/") for name in args.keep_customized_legacy)
         excluded = tuple(name.replace("\\", "/") for name in args.exclude_component)

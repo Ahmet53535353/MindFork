@@ -348,6 +348,230 @@ def hook_paths(vault: Path) -> dict:
     return result
 
 
+def _hook_commands(argv):
+    """Build POSIX and Windows command strings for hook invocations."""
+    import base64
+    import shlex
+    if any(any(c in str(value) for c in "\n\r\x00") for value in argv):
+        raise ValueError("Newlines or NUL in command paths are unsupported")
+    portable_argv = [str(value).replace("\\", "/") if os.name == "nt" else str(value) for value in argv]
+    posix = shlex.join(portable_argv)
+    script = "& " + " ".join("'" + str(value).replace("'", "''") + "'" for value in argv)
+    script += "; exit $LASTEXITCODE"
+    encoded = base64.b64encode(script.encode("utf-16le")).decode()
+    launcher = "powershell.exe"
+    if os.name == "nt":
+        windows_root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR") or r"C:\Windows"
+        launcher_path = str(Path(windows_root) / "System32/WindowsPowerShell/v1.0/powershell.exe").replace("\\", "/")
+        launcher = subprocess.list2cmdline([launcher_path])
+    windows = launcher + " -NoProfile -NonInteractive -EncodedCommand " + encoded
+    return posix, windows
+
+
+def _local_hook_file(root, path):
+    root = root.resolve()
+    path.relative_to(root)
+    cursor = path
+    while cursor != root:
+        if cursor.is_symlink():
+            raise ValueError('hook configuration paths must not be symlinks')
+        cursor = cursor.parent
+    return path
+
+
+def _backup_hook_file(path, raw):
+    # Existing backups are user data too. Exclusive creation preserves all prior copies.
+    index = 0
+    while True:
+        backup = path.with_name(path.name + '.bak' + ('.' + str(index) if index else ''))
+        try:
+            with backup.open('xb') as out:
+                out.write(raw); out.flush(); os.fsync(out.fileno())
+            return backup
+        except FileExistsError:
+            index += 1
+
+
+def _write_hook_json(path, data):
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix='.hook-reconcile-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as out:
+            json.dump(data, out, ensure_ascii=False, indent=2)
+            out.write('\n'); out.flush(); os.fsync(out.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
+    """Explicitly reconcile hook commands pointing to another install location (#205).
+
+    Creates a .bak backup of each modified hook file before changing it.
+    Replaces stale Python and vault paths with current local interpreter and vault paths.
+    Never runs automatically or silently.
+    """
+    vault = vault.resolve()
+    state = state.resolve()
+    hook_script = vault / ".claude/scripts/beyin_v3_hook.py"
+    _local_hook_file(vault, hook_script)
+    if not hook_script.is_file():
+        raise RuntimeError(f"Hook script not found at {hook_script}. Reinstall or repair the vault first.")
+
+    for name in HOOK_FILES:
+        _local_hook_file(vault, vault / name)
+    _local_hook_file(state, state / "v3-install.json")
+    paths_report = hook_paths(vault)
+    if paths_report.get("status") == "not_installed":
+        return {
+            "status": "not_installed",
+            "checked": 0,
+            "reconciled_count": 0,
+            "files": [],
+            "message": "No installed hooks found to reconcile.",
+        }
+
+    if paths_report.get("status") != "stale" and not force:
+        return {
+            "status": "ok",
+            "checked": paths_report.get("checked", 0),
+            "reconciled_count": 0,
+            "files": [],
+            "message": "Hook paths are already valid; no reconciliation needed.",
+        }
+
+    stale_files = {item["file"] for item in paths_report.get("stale", [])} if not force else set(HOOK_FILES)
+    reconciled_files = []
+    total_reconciled = 0
+    all_new_commands = []
+
+    for name in HOOK_FILES:
+        path = vault / name
+        if not path.is_file():
+            continue
+        if name not in stale_files and not force:
+            continue
+
+        try:
+            original_bytes = path.read_bytes()
+            data = json.loads(original_bytes.decode("utf-8"))
+            if not isinstance(data, dict):
+                continue
+        except (OSError, ValueError, UnicodeError):
+            continue
+
+        file_reconciled = 0
+        changes = []
+
+        if name == ".agents/hooks.json":
+            managed = data.get("beyin-v3")
+            if isinstance(managed, dict):
+                for event in ("PreInvocation", "Stop"):
+                    if event in managed and isinstance(managed[event], list):
+                        posix, windows = _hook_commands([sys.executable, hook_script, "--vault", vault, "--state", state,
+                                                         "--harness", "antigravity", "--event", event])
+                        all_new_commands.extend([posix, windows])
+                        target_cmd = windows if os.name == "nt" else posix
+                        timeout = 20 if os.name == "nt" else 5
+                        for handler in managed[event]:
+                            if isinstance(handler, dict):
+                                old_cmd = handler.get("command", "")
+                                if not isinstance(old_cmd, str):
+                                    continue
+                                args = _hook_arguments(old_cmd)
+                                if not any(a.replace("\\", "/").endswith("/beyin_v3_hook.py") for a in args):
+                                    continue
+                                if old_cmd != target_cmd or force:
+                                    old_args = _hook_arguments(old_cmd)
+                                    changes.append({
+                                        "event": event,
+                                        "old_command": old_cmd,
+                                        "new_command": target_cmd,
+                                        "old_summary": " ".join(old_args[:2]) if len(old_args) >= 2 else old_cmd[:60],
+                                        "new_summary": f"{sys.executable} {hook_script}",
+                                    })
+                                    handler["command"] = target_cmd
+                                    handler["timeout"] = timeout
+                                    file_reconciled += 1
+        else:
+            harness = "claude" if "claude" in name else "codex"
+            hooks_map = data.get("hooks", {})
+            if isinstance(hooks_map, dict):
+                posix, windows = _hook_commands([sys.executable, hook_script, "--vault", vault, "--state", state,
+                                                 "--harness", harness])
+                all_new_commands.extend([posix, windows])
+                target_cmd = windows if os.name == "nt" else posix
+
+                for event, groups in hooks_map.items():
+                    if not isinstance(groups, list):
+                        continue
+                    timeout = 3 if event == "SessionEnd" else (20 if os.name == "nt" else 5)
+                    for group in groups:
+                        if not isinstance(group, dict):
+                            continue
+                        handlers = group.get("hooks", [group]) if "hooks" in group else [group]
+                        for handler in handlers:
+                            if not isinstance(handler, dict):
+                                continue
+                            old_cmd = handler.get("command", "")
+                            if not isinstance(old_cmd, str):
+                                continue
+                            args = _hook_arguments(old_cmd)
+                            script = next((a for a in args if a.replace("\\", "/").endswith("/beyin_v3_hook.py")), None)
+                            if script is None:
+                                continue
+                            needs_update = (old_cmd != target_cmd or force or
+                                            (harness == "codex" and handler.get("commandWindows") != windows))
+                            if needs_update:
+                                changes.append({
+                                    "event": event,
+                                    "old_command": old_cmd,
+                                    "new_command": target_cmd,
+                                    "old_summary": " ".join(args[:2]) if len(args) >= 2 else old_cmd[:60],
+                                    "new_summary": f"{sys.executable} {hook_script}",
+                                })
+                                handler["command"] = target_cmd
+                                handler["timeout"] = timeout
+                                if harness == "codex":
+                                    handler["commandWindows"] = windows
+                                file_reconciled += 1
+
+        if file_reconciled > 0:
+            if path.read_bytes() != original_bytes:
+                raise RuntimeError("Hook configuration changed during reconciliation; preserved")
+            backup_path = _backup_hook_file(path, original_bytes)
+            _local_hook_file(vault, path)
+            if path.read_bytes() != original_bytes:
+                raise RuntimeError("Hook configuration changed after backup; preserved")
+            _write_hook_json(path, data)
+            reconciled_files.append({
+                "file": name,
+                "backup": str(backup_path.relative_to(vault).as_posix()),
+                "reconciled": file_reconciled,
+                "changes": changes,
+            })
+            total_reconciled += file_reconciled
+
+    manifest_path = state / "v3-install.json"
+    if manifest_path.is_file() and all_new_commands:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            cmds = set(manifest.get("commands", []))
+            cmds.update(all_new_commands)
+            manifest["commands"] = sorted(cmds)
+            _write_hook_json(manifest_path, manifest)
+        except (OSError, ValueError, UnicodeError):
+            pass
+
+    return {
+        "status": "reconciled" if total_reconciled > 0 else "noop",
+        "checked": paths_report.get("checked", 0),
+        "reconciled_count": total_reconciled,
+        "files": reconciled_files,
+    }
+
+
 def read_json(filename: str):
     if filename == "-":
         return json.load(sys.stdin)
@@ -416,6 +640,8 @@ def parser():
     scheduled = sub.add_parser("scheduled-check", help="Sync then doctor for an OS scheduler you set up; no model call, no service")
     scheduled.add_argument("--notify", action="store_true",
                            help="Opt-in OS notification when the result changes; issue kinds and counts only")
+    hook_rec = sub.add_parser("hook-reconcile", help="Reconcile stale hook paths with backup")
+    hook_rec.add_argument("--force", action="store_true", help="Reconcile hook paths even if not reported stale")
     recap = sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
     recap.add_argument("--days", type=int, help="Calendar days in UTC, including today (1..366, default 7); "
                                                 "not allowed with --since/--until")
@@ -714,6 +940,8 @@ def main(argv=None, return_result=False):
                 result = jev_advice(jev_client().set_mode(state, args.mode, enable=args.enable, disable=args.disable,
                                                           provider=args.provider, laya=laya or None))
                 result["changed"] = True
+        elif args.command == "hook-reconcile":
+            result = hook_reconcile(vault, state, force=getattr(args, 'force', False))
         elif args.command == "doctor":
             _ensure_scripts_path()
             from beyin_v3_hook_done import summary as hook_done_summary
