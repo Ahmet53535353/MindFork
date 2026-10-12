@@ -578,10 +578,22 @@ def _whisper_options(lang):
     return ((['--model', model] if model else []), (['--language', lang] if re.fullmatch(r'[a-z]{2,3}', lang) else []))
 
 
-def via_audio(url, found, workdir, lang=None):
+GPU_FAILURE = re.compile(r'cuda|cublas|cudnn', re.I)
+
+
+def _last_line(text, pattern=None):
+    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
+    lines = [line for line in lines if pattern.search(line)] if pattern else lines
+    return lines[-1][:160] if lines else ''
+
+
+def via_audio(url, found, workdir, lang=None, problems=None):
     """Last resort: download only the audio, transcribe locally, delete the audio.
 
-    `lang` is the spoken language when yt-dlp could tell it; see `_whisper_options`.
+    `lang` is the spoken language when yt-dlp could tell it; see `_whisper_options`. whisper-ctranslate2
+    picks CUDA by itself on an NVIDIA machine, and a CUDA library it cannot load (cuBLAS is not in the
+    ctranslate2 wheel) fails the run while the tool still exits 0. That run is tried once more on the
+    CPU. What went wrong is added to `problems` so the card names Whisper's own error.
     """
     if not (found['yt_dlp'] and found['whisper']):
         return None
@@ -599,8 +611,17 @@ def via_audio(url, found, workdir, lang=None):
         else:
             command = [found['whisper'], str(files[0]), *model, '--output_format', 'txt', '--output_dir', str(workdir)]
         command += language
-        _run(command, timeout=7200)
+        _code, _out, err = _run(command, timeout=7200)
         texts = sorted(Path(workdir).glob('ses*.txt'))
+        gpu = _last_line(err, GPU_FAILURE)
+        if not texts and gpu and whisper.startswith('whisper-ctranslate2'):
+            _code, _out, err = _run(command + ['--device', 'cpu'], timeout=7200)
+            texts = sorted(Path(workdir).glob('ses*.txt'))
+            if texts and problems is not None:
+                problems.append('GPU (CUDA) kullanilamadi, ses CPU ile yaziya dokuldu: ' + gpu +
+                                ' Hizlandirmak icin eksik CUDA kutuphanesini kur (or. nvidia-cublas-cu12).')
+        if not texts and problems is not None:
+            problems.append('Whisper metin uretmedi: ' + (_last_line(err) or 'hata ciktisi yok') + '.')
         return texts[0].read_text(encoding='utf-8', errors='replace').strip() if texts else None
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -644,20 +665,26 @@ def via_youtube(url, found, allow_audio=True, info=None):
                 if unsure:
                     info['uyari'] = unsure + 'kullanilan altyazi izi: ' + info['altyazi'] + '.'
                 return lead + subtitles, 'yt-dlp-altyazi', info['uyari']
+        problems = []
         if allow_audio and not section:
-            words = via_audio(url, found, workdir, spoken)
+            words = via_audio(url, found, workdir, spoken, problems)
             if words:
                 info['dil'] = spoken
-                if unsure:
-                    info['uyari'] = unsure + 'yaziya dokulen ses asil dilde olmayabilir.'
+                notes = ([unsure + 'yaziya dokulen ses asil dilde olmayabilir.'] if unsure else []) + problems
+                info['uyari'] = ' '.join(notes) or None
                 return lead + words, 'ses-whisper', info['uyari']
+    whisper_failed = (' ' + problems[0]) if problems else ''
     if section:  # only a transcript in another language could be had: keep it and say so on the card
         info['dil'] = took
         info['uyari'] = ('Transkript konusma dilinde olmayabilir: video ' + spoken + ', transkript ' + (took or 'bilinmiyor') +
                          ' (dublaj ya da ceviri izi). Konusma dilindeki altyazi alinamadi; sonra `yakala isle <kart>` ile yeniden dene.')
         return text, 'defuddle', info['uyari']
     if text:
+        if whisper_failed:
+            return text, 'defuddle', 'Altyazi bulunamadi; yalniz baslik ve aciklama var.' + whisper_failed
         return text, 'defuddle', 'Altyazi bulunamadi; yalniz baslik ve aciklama var. Ses yolu icin yt-dlp ve whisper gerekir.'
+    if whisper_failed:
+        return None, None, 'YouTube icerigi alinamadi.' + whisper_failed
     return None, None, 'YouTube icerigi alinamadi: npx (Node), yt-dlp ya da whisper bulunamadi veya video erisilemez.'
 
 

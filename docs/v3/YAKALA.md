@@ -205,6 +205,10 @@ Hiçbiri zorunlu değil; varsa işleme genişler, yoksa elde olanla devam edilir
   dublajlıysa Whisper dili kendisi tanır. Model seçmek için `BEYIN_WHISPER_MODEL` ortam değişkeni
   (ör. `large-v3-turbo`) `--model` olarak geçer. `whisper-ctranslate2`'nin varsayılanı `small`; Türkçe gibi
   dillerde terimleri bozabilir (likidite → "liquidite"). GPU varsa daha büyük bir model seç.
+  NVIDIA kartlı makinede `whisper-ctranslate2` CUDA'yı kendisi seçer; CUDA kütüphanesi yüklenemezse (ör.
+  `cublas64_12.dll` yok) ses bir kez CPU ile yeniden yazıya dökülür ve kartın uyarısı hatayı adıyla söyler.
+  Hızlandırmak için eksik kütüphaneyi kur (ör. `pip install nvidia-cublas-cu12` ve klasörünü PATH'e ekle).
+  Whisper hiç metin üretmezse kartta Whisper'ın kendi son hata satırı yazar.
 - **pdftotext** (Poppler): PDF metni.
 
 Windows'ta bu araçlar bir `.cmd`/`.bat` sarmalayici olarak kuruluysa, argumanlar komut
