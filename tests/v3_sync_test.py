@@ -206,7 +206,7 @@ class SourceSyncTest(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'symlink privilege is not guaranteed')
     def test_numbered_copy_comparison_never_reads_outside_vault(self):
         from unittest.mock import patch
-        original = self.note('Müşteri/Özet.md', 'Nebula calibration private canary bytes.\n', project='nebula')
+        original = self.note('Paylaşım/Özet.md', 'Nebula calibration private canary bytes.\n', project='nebula')
         outside = self.vault.parent / 'outside.md'
         outside.write_bytes(original.read_bytes())
         (original.parent / 'Özet 2.md').symlink_to(outside)
@@ -218,7 +218,7 @@ class SourceSyncTest(unittest.TestCase):
         with patch.object(Path, 'read_bytes', guarded):
             report = self.engine.sync()
         self.assertIsNone(report['sync_copy_candidates'][0]['same_content'])
-        self.assertEqual([row['source'] for row in self.records()], ['Müşteri/Özet.md'])
+        self.assertEqual([row['source'] for row in self.records()], ['Paylaşım/Özet.md'])
 
     def test_a_sync_service_copy_of_a_receipt_is_reported_never_indexed(self):
         self.write()
