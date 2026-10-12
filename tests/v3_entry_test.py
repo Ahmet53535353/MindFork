@@ -1,5 +1,6 @@
 """Human entrypoint smoke: a novice sees an honest short status, tools retain JSON."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -145,6 +146,48 @@ class CrossPlatformPinTest(unittest.TestCase):
         refused = install(self.vault, self.state, self.env)
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn('Reinstall conflict: managed file changed .beyin-runtime.json', refused.stderr.decode('utf-8'))
+
+    def test_same_os_foreign_user_pin_uses_this_machine_default_state(self):
+        if sys.platform != 'win32':
+            self.skipTest('The regression is Windows user-profile path portability')
+        expected = Path(self.env['LOCALAPPDATA']) / 'beyin-v3' / hashlib.sha256(
+            str(self.vault.resolve()).encode()).hexdigest()[:16]
+        foreign = self.root / 'other-user' / 'localappdata' / 'beyin-v3' / expected.name
+        pin(self.vault, str(foreign))
+        doctor = run_python(self.vault / 'beyin.py', ['doctor'], self.vault, self.env)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        location = json.loads(doctor.stdout)['state_location']
+        self.assertEqual(Path(location['effective_state']).resolve(), expected.resolve())
+        self.assertIn('effective_state_differs', codes(location))
+
+    def test_resolve_state_across_linux_macos_and_windows(self):
+        spec = importlib.util.spec_from_file_location('v3_cli_entry_test', ROOT / 'scripts/beyin_v3.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        expected = cli.default_state(self.vault).resolve()
+        key = expected.name
+
+        # Foreign Windows pin
+        win_pin = Path(r"C:\Users\other\AppData\Local\beyin-v3") / key
+        self.assertEqual(cli.resolve_state(self.vault, win_pin), expected)
+
+        # Foreign Linux pin
+        linux_pin = Path(f"/home/other/.local/state/beyin-v3/{key}")
+        self.assertEqual(cli.resolve_state(self.vault, linux_pin), expected)
+
+        # Foreign macOS pin
+        mac_pin = Path(f"/Users/other/Library/Application Support/beyin-v3/{key}")
+        self.assertEqual(cli.resolve_state(self.vault, mac_pin), expected)
+
+        # Explicit custom state is preserved
+        custom = (self.root / "custom-state").resolve()
+        self.assertEqual(cli.resolve_state(self.vault, custom), custom)
+        changed_key = 'fedcba9876543210'
+        self.assertEqual(cli.resolve_state(self.vault, Path('/home/foreign/.local/state/beyin-v3/' + changed_key)), expected)
+        custom_layout = self.root.resolve() / 'state/beyin-v3' / expected.name
+        self.assertEqual(cli.resolve_state(self.vault, custom_layout), custom_layout)
+        previous_local = expected.parent / changed_key
+        self.assertEqual(cli.resolve_state(self.vault, previous_local), previous_local)
 
     def test_only_the_pin_may_differ(self):
         spec = importlib.util.spec_from_file_location('install_v3_cross_pin', ROOT / 'scripts/install_v3.py')

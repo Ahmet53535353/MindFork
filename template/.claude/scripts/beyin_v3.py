@@ -14,6 +14,7 @@ import posixpath
 import re
 import sqlite3
 import stat
+import sys
 import unicodedata
 import urllib.parse
 
@@ -26,6 +27,48 @@ REJECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::
 
 # Frontmatter keys other tools write instead of updated_at, in precedence order.
 RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")
+
+
+def _in_package_container(pinned: str) -> bool:
+    """True when a pinned path runs through an MSIX package container."""
+    parts = [part.lower() for part in pinned.replace("\\", "/").split("/") if part]
+    return "packages" in parts and "localcache" in parts[parts.index("packages") + 1:]
+
+
+def default_state(vault: Path) -> Path:
+    """Keep mutable state outside the vault, separated by canonical vault path."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library/Application Support"
+    else:
+        base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    key = hashlib.sha256(str(Path(vault).resolve()).encode()).hexdigest()[:16]
+    return base / "beyin-v3" / key
+
+
+def resolve_state(vault: Path, pinned: Path) -> Path:
+    """Resolve a foreign OS/user's conventional default; preserve custom and local pins."""
+    expected = default_state(vault).resolve()
+    raw = str(pinned)
+    if not raw:
+        return expected
+    if _in_package_container(raw):
+        return Path(pinned).expanduser().resolve()
+    portable = raw.replace("\\", "/")
+    # Match complete standard layouts, rather than a generic /state/ or /local/ suffix.
+    # A copied vault normally changes its absolute path and therefore its hash.
+    conventional = re.fullmatch(
+        r"(?:[A-Za-z]:/Users/[^/]+/AppData/Local|/home/[^/]+/\.local/state|"
+        r"/root/\.local/state|/Users/[^/]+/Library/Application Support)/beyin-v3/[0-9a-f]{16}",
+        portable, re.IGNORECASE)
+    local_parent = str(expected.parent).replace("\\", "/").casefold()
+    if conventional and portable.rsplit("/", 1)[0].casefold() != local_parent:
+        return expected
+    if not Path(pinned).expanduser().is_absolute():
+        if re.match(r"^[A-Za-z]:[/\\]", raw) or (sys.platform == "win32" and raw.startswith(("/", "\\"))):
+            return expected
+    return Path(pinned).expanduser().resolve()
 
 
 class RevisionConflict(ValueError):

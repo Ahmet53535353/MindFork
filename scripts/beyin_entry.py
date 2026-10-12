@@ -539,7 +539,11 @@ def main(argv=None):
         cli = None
         raw_state = config.get('state') if isinstance(config, dict) else None
         if isinstance(raw_state, str) and raw_state and Path(raw_state).expanduser().is_absolute():
-            state = Path(raw_state)
+            cli = load_cli(directory)
+            state = cli.resolve_state(vault, Path(raw_state))
+            if state != Path(raw_state).expanduser().resolve():
+                print('Uyari: yabanci varsayilan state yolu bu makinenin yerel state klasorune cozumlendi: ' +
+                      plain_text(state) + '. Kalici duzeltme: bu makinede install_v3.py ile kur.', file=sys.stderr)
         else:
             # The installer always pins a resolved absolute path. A pin that is not absolute
             # here came from another OS through a synced vault (a Windows C:\ path on POSIX,

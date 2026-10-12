@@ -396,7 +396,11 @@ def main():
     parser.add_argument("--drain-queue", action="store_true")
     parser.add_argument("--metadata-only", action="store_true", help="Queue lifecycle metadata without injecting vault context")
     args = parser.parse_args()
-    vault, state = args.vault.resolve(), args.state.resolve()
+    vault = args.vault.resolve()
+    from beyin_v3 import resolve_state
+    state = resolve_state(vault, args.state)
+    if state != args.state.expanduser().resolve() and not os.environ.get('BEYIN_V3_INTERNAL') and os.environ.get('BEYIN_V3_SKIP') != '1':
+        print('V3 state fallback: synced foreign default resolved to this machine; reinstall hooks locally.', file=sys.stderr)
     if state == vault or vault in state.parents:
         raise ValueError("Runtime state must be outside vault")
     os.umask(0o077)

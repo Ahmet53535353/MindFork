@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -21,8 +22,32 @@ def default_state(vault: Path) -> Path:
         base = Path.home() / "Library/Application Support"
     else:
         base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
-    key = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
+    key = hashlib.sha256(str(Path(vault).resolve()).encode()).hexdigest()[:16]
     return base / "beyin-v3" / key
+
+
+def resolve_state(vault: Path, pinned: Path) -> Path:
+    """Resolve a foreign OS/user's conventional default; preserve custom and local pins."""
+    expected = default_state(vault).resolve()
+    raw = str(pinned)
+    if not raw:
+        return expected
+    if _in_package_container(raw):
+        return Path(pinned).expanduser().resolve()
+    portable = raw.replace("\\", "/")
+    # Match complete standard layouts, rather than a generic /state/ or /local/ suffix.
+    # A copied vault normally changes its absolute path and therefore its hash.
+    conventional = re.fullmatch(
+        r"(?:[A-Za-z]:/Users/[^/]+/AppData/Local|/home/[^/]+/\.local/state|"
+        r"/root/\.local/state|/Users/[^/]+/Library/Application Support)/beyin-v3/[0-9a-f]{16}",
+        portable, re.IGNORECASE)
+    local_parent = str(expected.parent).replace("\\", "/").casefold()
+    if conventional and portable.rsplit("/", 1)[0].casefold() != local_parent:
+        return expected
+    if not Path(pinned).expanduser().is_absolute():
+        if re.match(r"^[A-Za-z]:[/\\]", raw) or (sys.platform == "win32" and raw.startswith(("/", "\\"))):
+            return expected
+    return Path(pinned).expanduser().resolve()
 
 
 def _in_package_container(pinned: str) -> bool:
@@ -117,6 +142,9 @@ def state_location(vault: Path, state: Path, windows=None) -> dict:
             "through a synced vault or edited by hand (#249); the installed beyin.py reads this "
             "machine's default state instead. Installation files are per machine and stay out of "
             "the sync; see https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md.")
+    elif resolve_state(vault, Path(pinned)) != Path(pinned).expanduser().resolve():
+        report['warnings'].append('foreign_default_state: the synced default state belongs to another user or OS; '
+                                  'this machine uses its local default. Reinstall here to bind lifecycle commands.')
     try:
         resolved = Path(pinned).expanduser().resolve()
     except (OSError, ValueError, RuntimeError):
