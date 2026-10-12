@@ -508,6 +508,8 @@ def parser():
     receipt.add_argument("--summary", help="Receipt summary text, preserving literal newlines")
     receipt.add_argument("--summary-file", type=Path, metavar="PATH", help="Read the receipt summary from a UTF-8 file")
     receipt.add_argument("--ref", action="append", help="Vault-relative source path; repeat for multiple refs")
+    receipt.add_argument("--link", action="append",
+                         help="External result as an http(s) URL (pull request, published page); repeatable, never a vault source")
     receipt.add_argument("--session", help="Optional session identifier")
     update = sub.add_parser("task-update", help="Update task with expected revision")
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
@@ -522,7 +524,7 @@ def main(argv=None, return_result=False):
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
     receipt_flags = args.command == "receipt" and any(
-        getattr(args, name) is not None for name in ("event_id", "summary", "summary_file", "ref", "session"))
+        getattr(args, name) is not None for name in ("event_id", "summary", "summary_file", "ref", "link", "session"))
     if receipt_flags:
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):
@@ -985,10 +987,13 @@ def main(argv=None, return_result=False):
                 payload = {"event_id": args.event_id, "summary": summary, "refs": args.ref}
                 if args.session is not None:
                     payload["session"] = args.session
+                if args.link:
+                    payload["links"] = args.link
             else:
                 payload = read_json(args.file if args.file is not None else "-")
             result = sync.receipt(payload["event_id"], payload["summary"],
-                                          payload["refs"], args.harness, session=payload.get('session'))
+                                          payload["refs"], args.harness, session=payload.get('session'),
+                                          links=payload.get('links'))
         elif args.command == "history":
             # History is source-verified, so refresh first like context: an edit
             # made just before this command must not hide the audit trail.

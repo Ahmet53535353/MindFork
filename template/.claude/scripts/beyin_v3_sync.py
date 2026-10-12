@@ -18,8 +18,8 @@ _MODULE_DIR = str(Path(__file__).resolve().parent)
 if _MODULE_DIR not in sys.path:
     sys.path.insert(0, _MODULE_DIR)
 
-from beyin_v3 import (HARNESSES, REJECTED_AT, RETIRED_STATUSES, MemoryStore, ReceiptConflict, RevisionConflict, _json,
-                      _path_redirected, _rejected_inference, _status_word, rejected_dependents, resolve_supersedes)
+from beyin_v3 import (HARNESSES, MAX_RECEIPT_LINKS, REJECTED_AT, RETIRED_STATUSES, MemoryStore, ReceiptConflict, RevisionConflict, _json,
+                      _path_redirected, _plain_link, _rejected_inference, _status_word, rejected_dependents, resolve_supersedes)
 from beyin_v3_index import applied_keys, dir_key, exclusions as index_exclusions, prune as prune_excluded
 from beyin_v3_projections import project_receipts
 from beyin_v3_preferences import read as read_preferences
@@ -800,7 +800,7 @@ class SyncEngine:
                     row = db.execute('SELECT payload FROM receipts WHERE id=?', (event['event_id'],)).fetchone()
                     if row:
                         previous = json.loads(row[0])
-                        if previous['summary'] != event['summary'] or previous['refs'] != event['refs']:
+                        if (previous['summary'], previous['refs'], previous.get('links')) != (event['summary'], event['refs'], event.get('links')):
                             raise ReceiptConflict('event id collision during recovery')
                     db.execute('INSERT OR IGNORE INTO receipts VALUES (?,?)', (event['event_id'], _json(event)))
                 completed.append(entry)
@@ -831,6 +831,11 @@ class SyncEngine:
         if not summary.strip():
             raise ValueError('empty receipt summary')
         event = {'event_id': event_id, 'summary': summary, 'refs': [Path(ref).as_posix() for ref in refs], 'harness': harness}
+        links = metadata.get('links')
+        if links is not None:
+            if not isinstance(links, list) or not links or not all(isinstance(link, str) and _plain_link(link) for link in links):
+                raise ValueError('invalid receipt links')
+            event['links'] = links
         created_at, session = metadata.get('created_at'), metadata.get('session')
         if created_at is not None:
             # The stamp stays as written (UTC); projections name daily/v3 by its local day (#149).
@@ -871,7 +876,7 @@ class SyncEngine:
                     # Indexed receipts stay authoritative, but a source that no longer matches them means
                     # another device wrote the same event_id and a merge kept its file (#205).
                     old = known[name]
-                    if (old['summary'], old['refs']) != (event['summary'], event['refs']):
+                    if (old['summary'], old['refs'], old.get('links')) != (event['summary'], event['refs'], event.get('links')):
                         conflicts.append({'source': rel, 'kind': 'receipt_divergence',
                                           'reason': 'receipt source differs from indexed receipt; event_id reused on another device'})
                     continue
@@ -1155,15 +1160,40 @@ class SyncEngine:
                     source_sync={'status': result['status'], 'warnings': result['warnings'],
                                  'conflicts': result['conflicts']})
 
-    def receipt(self, event_id, summary, refs, harness, session=None):
+    def _links(self, links):
+        """External results (a pull request, a published page) as plain http(s) URLs.
+
+        Unlike refs they are not vault sources: nothing checks that they exist and they are never
+        read. A URL with a user name, a password or a known secret pattern is refused, not rewritten,
+        so the receipt never stores a half-hidden address. Unlike summaries this check does not wait
+        for the opt-in secret filter: a token in a query string is the usual way a link leaks one.
+        """
+        if links is None:
+            return []
+        if not isinstance(links, list) or len(links) > MAX_RECEIPT_LINKS:
+            raise ValueError(f'links must be a list of at most {MAX_RECEIPT_LINKS} URLs')
+        kept = []
+        for link in links:
+            if not isinstance(link, str) or not _plain_link(link):
+                raise ValueError('link must be an http(s) URL without spaces or credentials')
+            if redact_secrets(link, self.state)[1]:
+                raise ValueError('link contains a secret')
+            if link not in kept:
+                kept.append(link)
+        return kept
+
+    def receipt(self, event_id, summary, refs, harness, session=None, links=None):
         if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
             raise ValueError('event id and summary required')
         if harness not in HARNESSES + ('manual',) or not isinstance(refs, list) or not refs:
             raise ValueError('harness and refs required')
         summary, redacted = self._protect(summary)
         refs = [self.store._source(ref) for ref in refs]
+        links = self._links(links)
         source = 'receipts/' + _hash(event_id) + '.md'
         event = {'event_id': event_id, 'summary': summary, 'refs': refs, 'harness': harness, 'created_at': datetime.now(timezone.utc).isoformat()}
+        if links:
+            event['links'] = links
         if session is not None:
             if not isinstance(session, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', session):
                 raise ValueError('invalid receipt session')
@@ -1181,10 +1211,12 @@ class SyncEngine:
                 row = (_json(old),)
             if row:
                 old = json.loads(row[0])
-                if old['summary'] != summary or old['refs'] != refs:
+                if old['summary'] != summary or old['refs'] != refs or old.get('links', []) != links:
                     raise ReceiptConflict('event id collision')
                 event = old
             receipt_metadata = {'kind': 'receipt', 'event_id': event_id, 'harness': event['harness'], 'refs': refs, 'visibility': 'internal'}
+            if links:
+                receipt_metadata['links'] = links
             if event.get('created_at'):
                 receipt_metadata['created_at'] = event['created_at']
             if event.get('session'):
@@ -1202,7 +1234,7 @@ class SyncEngine:
             raise ReceiptConflict('receipt projection conflict')
         if self._path(source, existing=True).read_bytes() != content.encode('utf-8'):
             raise ReceiptConflict('receipt source changed before readback')
-        self.store.submit_receipt(event_id, summary, refs, event['harness'])
+        self.store.submit_receipt(event_id, summary, refs, event['harness'], links=links)
         self._record_redactions(redacted)
         return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
                 'redacted': redacted, 'secrets_redacted': redacted}

@@ -208,6 +208,8 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None, since=None, un
             else:
                 kept.append(ref)
         item = {'created_at': stamp.isoformat(), 'summary': event['summary'], 'source': source, 'refs': kept}
+        if isinstance(event.get('links'), list) and event['links']:
+            item['links'] = [link for link in event['links'] if isinstance(link, str)]
         if day is not None:
             item['day'] = day.isoformat()  # the local day that placed it in the range; created_at stays UTC
         if private or missing:
