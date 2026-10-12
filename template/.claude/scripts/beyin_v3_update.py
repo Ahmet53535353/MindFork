@@ -523,6 +523,10 @@ def rollback(vault, state):
             path = _destination(vault, state, item)
             actual = path.read_bytes() if path.exists() else None
             restore = decode(item['old'])
+            # Optional note templates become user data as soon as they are seeded.
+            # Preserve edits (and deletions) through rollback just like companion notes.
+            if item.get('scope') == 'vault' and item['name'] == '📋 Templates/Kisi.md':
+                restore = actual
             if not unchanged(actual, decode(item['new']), restore):
                 if actual is not None and restore is not None and item['name'] in ('.claude/settings.local.json', '.claude/settings.json', '.codex/hooks.json', '.agents/hooks.json'):
                     restore = _merge_json(decode(item['new']), actual, restore)

@@ -6,24 +6,41 @@ Previous/Closed history section and then the oldest dated entries move verbatim 
 private monthly archive beside the companion files, until the file fits. The newest entry
 of every container (the handoff, each thread) always stays. Every line either stays or
 moves; nothing is rewritten, summarized or dropped.
+
+Decision lines (`**Karar:**`, `**Karar (Ad):**`, `**Decision:**`) in the moved text are also
+copied, verbatim and once each, to Kararlar.md beside the companion files with the heading of
+the card they came from, so a decision stays in plain sight after its card is archived.
 """
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import errno
 import os
+import hashlib
+import json
 from pathlib import Path
 import re
 import time
+import unicodedata
 
 from beyin_v3_companion import LIMITS, directory, read_limits
 
 LINE = re.compile(r'[^\n]*\n|[^\n]+$')
 HEADING = re.compile(r'(#{1,6})[ \t]')
 FENCE = re.compile(r' {0,3}(`{3,}|~{3,})')
-DATE = re.compile(r'(?<!\d)\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?!\d)')
+# Month names for dates written out as `12 Ekim 2026` or `12 October 2026`. A day range such
+# as `4→5 Ekim 2026` or `26–27 Eylül 2026` dates the entry by its last day.
+MONTHS = {name: number for number, names in enumerate((
+    ('ocak', 'january'), ('şubat', 'subat', 'february'), ('mart', 'march'), ('nisan', 'april'),
+    ('mayıs', 'mayis', 'may'), ('haziran', 'june'), ('temmuz', 'july'), ('ağustos', 'agustos', 'august'),
+    ('eylül', 'eylul', 'september'), ('ekim', 'october'), ('kasım', 'kasim', 'november'),
+    ('aralık', 'aralik', 'december')), 1) for name in names}
+_DATE = (r'(?:\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])'
+         r'|(?:\d{1,2}[ \t]*[-–→][ \t]*)?(\d{1,2})[ \t]+('
+         + '|'.join(sorted(MONTHS, key=len, reverse=True)) + r')[ \t]+(\d{4}))(?!\d)')
+DATE = re.compile(r'(?<!\d)' + _DATE, re.IGNORECASE)
 CLOCK = re.compile(r'(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)')
 ITEM = re.compile(r'(?:[-*+]|\d{1,3}[.)])[ \t]')
-LEADING = re.compile(r'(?:(?:[-*+>]|\d{1,3}[.)])[ \t]+)?[*_`\[(]*\d{4}-\d{2}-\d{2}(?!\d)')
+LEADING = re.compile(r'(?:(?:[-*+>]|\d{1,3}[.)])[ \t]+)?[*_`\[(]*' + _DATE, re.IGNORECASE)
 # The same section names the context extractor already treats as history.
 HISTORY = {'Last-Session.md': re.compile(r'(?i)## (?:Previous|Önceki)'),
            'Threads.md': re.compile(r'(?i)## (?:Closed|Kapan|Kapalı)')}
@@ -39,27 +56,43 @@ POINTER = 'Arşivlenen metin: `{}`'
 BACKUP = '{} karakter tam metin yedeği (needs_rewrite)'
 POINTER_LINE = re.compile(r'Arşivlenen metin: `[^`\n]+`[ \t]*\r?\n?$')
 LOCK_NAME = '.beyin-compact.lock'
+DECISIONS = 'Kararlar.md'
+DECISION = re.compile(r'[ \t]*(?:[-*+][ \t]+)?\*\*(?:Karar(?:[ \t]+\d+)?(?:[ \t]+\([^*\n)]{1,40}\))?|Decision):[ \t]*\*\*', re.I)
+DECISION_KEY = re.compile(r'<!-- beyin-decision: ([0-9a-f]{64}) -->')
 
 
 class _LockError(Exception):
     pass
 
 
-def stamp(line, heading=False):
-    """(date, time) of an entry-opening line, or None.
+def _iso(match):
+    """`2026-10-12` for a DATE match, written-out dates included; None for an impossible day."""
+    try:
+        if not match[1]:
+            return datetime.strptime(match[0], '%Y-%m-%d').strftime('%Y-%m-%d')
+        month = match[2].replace('İ', 'i').lower()
+        return datetime(int(match[3]), MONTHS[month], int(match[1])).strftime('%Y-%m-%d')
+    except (KeyError, ValueError):
+        return None
 
-    The ISO date must be among the first 48 characters and, outside headings, before any
-    colon: `**Status:** active, 2026-10-01` is a field, `2026-09-24 14:05: ...` an entry.
+
+def stamp(line, heading=False):
+    """(ISO date, time) of an entry-opening line, or None.
+
+    The date (ISO, or written out as in MONTHS) must be among the first 48 characters and,
+    outside headings, before any colon: `**Status:** active, 2026-10-01` is a field,
+    `2026-09-24 14:05: ...` and `12 Ekim 2026: ...` are entries.
     """
-    text = line.strip()
+    text = unicodedata.normalize('NFC', line.strip())
     date = DATE.search(text, 0, 48)
-    if not date:
+    iso = _iso(date) if date else None
+    if not iso:
         return None
     colon = text.find(':')
     if not heading and 0 <= colon < date.start():
         return None
     clock = CLOCK.search(text, date.end(), date.end() + 12)
-    return date[0], (clock[1].zfill(2) + ':' + clock[2]) if clock else ''
+    return iso, (clock[1].zfill(2) + ':' + clock[2]) if clock else ''
 
 
 def _frontmatter_end(lines):
@@ -133,7 +166,7 @@ def blocks(lines, name):
         if in_history:
             continue
         key = stamp(bare) if bare.strip() and not card else None
-        if key and (boundary or ITEM.match(bare) or LEADING.match(bare)):
+        if key and (boundary or ITEM.match(bare) or LEADING.match(unicodedata.normalize('NFC', bare))):
             begin('entry', index, key)
         boundary = not bare.strip()
     found[-1]['end'] = len(lines)
@@ -226,6 +259,95 @@ def plan(text, name, limit, pointer):
     return {'live': live, 'archive': ''.join(archive), 'newline': newline,
             'moved_lines': sorted(moved_lines), 'moved_chars': sum(len(lines[i]) for i in moved_lines),
             'moved_entries': len(moved_blocks), 'moved_history': bool(history_moved)}
+
+
+def decisions(text, moved_lines):
+    """(card heading, decision line) pairs among the moved lines, in file order.
+
+    The heading is the nearest level-2+ heading above the line; fenced code is skipped like
+    everywhere else in the companion files.
+    """
+    found, heading, fence = [], None, None
+    moved = set(moved_lines)
+    for index, line in enumerate(LINE.findall(text)):
+        bare = line.rstrip('\r\n')
+        if fence:  # same fence rule as blocks()
+            if re.match(r' {0,3}' + re.escape(fence[0]) + '{' + str(len(fence)) + r',}[ \t]*$', bare):
+                fence = None
+            continue
+        opened = FENCE.match(bare)
+        if opened and not (opened[1][0] == '`' and '`' in bare[opened.end():]):
+            fence = opened[1]
+            continue
+        level = HEADING.match(line)
+        if level and len(level[1]) >= 2:
+            heading = line.strip()
+        elif index in moved and DECISION.match(line):
+            found.append((heading, bare))
+    return found
+
+
+def _decision_source_allowed(text):
+    """A copied line must never broaden the source's local visibility or trust policy."""
+    from beyin_v3_sync import parse
+    from beyin_v3 import _rejected_inference
+    try:
+        metadata, _ = parse(text)
+    except (ValueError, TypeError):
+        return False
+    return (metadata.get('visibility', 'internal') in ('internal', 'public')
+            and metadata.get('trust') != 'untrusted' and metadata.get('trusted') is not False
+            and metadata.get('status') != 'untrusted' and metadata.get('kind') != 'untrusted'
+            and not _rejected_inference(metadata))
+
+
+def _decision_ledger_check(target, vault):
+    path = target / DECISIONS
+    _inside(path, vault)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('decision ledger must be a real UTF-8 file inside the vault')
+    if path.exists():
+        from beyin_v3_sync import parse
+        metadata, _ = parse(path.read_bytes().decode('utf-8'))
+        if metadata.get('visibility') != 'private' and metadata.get('remote_allowed') is not False:
+            raise ValueError('existing decision ledger must have remote_allowed: false or visibility: private')
+
+
+def _record_decisions(target, vault, found, archive_relative, newline, source_relative=None):
+    """Append each source/card/line once, without losing identical decisions in other cards."""
+    path = target / DECISIONS
+    _inside(path, vault)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('decision ledger must be a real UTF-8 file inside the vault')
+    existing = path.read_bytes().decode('utf-8') if path.exists() else None
+    known = set(DECISION_KEY.findall(existing or ''))
+    fresh = []
+    source_relative = source_relative or archive_relative
+    for heading, line in found:
+        key = hashlib.sha256(json.dumps([source_relative, heading, line], ensure_ascii=False).encode('utf-8')).hexdigest()
+        if key not in known:
+            known.add(key)
+            fresh.append((heading, line, key))
+    if not fresh:
+        return 0
+    if existing is None:
+        existing = newline.join([
+            '---', '{"kind": "note", "visibility": "internal", "remote_allowed": false, "title": "Kararlar"}', '---', '# Kararlar', '',
+            '`beyin.py companion-compact` arşive taşıdığı kartlardaki karar satırlarını buraya, kartın başlığı '
+            've arşiv yoluyla kelimesi kelimesine ekler. Dosya yalnız eklenerek büyür; elle düzenleyebilirsin.', ''])
+    elif not existing.endswith('\n'):
+        existing += newline
+    added, groups = [], []
+    for heading, line, key in fresh:
+        if not groups or groups[-1][0] != heading:
+            groups.append((heading, []))
+        groups[-1][1].append((line, key))
+    for heading, group in groups:
+        added.append(newline + ''.join('<!-- beyin-decision: ' + key + ' -->' + newline for _, key in group))
+        added.append((heading if heading else '## (başlıksız)') + newline + 'Arşiv: `' + archive_relative + '`' + newline)
+        added.extend(line + newline for line, _ in group)
+    _write(path, existing + ''.join(added))
+    return len(fresh)
 
 
 def _write(path, text):
@@ -363,7 +485,16 @@ def _compact_files(vault, target, configured, dry_run=False, now=None):
         # #168: a file that stays over the limit is rewritten by the agent next, which may
         # summarize. Its full remaining text goes to the archive first, verbatim, so the
         # rewrite can never be the only copy of anything.
+        found = decisions(text, result['moved_lines']) if result is not None and _decision_source_allowed(text) else []
+        if found:
+            try:
+                _decision_ledger_check(target, vault)
+            except (ValueError, UnicodeError, OSError) as exc:
+                files[name] = dict(report, status='needs_attention', reason=str(exc) + '; nothing moved')
+                continue
         if dry_run:
+            if found:
+                report.update(decisions_planned=len(found))
             if backup is not None:
                 report.update(backup='planned')
             if result is None:
@@ -431,6 +562,10 @@ def _compact_files(vault, target, configured, dry_run=False, now=None):
                                reason='No Previous/Closed section and no older dated entry to move; full file backed up to '
                                       'the archive. Rewrite the file within the limit.')
             continue
+        if found:
+            # Store the searchable copy before removing its original live card.
+            report.update(decisions_added=_record_decisions(target, vault, found, archive_relative, result['newline'],
+                                                           source_relative=f'{relative}/{name}'))
         _write(path, result['live'])
         files[name] = dict(report, status='compacted')
     statuses = {entry['status'] for entry in files.values()}

@@ -215,20 +215,43 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
         context = store.context_for(harness, query, project=project, strict=True, budget_chars=budget_chars)
         strict = context['records']
     known = {r['id'] for r in strict}
+    try:
+        from beyin_v3_passage import settings as passage_settings, _path_key
+        exclude_prefixes = tuple(_path_key(p) for p in passage_settings(store.state_dir).get('exclude', ()))
+    except ImportError:
+        exclude_prefixes = ()
+        _path_key = lambda s: str(s).lower()
+
     loose = [r for r in store.candidates(query, project=project, limit=AUTO_POOL * 2)
-             if r['id'] not in known and not str(r.get('source', '')).startswith(store.STRICT_EXCLUDE)]
-    # Local-only records get local eligibility, but consume no remote-candidate slot.
-    union = _interleave([strict, loose])
-    records = [r for r in union if remote_allowed(r)][:AUTO_POOL]
-    records += [r for r in strict if not remote_allowed(r)][:AUTO_LIMIT]
-    keys = {'k' + str(i): r for i, r in enumerate(records) if str(r.get('text', '')).strip() and remote_allowed(r)}
+             if r['id'] not in known and not str(r.get('source', '')).startswith(store.STRICT_EXCLUDE)
+             and not (exclude_prefixes and _path_key(str(r.get('source', ''))).startswith(exclude_prefixes))]
+
+    # Strict records have verified lexical matches and take precedence in the advisor pool.
+    strict_remote = [r for r in strict if remote_allowed(r)]
+    strict_remote_ids = {r['id'] for r in strict_remote}
+    loose_remote = [r for r in loose if remote_allowed(r) and r['id'] not in strict_remote_ids]
+
+    # Fill up to AUTO_POOL with remote-allowed candidates: strict first, then loose.
+    evaluated_strict = strict_remote[:AUTO_POOL]
+    remaining_slots = max(0, AUTO_POOL - len(evaluated_strict))
+    evaluated_loose = loose_remote[:remaining_slots]
+
+    remote_pool = evaluated_strict + evaluated_loose
+    records = list(remote_pool)
+    # Overflow or local-only strict records remain eligible locally without consuming remote slots.
+    unevaluated_strict = [r for r in strict if r not in remote_pool]
+    records += unevaluated_strict
+
+    keys = {'k' + str(i): r for i, r in enumerate(remote_pool) if str(r.get('text', '')).strip()}
     if not keys:
         return context
     before = _signature(records)
     cards = [dict(id=k, title=str(r.get('title', ''))[:160], excerpt=r['text'][:AUTO_EXCERPT],
                   project=str(r.get('project') or ''), status=str(r.get('status') or ''),
                   updated_at=str(r.get('updated_at') or '')) for k, r in keys.items()]
-    outcome = dict(event='auto_context', mode=mode['mode'], strict=len(strict), loose=len(records) - len(strict))
+    sent_strict = sum(1 for r in keys.values() if r['id'] in known)
+    sent_loose = sum(1 for r in keys.values() if r['id'] not in known)
+    outcome = dict(event='auto_context', mode=mode['mode'], strict=sent_strict, loose=sent_loose)
     try:
         _safe(store, [query, cards])
     except (ValueError, OSError):
@@ -250,8 +273,10 @@ def auto_context(store, harness, query, context, *, budget_chars, timeout_cap=2.
     bar = limits(mode)
     passed = scores['topical'] >= bar['gate']
     by_record = {r['id']: scores[k] for k, r in keys.items()}
-    keep = [r for r in records if passed and by_record.get(r['id'], 1.0 if r['id'] in known else 0.0)
-            >= (bar['keep'] if r['id'] in known else bar['rescue'])]
+    unscored_strict = known - {r['id'] for r in keys.values()}
+    keep = [r for r in records if r['id'] in unscored_strict or
+            (passed and by_record.get(r['id'], 0.0)
+             >= (bar['keep'] if r['id'] in known else bar['rescue']))]
     dropped = len([r for r in strict if r not in keep])
     rescued = len([r for r in keep if r['id'] not in known])
     # Laya never reaches `on` (client.SHADOW_ONLY); unmeasured thresholds would only log as well.
