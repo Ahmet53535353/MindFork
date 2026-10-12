@@ -120,6 +120,20 @@ Kaynak yazıldıktan sonra `python3 beyin.py sync` çalıştır. Görev değişi
 
 İşin bitişi önceden tanımlanmalıysa yeni görev metadata'sına `"completion_contract":"strict"` ve gözlenebilir `"completion_criterion":"..."` ekle. Bu görev `done` yapılırken `changes` içinde vault içindeki mevcut kaynak yollarından oluşan `"evidence_refs":["notes/sonuc.md"]` ver; eksik veya olmayan kaynak yazma işlemini durdurur. Ölçütü `done` güncellemesinde değiştiremezsin; değişmesi gerekiyorsa bunu önce ayrı bir güncellemeyle yap ve kullanıcıya söyle. Görevin kendi dosyası kanıt ref'i olamaz. Kanıt kaynağı kaybolursa görevi `done` dışı bir duruma alırken aynı güncellemede `"evidence_refs":[]` gönder; yeni kaynak eklemeden yeniden `done` yapma. `cancelled` için kanıt zorunlu değildir. Eski görevler opt-in yapmadan çalışır. `doctor` tamamlanmış eski görevleri bilgi olarak, bozuk strict sözleşmeleri dikkat gerektiren bulgu olarak listeler. Kanıt yolu bulunması işin bağımsız doğrulandığı anlamına gelmez.
 
+## Kişi notları
+
+Kullanıcının hayatındaki insanlar (iş arkadaşı, hoca, müşteri, aile) dağınık notlarda değil, kişi başına bir notta yaşar: `notes/kisiler/<ad-soyad>.md`, `kind: person`. Kullanıcının mevcut bir kişi klasörü varsa onu kullan; yeni düzen dayatma. Konuşmada bir kişi hakkında kalıcı bilgi geçtiğinde (rol, kurum, kullanıcıyla ilişkisi, temas, söz verilen sonraki adım) önce `python3 beyin.py context "Ad Soyad"` ile mevcut notu ara; varsa onu güncelle, yoksa `note-create` ile aç:
+
+```json
+{"source":"notes/kisiler/ayse-yilmaz.md","text":"# Ayşe Yılmaz\n\n## Beyan\n- 2026-10-12 (kullanıcı): Bölümde danışman hocam.\n\n## Çıkarım (onay bekliyor)\n\n## Temaslar\n\n## Kaynaklar\n","metadata":{"kind":"person","title":"Ayşe Yılmaz","aliases":["Ayşe hoca"],"facts":{"kurum":"Örnek Üniversitesi","rol":"Doçent","iliski":"danışman"},"visibility":"internal"}}
+```
+
+- `title` kişinin tam adı, `aliases` kullanıcının ona hitap ettiği kısa adlar ve kullanıcı adlarıdır; ikisi de aramada eşleşir, bu yüzden kişi adıyla sorulan soruda kart bağlama gelir. Aynı kişiye ikinci not açma; isim yazımı farklıysa alias ekle.
+- Kullanıcının söylediği **Beyan** bölümüne tarihli girer ve istenmesini beklemeden kaydedilir. Senin tahminin (ör. iki kişinin birlikte çalıştığı) **Çıkarım** bölümüne gider ve kullanıcıya sorulana kadar olgu sayılmaz. Beyan ya da açık kaynakla zaten cevaplanmış şeyi tekrar sorma.
+- Açık kaynaktan (kurum sayfası, yayın listesi) eklenen bilgi kaynağıyla birlikte **Kaynaklar** bölümüne bağlanır; kişinin kamusal mesleki faaliyetinin ötesine geçme.
+- Sağlık, mahrem hayat, siyasi/dini görüş, finansal durum gibi hassas bilgiyi kişi notuna yazma; kullanıcı açıkça isterse notu `visibility: private` yap. Kullanıcı bir kişinin notunun silinmesini isterse sil.
+- Kişiyle ilgili görev (ör. "Ayşe hocaya taslağı gönder") `task-create` ile görev olur; kişi notunda yalnız bağlantısı durur.
+
 ## Oturum sonucu ve öğrenimler
 
 Anlamlı çalışma bittiğinde, kullanıcı hafızaya yazılmamasını istemediyse kısa bir kaynak bağlantılı sonuç kaydı gönder. İşin gerçek sonucunu ve varsa açık kalan adımı yaz; planı tamamlanmış sonuç gibi kaydetme. Yalnız kalıcı öğrenimler varsa bunları kullanıcının knowledge düzeninde kaynak bağlantılı Markdown olarak damıt. Her konuşmadan zorla öğrenim çıkarma; reasoning, ham araç logları veya bütün transkriptleri notlara kopyalama.
