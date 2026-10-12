@@ -413,6 +413,9 @@ def parser():
                              help="Read every source instead of trusting unchanged file signatures")
     sub.add_parser("skill-sync", help="Reconcile project-local shared skills")
     sub.add_parser("doctor", help="Read local hook health and pending metadata counts")
+    scheduled = sub.add_parser("scheduled-check", help="Sync then doctor for an OS scheduler you set up; no model call, no service")
+    scheduled.add_argument("--notify", action="store_true",
+                           help="Opt-in OS notification when the result changes; issue kinds and counts only")
     recap = sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
     recap.add_argument("--days", type=int, help="Calendar days in UTC, including today (1..366, default 7); "
                                                 "not allowed with --since/--until")
@@ -724,6 +727,12 @@ def main(argv=None, return_result=False):
                     seen[event['harness']].add(event.get('event', 'unknown'))
             result['lifecycle'] = {name: {'status': 'observed_metadata' if events else 'never_seen', 'events': sorted(events)} for name, events in seen.items()}
             result['legacy_external_schedules'] = 'not_inspected; review custom OS/compiler schedules before migration'
+            try:  # information only: the last scheduled-check run, if the user set one up (#267)
+                _ensure_scripts_path()
+                import beyin_v3_scheduled as scheduled
+                result['scheduled_check'] = scheduled.doctor(state)
+            except Exception as exc:
+                result['scheduled_check'] = {'status': 'unavailable', 'error': type(exc).__name__}
             try:  # information only: a stale-path report must never hide the rest of doctor
                 result['hook_paths'] = hook_paths(vault)
             except Exception as exc:
@@ -884,6 +893,14 @@ def main(argv=None, return_result=False):
                             result['omp_global_hook'] = {'path': str(global_copy), 'stale': False}
             except Exception as exc:  # a stale-copy report must never hide the rest of doctor
                 result['omp_global_hook'] = {'status': 'unavailable', 'error': type(exc).__name__}
+        elif args.command == "scheduled-check":
+            _ensure_scripts_path()
+            import beyin_v3_scheduled as scheduled
+            result, code = scheduled.run(vault, state, Path(__file__).resolve(), notify=args.notify)
+            if return_result:
+                return result, code
+            print(json.dumps(result, ensure_ascii=True, indent=2))
+            return code
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":

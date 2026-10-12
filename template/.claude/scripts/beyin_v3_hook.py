@@ -437,6 +437,13 @@ def main():
                 notice += session_notice(vault, state)
             except Exception:
                 pass
+        if event == 'SessionStart' and not args.metadata_only and (state / 'scheduled-notice.json').is_file():
+            # A scheduled-check run that needs attention (#267): one small state file, said once, then gone.
+            try:
+                from beyin_v3_scheduled import session_notice as scheduled_notice
+                notice += scheduled_notice(state)
+            except Exception:
+                pass
         if not args.metadata_only and event in ('SessionStart', 'PostToolUse') and (state / 'hygiene.json').is_file():
             # Opt-in hygiene signals (#130), machine-local in state/hygiene.json. Independent of the
             # performance profile, and never able to cost the session or the turn itself.
