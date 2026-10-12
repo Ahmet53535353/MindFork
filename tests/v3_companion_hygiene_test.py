@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unicodedata
 from unittest import mock
 
 from v3_package_helpers import inherited_env
@@ -410,6 +411,103 @@ class HygieneCliTest(unittest.TestCase):
         archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
         self.assertIn('CARD_11', archive, 'oldest session card is safely preserved in archive')
 
+    def test_private_source_decisions_are_not_promoted_to_internal_ledger(self):
+        cards = ['---\n{"visibility":"private"}\n---\n# Son oturum\n\n']
+        cards += [f'## 2026-09-{day:02d}: PRIVATE_CARD_{day}\n**Karar:** PRIVATE_ONLY_{day}\n' + FILLER * 5 + '\n'
+                  for day in range(25, 10, -1)]
+        self.write('Last-Session.md', ''.join(cards))
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'compacted')
+        self.assertFalse((self.directory / 'Kararlar.md').exists())
+        self.assertNotIn('decisions_added', result['files']['Last-Session.md'])
+
+    def test_invalid_existing_decision_ledger_leaves_live_cards_untouched(self):
+        cards = '# Son oturum\n\n' + ''.join(
+            f'## 2026-09-{day:02d}: CARD_{day}\n**Karar:** Decision_{day}\n' + FILLER * 5 + '\n'
+            for day in range(25, 10, -1))
+        last = self.write('Last-Session.md', cards)
+        ledger = self.directory / 'Kararlar.md'
+        ledger.write_bytes(b'\xff')
+        before = last.read_bytes()
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'needs_attention')
+        self.assertEqual(last.read_bytes(), before)
+        self.assertFalse((self.directory / 'Arşiv').exists())
+
+    def test_decisions_keep_the_dated_card_heading_through_equal_subheadings(self):
+        text = ('# Son oturum\n## 2026-09-24 · A\n### Details\n**Karar:** same\n'
+                '## 2026-09-25 · B\n### Details\n**Karar:** same\n')
+        found = compact_module.decisions(text, range(len(compact_module.LINE.findall(text))))
+        self.assertEqual(found, [('## 2026-09-24 · A', '**Karar:** same'),
+                                 ('## 2026-09-25 · B', '**Karar:** same')])
+
+    def test_decision_identity_preserves_equal_lines_from_distinct_cards_and_dedupes_retries(self):
+        line = '  - **Karar:** Aynı söz farklı iki toplantıda söylendi.'
+        first = [('## 2026-09-24 · kart A', line), ('## 2026-09-24 · kart A', line)]
+        archive = f'{COMPANION}/Arşiv/Last-Session-2026-09.md'
+        source = f'{COMPANION}/Last-Session.md'
+        args = (self.directory.resolve(), self.vault.resolve())
+        added = compact_module._record_decisions(*args, first, archive, '\n', source)
+        self.assertEqual(added, 1)
+        ledger = self.directory / 'Kararlar.md'
+        before = ledger.read_bytes()
+        self.assertEqual(compact_module._record_decisions(*args, first, archive.replace('09.md', '10.md'), '\n', source), 0)
+        self.assertEqual(ledger.read_bytes(), before)
+        second = [('## 2026-09-25 · kart B', line)]
+        self.assertEqual(compact_module._record_decisions(*args, second, archive, '\n', source), 1)
+        self.assertEqual(ledger.read_text(encoding='utf-8').count(line), 2)
+        self.assertIn('"remote_allowed": false', ledger.read_text(encoding='utf-8'))
+
+    def test_decision_lines_of_moved_cards_are_copied_to_kararlar_once(self):
+        moment = datetime(2026, 9, 26, 16, 30)
+        cards = ['# Son oturum\n\n']
+        for i in range(12):
+            stamp = (moment - timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M')
+            cards.append(f'## {stamp} · session_{i:02d} · a{i:07x}\n'
+                         f'**Karar (Umut):** DECISION_{i:02d} ayrı repo.\n'
+                         f'- **Decision:** EN_{i:02d} kept.\n'
+                         f'**Kararsız:** NOT_{i:02d}\n'
+                         f'```\n**Karar:** FENCED_{i:02d}\n```\n' + FILLER * 5 + '\n\n')
+        last = self.write('Last-Session.md', ''.join(cards))
+        decisions = self.directory / 'Kararlar.md'
+        planned = self.run_cli('companion-compact', '--dry-run')
+        self.assertGreater(planned['files']['Last-Session.md']['decisions_planned'], 0)
+        self.assertFalse(decisions.exists(), 'a dry run writes nothing')
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'compacted')
+        report = result['files']['Last-Session.md']
+        text = decisions.read_text(encoding='utf-8')
+        live = last.read_text(encoding='utf-8')
+        month = datetime.now(timezone.utc).strftime('%Y-%m')
+        archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
+        moved = [i for i in range(12) if f'DECISION_{i:02d}' in archive]
+        self.assertTrue(moved)
+        self.assertEqual(report['decisions_added'], 2 * len(moved))
+        self.assertIn('DECISION_00', live)
+        self.assertNotIn('DECISION_00', text, 'a card that stays keeps its decision in place only')
+        for i in moved:
+            stamp = (moment - timedelta(hours=2 * i)).strftime('%Y-%m-%d %H:%M')
+            self.assertIn(f'## {stamp} · session_{i:02d} · a{i:07x}\n'
+                          f'Arşiv: `{COMPANION}/Arşiv/Last-Session-{month}.md`\n'
+                          f'**Karar (Umut):** DECISION_{i:02d} ayrı repo.\n'
+                          f'- **Decision:** EN_{i:02d} kept.\n', text)
+        for absent in ('NOT_', 'FENCED_'):
+            self.assertNotIn(absent, text)
+        # A later compaction adds only new decisions; nothing is copied twice.
+        last.write_bytes(live.replace('# Son oturum\n\n', '# Son oturum\n\n' + ''.join(
+            f'## 2026-09-27 {h:02d}:00 · yeni_{h} · b{h:07x}\n**Karar:** NEW_{h}\n' + FILLER * 5 + '\n\n'
+            for h in range(9, 3, -1)), 1).encode('utf-8'))
+        self.run_cli('companion-compact')
+        again = decisions.read_text(encoding='utf-8')
+        self.assertTrue(again.startswith(text), 'Kararlar.md only grows by appending')
+        for i in moved:
+            self.assertEqual(again.count(f'DECISION_{i:02d}'), 1)
+        self.assertIn('DECISION_00', again)
+        # Kararlar.md is an ordinary internal note: sync indexes it like any other source.
+        synced = self.run_cli('sync')
+        self.assertEqual(synced['status'], 'succeeded')
+        self.assertFalse([w for w in synced.get('warnings', []) if 'Kararlar' in str(w)])
+
     def test_instructions_ask_for_a_rewrite_not_an_append(self):
         skill = (ROOT / 'template/.agents/skills/beyin/SKILL.md').read_text(encoding='utf-8')
         installer = (ROOT / 'scripts/install_v3.py').read_text(encoding='utf-8')
@@ -582,6 +680,28 @@ class CompactionPlanTest(unittest.TestCase):
         self.assertIn('EN_ESKİ_KART_1', result['archive'])
         self.assertIn('## Önceki oturumlar\n\n' + self.POINTER, result['live'])
         self.assertLessEqual(len(result['live']), 350)
+
+    def test_written_out_dates_are_entries_ordered_by_their_day(self):
+        # A Turkish vault writes `## 12 Ekim 2026: ...`; without this nothing was dated and the
+        # whole file ended in needs_rewrite. A range counts by its last day; the order is the
+        # calendar, not the text (`4→5 Ekim` is older than `12 Ekim`, `26–27 Eylül` older still).
+        text = ('# Son oturum\n\n'
+                '## 12 Ekim 2026 (gece): EN_YENİ\nkarar\n\n'
+                '## 2026-10-11 21:00 · ev · 1a2b3c4d\nISO_KART ' + FILLER * 3 + '\n\n'
+                '## 4→5 Ekim 2026: ARALIK ' + FILLER * 3 + '\n\n'
+                '## 26–27 Eylül 2026: EYLÜL ' + FILLER * 3 + '\n\n'
+                '## 3 October 2025: ENGLISH ' + FILLER * 3 + '\n')
+        result = self.plan(text, 'Last-Session.md', 200)
+        self.assertEqual(result['moved_entries'], 4)
+        self.assertIn('EN_YENİ', result['live'])
+        for old in ('ISO_KART', 'ARALIK', 'EYLÜL', 'ENGLISH'):
+            self.assertNotIn(old, result['live'])
+        self.assertEqual(compact_module.stamp('## 4→5 Ekim 2026: x', heading=True), ('2026-10-05', ''))
+        self.assertEqual(compact_module.stamp('- 9 MAYIS 2026 14:05 not'), ('2026-05-09', '14:05'))
+        self.assertEqual(compact_module.stamp('## 12 EKİM 2026: x', heading=True), ('2026-10-12', ''))
+        self.assertEqual(compact_module.stamp(unicodedata.normalize('NFD', '## 12 Şubat 2026: x'), heading=True), ('2026-02-12', ''))
+        for undated in ('## 2026-02-31: x', '## 31 Şubat 2026: x', '**Durum:** 12 Ekim 2026', '## Kasım planı 2026', '## 12 Ekimde 2026'):
+            self.assertIsNone(compact_module.stamp(undated, heading=undated.startswith('#')), undated)
 
     def test_thread_fields_with_dates_code_fences_and_crlf_stay(self):
         text = ('# Threads\r\n## Active Threads\r\n### Thread: A\r\n**Status:** waiting, 2026-10-01\r\n'

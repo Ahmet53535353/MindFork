@@ -14,6 +14,7 @@ import posixpath
 import re
 import sqlite3
 import stat
+import sys
 import unicodedata
 import urllib.parse
 
@@ -28,12 +29,90 @@ REJECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::
 RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")
 
 
+def _in_package_container(pinned: str) -> bool:
+    """True when a pinned path runs through an MSIX package container."""
+    parts = [part.lower() for part in pinned.replace("\\", "/").split("/") if part]
+    return "packages" in parts and "localcache" in parts[parts.index("packages") + 1:]
+
+
+def default_state(vault: Path) -> Path:
+    """Keep mutable state outside the vault, separated by canonical vault path."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library/Application Support"
+    else:
+        base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    key = hashlib.sha256(str(Path(vault).resolve()).encode()).hexdigest()[:16]
+    return base / "beyin-v3" / key
+
+
+def resolve_state(vault: Path, pinned: Path) -> Path:
+    """Resolve a foreign OS/user's conventional default; preserve custom and local pins."""
+    expected = default_state(vault).resolve()
+    raw = str(pinned)
+    if not raw:
+        return expected
+    if _in_package_container(raw):
+        return Path(pinned).expanduser().resolve()
+    portable = raw.replace("\\", "/")
+    # Match complete standard layouts, rather than a generic /state/ or /local/ suffix.
+    # A copied vault normally changes its absolute path and therefore its hash.
+    conventional = re.fullmatch(
+        r"(?:[A-Za-z]:/Users/[^/]+/AppData/Local|/home/[^/]+/\.local/state|"
+        r"/root/\.local/state|/Users/[^/]+/Library/Application Support)/beyin-v3/[0-9a-f]{16}",
+        portable, re.IGNORECASE)
+    local_parent = str(expected.parent).replace("\\", "/").casefold()
+    if conventional and portable.rsplit("/", 1)[0].casefold() != local_parent:
+        return expected
+    if not Path(pinned).expanduser().is_absolute():
+        if re.match(r"^[A-Za-z]:[/\\]", raw) or (sys.platform == "win32" and raw.startswith(("/", "\\"))):
+            return expected
+    return Path(pinned).expanduser().resolve()
+# Privacy must work in the contracted standalone core/no-sync checkout too.
+# Hygiene imports this same predicate instead of making retrieval depend on it.
+SENSITIVE_WORDS = re.compile(
+    r'(?:kasa|sifre|parola|kimlik|kimlig|finans|finansal|musteri|vergi|fatura|maas|ozel|gizli|gizlilik)'
+    r'(?:ler|lar)?(?:i|im|in|imiz|leri|lari)?'
+    r'|(?:private|secret|password|credential)s?')
+_SENSITIVE_FOLD = str.maketrans({'ş': 's', 'ğ': 'g', 'ü': 'u', 'ö': 'o', 'ç': 'c', 'ı': 'i', 'â': 'a', 'î': 'i', 'û': 'u'})
+
+def sensitive_fold(name):
+    """NFC, Turkish-aware casefold and ASCII-fold a name: 'MÜŞTERİLER' and NFD 'Şifre' both fold."""
+    text = unicodedata.normalize('NFC', str(name)).replace('İ', 'i').replace('I', 'i').lower()
+    return unicodedata.normalize('NFC', text.replace('̇', '')).translate(_SENSITIVE_FOLD)
+
+
+def sensitive_excluded(name):
+    """True when a directory name carries a kasa-class word (any position, any case/normal form)."""
+    return any(SENSITIVE_WORDS.fullmatch(word) for word in re.findall(r'[^\W\d_]+', sensitive_fold(name)))
+
+
+def sensitive_source(source):
+    """A vault-relative source inside a sensitive folder must not enter the memory index or context."""
+    return isinstance(source, str) and any(sensitive_excluded(part) for part in Path(source).parts[:-1])
+
+
 class RevisionConflict(ValueError):
     pass
 
 
 class ReceiptConflict(ValueError):
     pass
+
+
+MAX_RECEIPT_LINKS = 20
+
+
+def _plain_link(value):
+    """An http(s) URL a receipt may name as an external result: no spaces, controls or credentials."""
+    if not 0 < len(value) <= 2048 or re.search(r"[\s\x00-\x1f\x7f]", value):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(value)
+        return parts.scheme in ("http", "https") and bool(parts.hostname) and parts.username is None and parts.password is None
+    except ValueError:
+        return False
 
 
 def _json(value):
@@ -263,9 +342,6 @@ def _scope_path(value):
 
 
 def _scope_key(value):
-    # macOS and Windows vaults are case-insensitive and macOS may store names decomposed
-    # (NFD): a folder typed as "projeler/arşiv" must still claim "Projeler/Arşiv", or its
-    # notes fall through to the shared scope of every project.
     return unicodedata.normalize("NFC", value.replace("\\", "/")).casefold()
 
 
@@ -295,6 +371,7 @@ def read_project_scopes(vault_root):
     folders maps a vault-relative folder to a project; a record's own non-empty project
     field wins. shared_unscoped lets a project query also see records no folder or field
     assigns to any project. Another project's records never enter a project's scope.
+    Missing folders are skipped with a warning so unrelated projects remain fully functional (#317).
     """
     path = Path(vault_root) / PROJECT_SCOPES_FILE
     if path.is_symlink():
@@ -317,7 +394,9 @@ def read_project_scopes(vault_root):
             raise ValueError("project scope names must be non-empty strings")
         folder = _scope_path(folder)
         if not _scope_folder_exists(vault_root, folder):
-            raise ValueError("project scope folder not found in the vault: " + folder)
+            print(f"Warning: project scope folder not found in the vault: {folder}", file=sys.stderr)
+            # Keep the boundary for stale indexed rows used by explicit --no-sync.
+            # Dropping it would expose the other project's notes as shared_unscoped.
         key = _scope_key(folder)
         if mapped.get(key, project) != project:
             raise ValueError("project scope folder is assigned twice: " + folder)
@@ -689,7 +768,7 @@ class MemoryStore:
                 record.get("trust") != "untrusted" and record.get("trusted") is not False and
                 record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 
-    def submit_receipt(self, event_id, summary, refs, harness):
+    def submit_receipt(self, event_id, summary, refs, harness, links=None):
         self._require_writable()
         if not isinstance(event_id, str) or not event_id.strip():
             raise ValueError("event_id required")
@@ -700,13 +779,18 @@ class MemoryStore:
         if not isinstance(refs, list) or not refs:
             raise ValueError("source refs required")
         event = {"event_id": event_id, "summary": summary, "refs": [self._source(ref) for ref in refs], "harness": harness}
+        if links:
+            if not isinstance(links, list) or len(links) > MAX_RECEIPT_LINKS or not all(
+                    isinstance(link, str) and _plain_link(link) for link in links):
+                raise ValueError("links must be http(s) URLs without spaces or credentials")
+            event["links"] = list(links)
         payload = _json(event)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT payload FROM receipts WHERE id=?", (event_id,)).fetchone()
             if old:
                 previous = json.loads(old[0])
-                if previous["summary"] != summary or previous["refs"] != event["refs"]:
+                if (previous["summary"], previous["refs"], previous.get("links")) != (summary, event["refs"], event.get("links")):
                     raise ReceiptConflict("event_id reused with different payload")
                 event = previous
             db.execute("INSERT OR IGNORE INTO receipts VALUES (?,?)", (event_id, payload))
@@ -766,6 +850,8 @@ class MemoryStore:
         candidates = {name: [] for name in source_names}
         stale_count = 0
         for record in records:
+            if sensitive_source(record.get("source")):
+                continue
             if (record.get("visibility") not in allowed or record.get("trust") == "untrusted" or
                     record.get("trusted") is False or record.get("status") == "untrusted" or
                     record.get("kind") == "untrusted" or _rejected_inference(record)):
@@ -859,9 +945,11 @@ class MemoryStore:
         return weighted
 
     def _strict_rank(self, ranked, terms, vocabularies):
-        """Keep only meaningful lexical matches; see STRICT_* for the calibrated rules."""
+        """Keep meaningful matches without making one-word queries impossible."""
+        min_shared = min(self.STRICT_MIN_SHARED, len(terms))
+        min_weight = self.STRICT_SINGLE_TERM_MIN_WEIGHT if len(terms) == 1 else self.STRICT_MIN_WEIGHT
         return self._by_weight([(weight, record) for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies)
-                                if shared_count >= self.STRICT_MIN_SHARED and weight >= self.STRICT_MIN_WEIGHT])
+                                if shared_count >= min_shared and weight >= min_weight])
 
     BM25_K1 = 1.5
     BM25_B = 0.75
@@ -888,8 +976,9 @@ class MemoryStore:
             weighted.append((weight, record))
         return self._by_weight(weighted)
 
-    # Strict automatic context: used by the per-turn hook so that a single shared common
-    # word never pulls an unrelated note into the prompt. Weight = sum of relative idf over
+    # Strict automatic context: multiword queries need two shared words so that an incidental
+    # common word cannot pull an unrelated note into the prompt. One-word queries use a
+    # separate weight floor and still reject weak matches. Weight = sum of relative idf over
     # shared terms, divided by log(10 + note vocabulary size). Relative idf (idf / idf of a
     # term seen in exactly one note) keeps the scale independent of vault size, so the
     # threshold works for a 20-note vault and a 300-note vault alike.
@@ -897,6 +986,8 @@ class MemoryStore:
     # relevant 0.33-1.21; 0.30 silenced 6/7 irrelevant and kept 7/7 relevant.
     STRICT_MIN_SHARED = 2
     STRICT_MIN_WEIGHT = 0.30
+    # A single query term cannot meet the two-term gate; still exclude incidental long-note hits.
+    STRICT_SINGLE_TERM_MIN_WEIGHT = 0.20
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
     # Per-turn strict context ranks Markdown passages instead of whole notes and delivers the
@@ -924,6 +1015,9 @@ class MemoryStore:
         eligible = []
         stale_count = 0
         for record in records:
+            # Old indexes can still hold these notes until the next sync. Never deliver them.
+            if sensitive_source(record.get("source")):
+                continue
             if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record) != rejected_only:
                 continue
             if project is not None:

@@ -1,13 +1,14 @@
 """Opt-in folder project scopes (.beyin-projects.json) for explicit-project gates."""
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
 import unicodedata
 import unittest
 from unittest.mock import patch
-from v3_package_helpers import clean_environ
+from v3_package_helpers import clean_environ, inherited_env
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
@@ -104,23 +105,23 @@ class ProjectScopesTest(unittest.TestCase):
     def test_folder_case_and_decomposed_disk_names_still_claim_their_notes(self):
         # macOS keeps names as typed (often NFD) and matches case-insensitively; a folder
         # typed in another case must not leave its notes in the shared scope.
-        client = unicodedata.normalize('NFD', 'Projeler/Müşteri X')
+        client = unicodedata.normalize('NFD', 'Projeler/Paylaşım X')
         self.note('client', client + '/Teklif.md')
         self.note('rules', 'Companion/Kurallar.md')
-        self.scopes({'folders': {'projeler/müşteri x': 'musteri'}, 'shared_unscoped': True})
+        self.scopes({'folders': {'projeler/paylaşım x': 'musteri'}, 'shared_unscoped': True})
         self.assertEqual(self.ids('musteri'), ['client', 'rules'])
         self.assertEqual(self.ids('oyun'), ['rules'])
 
-    def test_missing_or_renamed_folder_fails_closed(self):
-        # A renamed project folder matches nothing; with shared_unscoped its notes would
-        # otherwise join every other project's scope.
+    def test_missing_or_renamed_folder_is_skipped_and_warns(self):
+        # A renamed or deleted project folder is skipped with a warning; other
+        # projects in the file remain fully functional and do not crash with ValueError (#317).
         self.note('archive', 'Projeler/Arşiv 2025/Plan.md')
         self.note('game', GAME + '/Plan.md')
-        for folders in ({ARCHIVE: 'arsiv', GAME: 'oyun'}, {'Projeler/Arsiv 2025': 'arsiv'}):
-            with self.subTest(folders=folders):
-                self.scopes({'folders': folders, 'shared_unscoped': True})
-                with self.assertRaisesRegex(ValueError, 'not found'):
-                    self.store._eligible('internal', 'oyun')
+        self.scopes({'folders': {ARCHIVE: 'arsiv', GAME: 'oyun'}, 'shared_unscoped': False})
+        # ARCHIVE folder doesn't exist, but 'oyun' folder exists: 'oyun' continues to work!
+        self.assertEqual(self.ids('oyun'), ['game'])
+        # Querying the missing project returns empty folder scope rather than crashing
+        self.assertEqual(self.ids('arsiv'), [])
         self.scopes({'folders': {GAME: 'oyun', 'projeler/oyun kanalları/': 'oyun'}})
         self.assertEqual(self.ids('oyun'), ['game'])
         self.scopes({'folders': {GAME: 'oyun', 'projeler/oyun kanalları': 'arsiv'}})
@@ -132,6 +133,50 @@ class ProjectScopesTest(unittest.TestCase):
         self.scopes('{broken')
         self.assertEqual(self.ids(None), ['archive', 'game', 'rules', 'tagged'])
         self.assertTrue(self.store.retrieve('kaynak notu', limit=10)['records'])
+
+    def test_missing_folder_keeps_stale_index_rows_out_of_shared_scope(self):
+        note = self.note('private-project', ARCHIVE + '/Plan.md')
+        self.note('game', GAME + '/Plan.md')
+        self.scopes({'folders': {ARCHIVE: 'arsiv', GAME: 'oyun'}, 'shared_unscoped': True})
+        (self.vault / ARCHIVE / 'Plan.md').unlink()
+        (self.vault / ARCHIVE).rmdir()
+        # Exercise actual persisted rows with the deleted folder, as --no-sync does.
+        self.assertEqual(self.ids('oyun'), ['game'])
+        import beyin_v3_projects as projects
+        self.assertIn((runtime._scope_key(ARCHIVE), 'arsiv'), projects.read_project_scopes(self.vault)['folders'])
+
+    def test_management_preserves_invalid_or_symlinked_user_configuration(self):
+        import beyin_v3_projects as projects
+        (self.vault / 'Projeler/Alpha').mkdir(parents=True)
+        path = self.vault / runtime.PROJECT_SCOPES_FILE
+        for raw in ('[]', '{"folders": []}', '{"shared_unscoped": "yes"}'):
+            path.write_text(raw, encoding='utf-8')
+            for action in ('add', 'remove', 'prune'):
+                with self.assertRaises(ValueError):
+                    projects.manage(self.vault, action, folder='Projeler/Alpha', project='alpha')
+                self.assertEqual(path.read_text(encoding='utf-8'), raw)
+        path.unlink()
+        outside = self.vault.parent / 'outside-scopes.json'
+        outside.write_text('{"folders": {}}', encoding='utf-8')
+        try:
+            path.symlink_to(outside)
+        except OSError:
+            return
+        with self.assertRaises(ValueError):
+            projects.manage(self.vault, 'add', folder='Projeler/Alpha', project='alpha')
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(outside.read_text(encoding='utf-8'), '{"folders": {}}')
+
+    def test_cli_scope_list_does_not_initialize_runtime(self):
+        state = self.vault.parent / 'uninitialized-runtime'
+        before = sorted(path.relative_to(self.vault).as_posix() for path in self.vault.rglob('*'))
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(state), 'project-scope', 'list'], env=inherited_env(),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['status'], 'absent')
+        self.assertFalse(state.exists())
+        self.assertEqual(before, sorted(path.relative_to(self.vault).as_posix() for path in self.vault.rglob('*')))
 
     def test_invalid_files_fail_closed_for_explicit_projects(self):
         self.vault_notes()
@@ -193,6 +238,69 @@ class ProjectScopesTest(unittest.TestCase):
         self.scopes({'folders': {ARCHIVE: 'arsiv'}, 'shared_unscoped': True})
         found = [m['record_id'] for m in runtime.rejected_matches(self.store, claim, 'oyun')]
         self.assertEqual(found, ['shared-old'])
+
+    def test_doctor_reports_project_scopes_health(self):
+        import beyin_v3_projects as projects
+        # 1. Absent
+        scopes_file = self.vault / runtime.PROJECT_SCOPES_FILE
+        if scopes_file.exists():
+            scopes_file.unlink()
+        report = projects.check_project_scopes(self.vault)
+        self.assertEqual(report['status'], 'absent')
+
+        # 2. OK (all configured folders exist)
+        (self.vault / 'Projeler/A').mkdir(parents=True, exist_ok=True)
+        (self.vault / 'Projeler/B').mkdir(parents=True, exist_ok=True)
+        self.scopes({'folders': {'Projeler/A': 'a', 'Projeler/B': 'b'}, 'shared_unscoped': True})
+        report = projects.check_project_scopes(self.vault)
+        self.assertEqual(report['status'], 'ok')
+        self.assertEqual(report['missing_folders'], [])
+
+        # 3. Warning (missing folder)
+        import shutil
+        shutil.rmtree(self.vault / 'Projeler/B')
+        report = projects.check_project_scopes(self.vault)
+        self.assertEqual(report['status'], 'warning')
+        self.assertEqual(report['missing_folders'], ['Projeler/B'])
+
+        # 4. Error (duplicate folder assignment)
+        self.scopes({'folders': {'Projeler/A': 'a', 'projeler/a': 'other'}})
+        report = projects.check_project_scopes(self.vault)
+        self.assertEqual(report['status'], 'error')
+        self.assertTrue(report['duplicate_folders'])
+
+    def test_project_scope_cli_manage_actions(self):
+        import beyin_v3_projects as projects
+        (self.vault / 'Projeler/Alpha').mkdir(parents=True, exist_ok=True)
+        (self.vault / 'Projeler/Beta').mkdir(parents=True, exist_ok=True)
+
+        # 1. Add
+        res = projects.manage(self.vault, 'add', folder='Projeler/Alpha', project='alpha', shared_unscoped='on')
+        self.assertEqual(res['status'], 'saved')
+        self.assertEqual(res['folders'], {'Projeler/Alpha': 'alpha'})
+        self.assertTrue(res['shared_unscoped'])
+
+        # Add second folder
+        projects.manage(self.vault, 'add', folder='Projeler/Beta', project='beta')
+
+        # 2. List
+        listed = projects.manage(self.vault, 'list')
+        self.assertEqual(listed['status'], 'ok')
+        self.assertIn('Projeler/Alpha', listed['folders'])
+        self.assertIn('Projeler/Beta', listed['folders'])
+
+        # 3. Prune (remove Beta from disk, prune should remove it from .beyin-projects.json)
+        import shutil
+        shutil.rmtree(self.vault / 'Projeler/Beta')
+        pruned = projects.manage(self.vault, 'prune')
+        self.assertEqual(pruned['status'], 'saved')
+        self.assertEqual(pruned['pruned'], ['Projeler/Beta'])
+        self.assertEqual(pruned['folders'], {'Projeler/Alpha': 'alpha'})
+
+        # 4. Remove
+        removed = projects.manage(self.vault, 'remove', folder='Projeler/Alpha')
+        self.assertEqual(removed['status'], 'saved')
+        self.assertEqual(removed['folders'], {})
 
 
 if __name__ == '__main__':

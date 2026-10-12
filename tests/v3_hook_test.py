@@ -39,6 +39,20 @@ def load_hook():
 
 
 class HookInstallerTest(unittest.TestCase):
+    def test_install_matches_direct_editor_tools_without_matching_shell_commands(self):
+        self.install()
+        for relative in ('.claude/settings.local.json', '.codex/hooks.json'):
+            config = json.loads((self.vault / relative).read_text(encoding='utf-8'))
+            groups = config['hooks']['PostToolUse']
+            owned = [group for group in groups if any('beyin_v3_hook.py' in decoded_command(h['command'])
+                                                     for h in group.get('hooks', []))]
+            self.assertEqual(len(owned), 1)
+            matcher = re.compile('^(?:' + owned[0]['matcher'] + ')$')
+            for tool in ('Edit', 'Write', 'apply_patch', 'MultiEdit', 'NotebookEdit'):
+                self.assertIsNotNone(matcher.fullmatch(tool))
+            for tool in ('Bash', 'exec_command', 'Read'):
+                self.assertIsNone(matcher.fullmatch(tool))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v3-hook-test-')
         self.addCleanup(self.tmp.cleanup)
@@ -86,6 +100,28 @@ class HookInstallerTest(unittest.TestCase):
         lines = [line for line in result.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, 'Hook stdout must contain exactly one JSON response')
         return json.loads(lines[0])
+
+    def test_hook_uses_local_state_when_synced_pin_is_from_another_user(self):
+        from beyin_v3 import default_state
+        with patch.dict(os.environ, self.env, clear=True):
+            expected = default_state(self.vault).resolve()
+            foreign_base = ('C:/Users/foreign-user/AppData/Local' if sys.platform == 'win32'
+                            else '/Users/foreign-user/Library/Application Support' if sys.platform == 'darwin'
+                            else '/home/foreign-user/.local/state')
+            foreign = Path(foreign_base) / 'beyin-v3' / expected.name
+            result = self.invoke(self.payload, extra=['--metadata-only', '--state', str(foreign)])
+        self.assertEqual(result, {})
+        self.assertTrue((expected / 'hook-queue').is_dir())
+        self.assertFalse(foreign.exists())
+
+    def test_hook_uses_local_state_when_synced_pin_is_from_another_os(self):
+        from beyin_v3 import default_state
+        with patch.dict(os.environ, self.env, clear=True):
+            expected = default_state(self.vault).resolve()
+            foreign = f"/home/other-user/.local/state/beyin-v3/{expected.name}"
+            result = self.invoke(self.payload, extra=['--metadata-only', '--state', foreign])
+        self.assertEqual(result, {})
+        self.assertTrue((expected / 'hook-queue').is_dir())
 
     def lifecycle(self, event, session, harness='claude', extra=None, **fields):
         self.lifecycle_count = getattr(self, 'lifecycle_count', 0) + 1

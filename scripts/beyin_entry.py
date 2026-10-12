@@ -97,10 +97,10 @@ def state_location_lines(location):
         lines.append(prefix + 'bu vault icin paket yonlendirmesinin iki tarafinda da kurulu state var (' +
                      ', '.join(plain_text(root) for root in location.get('sibling_state_roots') or []) +
                      '). Oturumun hangi yariyi okudugu paket icinde calisip calismamasina bagli;'
-                     ' guncel olani secip tasi, docs/v3/UPDATE.md.')
+                     ' guncel olani secip tasi: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md')
     if 'pinned_in_package_container' in codes:
         lines.append(prefix + 'sabitlenmis state koku MSIX paket kapsayicisinin (Packages\\...\\LocalCache) icinde;'
-                     ' paket sifirlanir ya da baska kimlikle kurulursa bu yol kaybolur. Tasima: docs/v3/UPDATE.md.')
+                     ' paket sifirlanir ya da baska kimlikle kurulursa bu yol kaybolur. Tasima: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/UPDATE.md')
     if 'pin_resolves_elsewhere' in codes:
         lines.append(prefix + 'sabitlenmis yol bu surecte baska bir dizine cozumleniyor (' +
                      plain_text(location.get('pinned_resolves_here_to')) +
@@ -108,7 +108,7 @@ def state_location_lines(location):
     if 'pinned_state_not_absolute' in codes:
         lines.append(prefix + '.beyin-runtime.json icindeki state yolu bu makinede mutlak bir yol degil; baska bir'
                      ' isletim sisteminden esitlenmis olabilir. beyin.py bu makinenin varsayilan state dizinini'
-                     ' kullaniyor. Kurulum dosyalari makineye ozeldir, esitleme: docs/v3/MULTI-MACHINE.md.')
+                     ' kullaniyor. Kurulum dosyalari makineye ozeldir, esitleme: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md')
     if 'pinned_state_empty' in codes:
         lines.append(prefix + 'sabitlenmis state kokunde kurulum bulunamadi. State tasindiysa kurucuyu yeni'
                      ' --state ile yeniden calistir.')
@@ -122,8 +122,26 @@ def receipt_line_endings_lines(report):
     if isinstance(report, dict) and report.get('status') == 'warning':
         return ['Receipt satir sonu (bilgi): core.autocrlf=true ve receipts/ sabitlenmemis; baska makineden gelen'
                 ' receipt CRLF ile cikip ayni receipt\'in "event id collision" vermesine yol acabilir.'
-                ' .gitattributes dosyasina "receipts/** -text" ekle, docs/v3/MULTI-MACHINE.md.']
+                ' .gitattributes dosyasina "receipts/** -text" ekle: https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/MULTI-MACHINE.md']
     return []
+
+
+def sync_copy_lines(result):
+    """Sync lines for file-sync copies (#205): a stamped copy is out of the index, a numbered one is only listed."""
+    lines = []
+    stamped = [w for w in result.get('warnings') or [] if isinstance(w, dict) and str(w.get('reason', '')).startswith('file sync')]
+    for warning in stamped:
+        lines.append('Senkron cakisma kopyasi indekse alinmadi: ' + plain_text(warning.get('source')) +
+                     '. Asil notla karsilastir, dogru tarafi tut, digerini sil.')
+    for candidate in result.get('sync_copy_candidates') or []:
+        same = candidate.get('same_content')
+        lines.append('Olasi senkron kopyasi: ' + plain_text(candidate.get('source')) + ' / ' + plain_text(candidate.get('original')) +
+                     {True: ' (icerik ayni)', False: ' (icerik farkli)'}.get(same, '') +
+                     '. Ikisi de indekste; gercek bir notsa adini degistir, kopyaysa birini sil.')
+    extra = (result.get('sync_copy_candidate_count') or 0) - len(result.get('sync_copy_candidates') or [])
+    if extra > 0:
+        lines.append('+' + str(extra) + ' olasi kopya daha; ayrinti icin --json.')
+    return lines
 
 
 def index_exclusion_lines(report, pruned=False):
@@ -152,9 +170,41 @@ def rewrite_note(entry):
 
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
+    if command == 'scheduled-check' and 'status' in result:
+        # Exit 4 (needs attention) prints here like a finished check: the check ran and found something.
+        texts = {'ok': 'Zamanlanmis denetim: saglikli.',
+                 'needs_attention': 'Zamanlanmis denetim: kontrol gerektiren bir sorun var; ayrinti icin beyin.py doctor.',
+                 'already_running': 'Zamanlanmis denetim: baska bir denetim hala calisiyor; bu kosu atlandi.',
+                 'error': 'Zamanlanmis denetim tamamlanamadi (' + ascii_text(result.get('error')) + '); beyin.py doctor ile bak.'}
+        lines = [texts.get(status, 'Zamanlanmis denetim: ' + ascii_text(status))]
+        notification = {'shown': 'Bildirim gonderildi.',
+                        'failed': 'Bildirim gonderilemedi.',
+                        'unavailable': 'Bu makinede bildirim araci yok.'}
+        if result.get('notification') in notification:
+            lines.append(notification[result['notification']])
+        if status == 'needs_attention' and result.get('session_notice_pending') is True:
+            lines.append('Sonraki ajan oturumunun acilisinda da tek satir olarak soylenecek.')
+        return '\n'.join(lines)
     if result.get('error'):
         return ('Islem tamamlanamadi: ' + str(result.get('message', result['error'])) +
                 ('\n' + ascii_text(result['hint']) if result.get('hint') else ''))
+    if command == 'hook-reconcile':
+        status = result.get('status')
+        if status in ('ok', 'noop'):
+            return 'Hook yollari zaten guncel; hicbir dosya degistirilmedi.'
+        if status == 'not_installed':
+            return 'Bu vault\'ta kurulu hook dosyasi bulunamadi.'
+        lines = ['Hook mutabakati tamamlandi: ' + str(len(result.get('files', []))) + ' dosya guncellendi (' +
+                 str(result.get('reconciled_count', 0)) + ' hook komutu bu makineye uyarlandi).']
+        for entry in result.get('files', []):
+            lines.append('- ' + entry['file'] + ' (yedek: ' + entry.get('backup', '') + ', ' +
+                         str(entry.get('reconciled', 0)) + ' hook yenilendi)')
+            for change in entry.get('changes', []):
+                lines.append('  * ' + change['event'] + ':')
+                lines.append('    Eski: ' + plain_text(change.get('old_summary', change.get('old_command', ''))[:80]))
+                lines.append('    Yeni: ' + plain_text(change.get('new_summary', change.get('new_command', ''))[:80]))
+        lines.append('Eski komutlar bu makinenin Python ve vault yollariyla degistirildi.')
+        return '\n'.join(lines)
     if command == 'jev':
         features = result.get('features', {})
         provider = result.get('provider')
@@ -305,8 +355,16 @@ def human_result(result, command, installed_version=None):
                 lines.append('Son bilgi damitmasi: ' + time_text + ' (o tarihten beri ' + str(kf.get('receipts_since', 0)) + ' makbuz)')
             else:
                 lines.append('Son bilgi damitmasi: henuz kavram notu damitilmadi (toplam ' + str(kf.get('receipts_since', 0)) + ' makbuz)')
+        scheduled = result.get('scheduled_check') or {}
+        if scheduled.get('status') in ('ok', 'needs_attention', 'error'):
+            lines.append('Zamanlanmis denetim (bilgi): son kosu ' + str(scheduled.get('age_hours', '?')) + ' saat once, ' +
+                         {'ok': 'saglikli', 'needs_attention': 'dikkat gerekiyor', 'error': 'denetim tamamlanamadi'}[scheduled['status']] + '.')
         for conflict in result.get('instruction_conflicts', []):
             lines.append('Talimat celiskisi: ' + conflict['file'] + ' icinde V2 derleyici ifadesi var ("' + conflict.get('snippet', '') + '"). Bu metin V3 ajan damitmasiyla celisiyor; eski derleyici talimatlarini kaldir.')
+        if result.get('receipt_view_conflicts'):
+            lines.append('Receipt gorunumu cakismasi: ' + ', '.join(plain_text(c['source']) for c in result['receipt_view_conflicts']) +
+                         '. Gorunumleri arsivleyip yeniden uretmek icin: ' +
+                         ('py -3' if sys.platform == 'win32' else 'python3') + ' beyin.py sync --recover-views')
         if result.get('skill_conflicts'):
             lines.append('Skill kopyalari ayristi: ' + ', '.join(result['skill_conflicts']) + '. Iki surum de korundu.')
         if result.get('skill_unmanaged'):
@@ -405,6 +463,24 @@ def human_result(result, command, installed_version=None):
                                                             for name in hint.get('names') or []))
         lines += state_location_lines(result.get('state_location'))
         lines += receipt_line_endings_lines(result.get('receipt_line_endings'))
+        paths = result.get('hook_paths') or {}
+        if paths.get('status') == 'stale':
+            lines.append('Hook yollari baska bir kuruluma isaret ediyor (' + str(len(paths.get('stale', []))) + ' eski yol). ' +
+                         'Guncellemek icin: ' + ('py -3' if sys.platform == 'win32' else 'python3') + ' beyin.py hook-reconcile')
+        scopes = result.get('project_scopes') or {}
+        if scopes.get('status') == 'error':
+            lines.append('Proje kapsamlari (.beyin-projects.json) gecersiz: ' + str(scopes.get('error', 'hata')))
+        elif scopes.get('status') == 'warning':
+            details = []
+            if scopes.get('missing_folders'):
+                details.append('kasada bulunamayan klasorler: ' + ', '.join(plain_text(f) for f in scopes['missing_folders']))
+            if scopes.get('duplicate_folders'):
+                details.append('birden fazla projeye atanan klasorler: ' + ', '.join(plain_text(f) for f in scopes['duplicate_folders']))
+            if scopes.get('invalid_entries'):
+                details.append('gecersiz girdiler: ' + ', '.join(plain_text(f) for f in scopes['invalid_entries']))
+            lines.append('Proje kapsamlari (.beyin-projects.json) dikkat gerektiriyor: ' + '; '.join(details) +
+                         '. Duzenlemek veya temizlemek icin: ' + ('py -3' if sys.platform == 'win32' else 'python3') +
+                         ' beyin.py project-scope prune')
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))
@@ -438,12 +514,45 @@ def human_result(result, command, installed_version=None):
     elif command == 'context':
         records = result.get('records', [])
         message = '\n\n'.join(str(r.get('source', '')) + '\n' + str(r.get('text', '')) for r in records) or 'Eslesen kaynak bulunamadi.'
+    elif command == 'project-scope':
+        action = result.get('action', 'list')
+        if action == 'list':
+            if result.get('status') == 'absent':
+                return 'Proje kapsamlari (.beyin-projects.json) bulunamadi.'
+            lines = ['Proje kapsamlari (.beyin-projects.json):']
+            folders = result.get('folders', {})
+            missing = set(result.get('missing_folders', []))
+            for f, p in sorted(folders.items()):
+                extra = ' (kasada bulunamadi)' if f in missing else ''
+                lines.append('  ' + plain_text(f) + ' -> ' + plain_text(p) + extra)
+            for f in result.get('missing_folders', []):
+                if f not in folders:
+                    lines.append('  ' + plain_text(f) + ' (kasada bulunamadi)')
+            lines.append('  shared_unscoped: ' + ('acik' if result.get('shared_unscoped') else 'kapali'))
+            return '\n'.join(lines)
+        elif action == 'add':
+            return 'Klasor proje kapsamina eklendi: ' + plain_text(result.get('folder', '')) + ' -> ' + plain_text(result.get('project', ''))
+        elif action == 'remove':
+            return 'Klasor proje kapsamindan cikarildi: ' + plain_text(result.get('folder', ''))
+        elif action == 'prune':
+            pruned = result.get('pruned', [])
+            if not pruned:
+                return 'Temizlenecek eksik klasor bulunmadi; tum klasorler kasada mevcut.'
+            return 'Kasada bulunmayan ' + str(len(pruned)) + ' klasor kapsamdan cikarildi: ' + ', '.join(plain_text(f) for f in pruned)
     else:
         message = 'Islem sonucu: ' + str(status or 'tamamlandi')
-        if command == 'sync':
-            message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True))
+        if command in ('sync', 'recover-views'):
+            if result.get('recovered_views'):
+                recovered_lines = ['Cakisan receipt gorunumleri arsivlendi ve yeniden uretildi:']
+                for item in result['recovered_views']:
+                    recovered_lines.append('  - ' + plain_text(item['source']) + ' -> ' + plain_text(item['archive']))
+                message = '\n'.join([message] + recovered_lines)
+            message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True) +
+                                (sync_copy_lines(result) if command == 'sync' else []))
     if result.get('trust_review_required'):
         message += '\nHook tanimi degisti: Codex /hooks guven incelemesini tamamla ve yeni oturum ac.'
+    if result.get('view_conflicts'):
+        message += '\nReceipt gorunumleri korundu: ' + ', '.join(plain_text(c['source']) for c in result['view_conflicts']) + '. Kurtarma: beyin.py sync --recover-views'
     return message
 
 
@@ -480,15 +589,24 @@ def main(argv=None):
         cli = None
         raw_state = config.get('state') if isinstance(config, dict) else None
         if isinstance(raw_state, str) and raw_state and Path(raw_state).expanduser().is_absolute():
-            state = Path(raw_state)
+            cli = load_cli(directory)
+            state = cli.resolve_state(vault, Path(raw_state))
+            if state != Path(raw_state).expanduser().resolve():
+                print('Uyari: yabanci varsayilan state yolu bu makinenin yerel state klasorune cozumlendi: ' +
+                      plain_text(state) + '. Kalici duzeltme: bu makinede install_v3.py ile kur.', file=sys.stderr)
         else:
             # The installer always pins a resolved absolute path. A pin that is not absolute
             # here came from another OS through a synced vault (a Windows C:\ path on POSIX,
             # a /home path on Windows, #249) or was edited by hand. Read as a relative path it
             # would put the state under the working directory, so this machine's default
-            # state is used instead; doctor reports the pin it could not use.
+            # state is used instead; doctor reports the pin it could not use, and every command says
+            # so on stderr (#205): stdout stays the command's own result, JSON included.
             cli = load_cli(directory)
             state = cli.default_state(vault)
+            print('Uyari: .beyin-runtime.json icindeki state yolu (' + plain_text(raw_state) + ') bu makinede '
+                  'mutlak bir yol degil; vault baska bir isletim sisteminden esitlenmis olabilir. Bu makinenin '
+                  'varsayilan state klasoru kullaniliyor: ' + plain_text(state) + '. Kalici duzeltme: bu makinede '
+                  'install_v3.py ile kur; hook komutlari da boylece bu makineye baglanir.', file=sys.stderr)
         if argv and argv[0] == 'yakala':
             # Optional capture tool: its own small CLI, no index or sync engine.
             import beyin_v3_yakala as yakala

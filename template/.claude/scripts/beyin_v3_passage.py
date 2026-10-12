@@ -38,7 +38,7 @@ from beyin_v3 import HARNESSES, STOPWORDS, _allowed_statuses, _json, _status_all
 # has the numbers. Measure yours with scripts/evaluate_v3_passages.py and set
 # strict_floor in the runtime retrieval.json.
 FLOOR = 0.20
-MIN_SHARED = 2
+MIN_SHARED = 2  # Multiword queries; one-word queries require one match at the same floor.
 COVERAGE_CAP = 4
 BLOCK_TARGET = 900
 BLOCK_OVERLAP = 200
@@ -340,6 +340,8 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED):
     """Best admitted passage per source, ranked. Returns [(rank weight, passage), ...]."""
     if not terms:
         return []
+    # For a one-word query two shared terms are impossible; keep the calibrated weight floor.
+    min_shared = min(min_shared, len(terms))
     passages_total = max(1, len(index.passages))
     sources_total = max(1, index.sources)
     wanted = min(len(terms), COVERAGE_CAP)

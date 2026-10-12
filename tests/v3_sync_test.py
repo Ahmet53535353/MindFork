@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Source-authoritative synchronization contract, synthetic local fixtures only."""
+import hashlib
 import importlib.util
 import json
 from datetime import datetime
@@ -75,6 +76,46 @@ class SourceSyncTest(unittest.TestCase):
         self.assertGreaterEqual(deleted['deleted'], 1)
         self.assertEqual(self.records(), [])
 
+    def test_sensitive_folder_sources_are_not_read_or_indexed(self):
+        # These directories were already skipped by hygiene, but not by the sync reader.
+        safe = self.write('notes/normal.md', id='safe')
+        sensitive = ('🔐 Kasa', '410-Şifreler', 'MÜŞTERİLER', 'Private',
+                     'notes/Secret', 'Kimlik Belgeleri')
+        for index, folder in enumerate(sensitive):
+            self.write(folder + '/hidden.md', id='secret-' + str(index), body='Nebula calibration PRIVATE_ONLY.\\n')
+        result = self.engine.sync()
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual([record['source'] for record in self.engine.store._records()],
+                         [safe.relative_to(self.vault).as_posix()])
+        self.assertEqual([record['id'] for record in self.records()], ['safe'])
+        for folder in sensitive:
+            self.assertTrue((self.vault / folder / 'hidden.md').exists())  # Nothing is deleted.
+
+    def test_sensitive_folder_move_removes_old_index_entry(self):
+        path = self.write('notes/task.md')
+        self.engine.sync()
+        target = self.vault / '🔐 Kasa/task.md'
+        target.parent.mkdir()
+        path.rename(target)
+        result = self.engine.sync()
+        self.assertGreaterEqual(result['deleted'], 1)
+        self.assertEqual(self.records(), [])
+        self.assertTrue(target.is_file())
+
+    def test_previously_indexed_sensitive_source_is_withheld_before_sync(self):
+        self.write('notes/normal.md', id='safe')
+        self.engine.sync()
+        record = dict(self.engine.store._records()[0])
+        private = self.write('🔐 Kasa/hidden.md', id='hidden')
+        record['source'] = private.relative_to(self.vault).as_posix()
+        record['source_sha256'] = hashlib.sha256(private.read_bytes()).hexdigest()
+        # Simulate a row indexed by an older release: the file still exists and the hash matches.
+        eligible, _ = self.engine.store._eligible(records=[record])
+        self.assertEqual(eligible, [])
+        from beyin_v3_projections import _hidden_ref_sources
+        with self.engine.store._connect() as db:
+            self.assertIn(record['source'], _hidden_ref_sources(db, [record['source']]))
+
     def test_unresolved_git_conflict_markers_are_reported_and_not_indexed(self):
         # #205: a pull --rebase that stops on a conflict leaves markers the agent would read as content.
         body = ('<<<<<<< HEAD\nNebula calibration awaits owner Synthetic Reviewer.\n=======\n'
@@ -139,6 +180,121 @@ class SourceSyncTest(unittest.TestCase):
         self.assertIn(receipt['source'], [w['source'] for w in report['warnings']])
         outcomes = fresh / 'knowledge/v3/outcomes.md'
         self.assertFalse(outcomes.exists() and '<<<<<<<' in outcomes.read_text(encoding='utf-8'))
+
+    def snapshot(self):
+        return {path.relative_to(self.vault).as_posix(): (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in self.vault.rglob('*') if path.is_file() and '.beyin' not in path.parts}
+
+    def note(self, name, body, **frontmatter):
+        path = self.vault / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        head = '---\n' + json.dumps(frontmatter) + '\n---\n' if frontmatter else ''
+        path.write_text(head + body, encoding='utf-8')
+        return path
+
+    def test_a_copy_a_sync_service_stamped_is_reported_and_left_out_of_the_index(self):
+        # #205: Dropbox and Nextcloud, Dropbox case clash, Syncthing keep the other side under their own stamp.
+        self.write()
+        copies = ['notes/task (Synthetic Laptop\'s conflicted copy 2026-10-06).md',
+                  'notes/task (Case Conflict).md',
+                  'notes/task.sync-conflict-20261006-120000-ABCDEF7.md']
+        for name in copies:
+            self.write(name=name, body='Nebula calibration moved to owner Synthetic Auditor.\n', id='nebula-copy-' + str(len(name)))
+        before = self.snapshot()
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'degraded')
+        self.assertEqual(sorted(w['source'] for w in report['warnings']), sorted(copies))
+        self.assertTrue(all('file sync conflict copy' in w['reason'] for w in report['warnings']))
+        self.assertEqual([r['id'] for r in self.records()], ['nebula-task'], 'only the original is in the index')
+        self.assertNotIn('sync_copy_candidates', report)
+        self.assertEqual(before, self.snapshot(), 'nothing is moved, renamed or rewritten')
+        for name in copies:
+            (self.vault / name).unlink()
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+
+    def test_a_numbered_file_beside_its_name_is_listed_and_both_stay_in_the_index(self):
+        # iCloud ("Sezon 2.md") and Drive/Windows ("plan (1).md") number the copy; people name notes like that too.
+        self.note('notes/Sezon.md', 'Nebula sezon bir ozeti.\n')
+        self.note('notes/Sezon 2.md', 'Nebula sezon iki ozeti, ayri bir not.\n')
+        self.note('notes/Plan.md', 'Nebula plan.\n')
+        self.note('notes/plan (1).md', 'Nebula plan.\n')  # case differs: a case-insensitive volume names it so
+        self.note('notes/Phase 2.md', 'Nebula phase two, no sibling.\n')
+        self.note('notes/Liste 100.md', 'Nebula list, number out of range.\n')
+        self.note('notes/Liste.md', 'Nebula list.\n')
+        before = self.snapshot()
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'succeeded', 'a numbered name alone never degrades a sync')
+        self.assertEqual(report['warnings'], [])
+        self.assertEqual(report['sync_copy_candidate_count'], 2)
+        self.assertEqual(sorted(report['sync_copy_candidates'], key=lambda c: c['source']), [
+            {'source': 'notes/Sezon 2.md', 'original': 'notes/Sezon.md', 'same_content': False},
+            {'source': 'notes/plan (1).md', 'original': 'notes/Plan.md', 'same_content': True}])
+        sources = {r['source'] for r in self.engine.store.retrieve('Nebula', limit=20)['records']}
+        self.assertTrue({'notes/Sezon.md', 'notes/Sezon 2.md', 'notes/Plan.md', 'notes/plan (1).md'} <= sources,
+                        'no numbered file is dropped from the index')
+        self.assertEqual(before, self.snapshot())
+
+    def test_a_numbered_copy_that_kept_the_note_id_is_quarantined_and_listed(self):
+        # The copy carries the original frontmatter id: the duplicate rule already holds both back.
+        self.write(name='notes/task.md')
+        self.write(name='notes/task 2.md')
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'conflict')
+        self.assertEqual(report['conflicts'], [{'id': 'nebula-task', 'reason': 'duplicate source id; all copies quarantined'}])
+        self.assertEqual(report['sync_copy_candidates'],
+                         [{'source': 'notes/task 2.md', 'original': 'notes/task.md', 'same_content': True}])
+
+    @unittest.skipIf(os.name == 'nt', 'symlink privilege is not guaranteed')
+    def test_numbered_copy_comparison_never_reads_outside_vault(self):
+        from unittest.mock import patch
+        original = self.note('Paylaşım/Özet.md', 'Nebula calibration private canary bytes.\n', project='nebula')
+        outside = self.vault.parent / 'outside.md'
+        outside.write_bytes(original.read_bytes())
+        (original.parent / 'Özet 2.md').symlink_to(outside)
+        read_bytes = Path.read_bytes
+        def guarded(path):
+            if path.is_symlink() or path == outside:
+                self.fail('copy reporter followed an outside-vault symlink')
+            return read_bytes(path)
+        with patch.object(Path, 'read_bytes', guarded):
+            report = self.engine.sync()
+        self.assertIsNone(report['sync_copy_candidates'][0]['same_content'])
+        self.assertEqual([row['source'] for row in self.records()], ['Paylaşım/Özet.md'])
+
+    def test_a_sync_service_copy_of_a_receipt_is_reported_never_indexed(self):
+        self.write()
+        receipt = self.engine.receipt('shared-topic', 'Calibration done here.', ['notes/task.md'], 'codex')
+        source = self.vault / receipt['source']
+        stem = source.name[:-3]
+        raw = source.read_bytes()
+        names = [stem + ' 2.md', stem + ' (conflicted copy 2026-10-06).md', stem + '.sync-conflict-20261006-120000-ABCDEF7.md']
+        for name in names:
+            (source.parent / name).write_bytes(raw.replace(b'Calibration done here.', b'Calibration done there.'))
+        (source.parent / 'README.md').write_text('Not a receipt; ignored as before.\n', encoding='utf-8')
+        before = self.snapshot()
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'degraded')
+        self.assertEqual(sorted(w['source'] for w in report['warnings']), sorted('receipts/' + n for n in names))
+        self.assertTrue(all('file sync copy of a receipt' in w['reason'] for w in report['warnings']))
+        with self.engine.store._connect() as db:
+            self.assertEqual([json.loads(row[0])['summary'] for row in db.execute('SELECT payload FROM receipts')],
+                             ['Calibration done here.'])
+        self.assertEqual(before, self.snapshot())
+        for name in names:
+            (source.parent / name).unlink()
+        self.assertEqual(self.engine.sync()['status'], 'succeeded', 'the next sync rescans receipts/ and is clean')
+
+    def test_human_sync_output_names_both_kinds(self):
+        spec = importlib.util.spec_from_file_location('beyin_entry_copy_test', Path(__file__).resolve().parents[1] / 'scripts/beyin_entry.py')
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        self.write()
+        self.write(name='notes/task.sync-conflict-20261006-120000-ABCDEF7.md', id='other')
+        self.note('notes/Sezon.md', 'Bir.\n')
+        self.note('notes/Sezon 2.md', 'Iki.\n')
+        text = entry.human_result(self.engine.sync(), 'sync')
+        self.assertIn('Senkron cakisma kopyasi indekse alinmadi: notes/task.sync-conflict-20261006-120000-ABCDEF7.md', text)
+        self.assertIn('Olasi senkron kopyasi: notes/Sezon 2.md / notes/Sezon.md (icerik farkli)', text)
 
     def test_history_keeps_deleted_record_audit_trail_behind_last_snapshot(self):
         path = self.write()
