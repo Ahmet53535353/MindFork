@@ -190,6 +190,7 @@ def receipt_line_endings(vault: Path) -> dict:
 
 
 def load_engine():
+    _ensure_scripts_path()
     adjacent = Path(__file__).resolve().parent / "beyin_v3.py"
     path = adjacent if adjacent != Path(__file__).resolve() and adjacent.exists() else Path(__file__).resolve().parents[1] / "template/.claude/scripts/beyin_v3.py"
     spec = importlib.util.spec_from_file_location("beyin_v3_shared_engine", path)
@@ -513,6 +514,13 @@ def parser():
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
     history.add_argument("record_id")
+    pscope = sub.add_parser("project-scope", help="Manage folder project scopes in .beyin-projects.json")
+    pscope.add_argument("action", choices=["list", "add", "remove", "prune"], nargs="?", default="list",
+                        help="Action to perform: list, add, remove, prune")
+    pscope.add_argument("--folder", help="Vault-relative folder path")
+    pscope.add_argument("--project", help="Project identifier for the folder")
+    pscope.add_argument("--shared-unscoped", choices=["on", "off"],
+                        help="Toggle whether unassigned notes are visible in project scope")
     return root
 
 
@@ -855,7 +863,13 @@ def main(argv=None, return_result=False):
             except Exception as exc:  # never hides the rest of doctor
                 result['index_exclusions'] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['receipt_line_endings'] = receipt_line_endings(vault)  # information only: the status below is untouched
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook_paths'].get('status') == 'stale' or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            try:
+                _ensure_scripts_path()
+                import beyin_v3_projects as projects
+                result['project_scopes'] = projects.check_project_scopes(vault)
+            except Exception as exc:
+                result['project_scopes'] = {'status': 'unavailable', 'error': type(exc).__name__}
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook_paths'].get('status') == 'stale' or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') or result.get('project_scopes', {}).get('status') in ('error', 'warning') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
             # Information only: a leftover global OMP hook copy predates the vault-owned plan
             # (OMP.md says the installer never updates or removes it). After an engine update the
             # copy can be older than the installed vault hook, so a session outside the vault can
@@ -888,6 +902,11 @@ def main(argv=None, return_result=False):
             result = load_skills().sync_skills(vault, state)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
+        elif args.command == "project-scope":
+            _ensure_scripts_path()
+            import beyin_v3_projects as projects
+            result = projects.manage(vault, args.action, folder=args.folder, project=args.project,
+                                     shared_unscoped=args.shared_unscoped)
         elif args.command == "companion-compact":
             _ensure_scripts_path()
             import beyin_v3_compact
