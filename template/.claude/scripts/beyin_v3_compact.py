@@ -264,10 +264,11 @@ def plan(text, name, limit, pointer):
 def decisions(text, moved_lines):
     """(card heading, decision line) pairs among the moved lines, in file order.
 
-    The heading is the nearest level-2+ heading above the line; fenced code is skipped like
+    A dated card keeps its heading through deeper subsections; otherwise use the nearest
+    level-2+ heading. Fenced code is skipped like
     everywhere else in the companion files.
     """
-    found, heading, fence = [], None, None
+    found, heading, fence, card_level = [], None, None, None
     moved = set(moved_lines)
     for index, line in enumerate(LINE.findall(text)):
         bare = line.rstrip('\r\n')
@@ -281,7 +282,10 @@ def decisions(text, moved_lines):
             continue
         level = HEADING.match(line)
         if level and len(level[1]) >= 2:
-            heading = line.strip()
+            depth = len(level[1])
+            if not card_level or depth <= card_level:
+                heading = line.strip()
+                card_level = depth if stamp(heading, heading=True) else None
         elif index in moved and DECISION.match(line):
             found.append((heading, bare))
     return found
