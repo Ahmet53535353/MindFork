@@ -355,7 +355,11 @@ def drain_queue(vault, state):
     # A degraded scan is complete but excluded one or more invalid sources. The
     # fresh healthy subset may be injected with an explicit warning. Source
     # conflicts still block acknowledgement because ownership is ambiguous.
-    if result.get("status") in ("ok", "succeeded", "synced", "degraded") and not result.get("conflicts"):
+    # Receipt view conflicts (outcomes.md, daily/v3) own no queued event (#323).
+    from beyin_v3_projections import is_receipt_view_conflict
+    source_conflicts = [c for c in result.get("conflicts", []) if not is_receipt_view_conflict(c)]
+    if (result.get("status") in ("ok", "succeeded", "synced", "degraded")
+        or (result.get("status") == "conflict" and not source_conflicts)) and not source_conflicts:
         (state / "hook-error.json").unlink(missing_ok=True)
         processed = 0
         # Acknowledge under the index's writer lock. On Windows two workers that both open a
@@ -521,6 +525,9 @@ def main():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
                 if sync.get("status") not in ("ok", "succeeded", "synced"):
                     warning += "V3 sync needs attention; consult current sources and doctor.\n"
+                from beyin_v3_projections import is_receipt_view_conflict
+                if any(is_receipt_view_conflict(c) for c in sync.get('conflicts', [])):
+                    warning += "V3 receipt view conflicted; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):

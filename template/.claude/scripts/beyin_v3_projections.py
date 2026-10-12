@@ -379,6 +379,36 @@ def _receipt_instant(created_at):
         return None
 
 
+RECEIPT_VIEW_REASONS = frozenset((
+    'manual receipt view edit preserved',
+    'untracked receipt view preserved',
+    'receipt view changed during projection',
+    'stale receipt view unreadable; preserved',
+    'manual receipt view edit preserved; view no longer generated',
+    'stale receipt view could not be removed',
+))
+
+
+def is_receipt_view_source(source):
+    if not isinstance(source, str):
+        return False
+    return source == 'knowledge/v3/outcomes.md' or source.startswith('daily/v3/')
+
+
+def is_receipt_view_conflict(item):
+    if not isinstance(item, dict):
+        return False
+    if item.get('kind') == 'receipt_view_conflict':
+        return True
+    source = item.get('source')
+    reason = item.get('reason')
+    if is_receipt_view_source(source):
+        return True
+    if reason in RECEIPT_VIEW_REASONS:
+        return True
+    return False
+
+
 def receipt_day(created_at, zone=None):
     """Local calendar day (YYYY-MM-DD) that names daily/v3 for this stamp; None for an unreadable stamp.
 
@@ -394,7 +424,7 @@ def receipt_day(created_at, zone=None):
         return None
 
 
-def project_receipts(engine, db, warnings=None):
+def project_receipts(engine, db, warnings=None, recover_views=False, recovered=None):
     _hash, atomic, render = engine.projection_helpers()
     _record_excluded_dirs(engine, db)
     db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
@@ -433,7 +463,23 @@ def project_receipts(engine, db, warnings=None):
         desired_hash = _hash(content)
         tracked = tracked_views.get(relative)
         if old != desired_hash and old is not None and (tracked is None or old != tracked):
-            conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved'})
+            if recover_views:
+                archive_dir = path.parent / '.archive'
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+                archive_path = archive_dir / f"{path.stem}-{stamp}{path.suffix}"
+                archive_path.write_bytes(path.read_bytes())
+                atomic(path, content)
+                db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
+                if recovered is not None:
+                    recovered.append({
+                        'source': relative,
+                        'archive': archive_path.relative_to(engine.root).as_posix(),
+                        'status': 'recovered',
+                    })
+                continue
+            reason = 'manual receipt view edit preserved' if tracked is not None else 'untracked receipt view preserved'
+            conflicts.append({'source': relative, 'reason': reason})
             continue
         if old != desired_hash:
             # Recheck immediately before atomic replacement; remote writers still require reconciliation.
@@ -443,12 +489,12 @@ def project_receipts(engine, db, warnings=None):
             atomic(path, content)
         if tracked != desired_hash:
             db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
-    conflicts.extend(_retire_stale_views(engine, db, desired, _hash))
+    conflicts.extend(_retire_stale_views(engine, db, desired, _hash, recover_views=recover_views, recovered=recovered))
     refresh_gaps(engine, db)
     return conflicts
 
 
-def _retire_stale_views(engine, db, desired, _hash):
+def _retire_stale_views(engine, db, desired, _hash, recover_views=False, recovered=None):
     """Remove views this state wrote that are no longer projected, e.g. a UTC-named daily/v3 file after #149.
 
     Only a file whose bytes still match the hash recorded when it was written is removed; an edited
@@ -468,6 +514,24 @@ def _retire_stale_views(engine, db, desired, _hash):
             db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
             continue
         if current != tracked:
+            if recover_views:
+                archive_dir = path.parent / '.archive'
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+                archive_path = archive_dir / f"{path.stem}-{stamp}{path.suffix}"
+                archive_path.write_bytes(path.read_bytes())
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                db.execute('DELETE FROM receipt_views WHERE path=?', (relative,))
+                if recovered is not None:
+                    recovered.append({
+                        'source': relative,
+                        'archive': archive_path.relative_to(engine.root).as_posix(),
+                        'status': 'archived_and_retired',
+                    })
+                continue
             conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved; view no longer generated'})
             continue
         try:

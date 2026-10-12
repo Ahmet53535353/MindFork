@@ -548,8 +548,11 @@ class SyncEngine:
     @staticmethod
     def _write_blockers(result, source):
         # Another receipt's divergence leaves this write's projection intact; it stays in every sync report (#210).
-        return [item for item in result['conflicts']
-                if not (item.get('kind') == 'receipt_divergence' and item.get('source') != source)]
+        # Receipt view conflicts preserve edited or untracked generated views without blocking source writes (#323).
+        from beyin_v3_projections import is_receipt_view_conflict
+        return [item for item in result.get('conflicts', [])
+                if not (item.get('kind') == 'receipt_divergence' and item.get('source') != source)
+                and not is_receipt_view_conflict(item)]
 
     def _path(self, relative, existing=False):
         if not isinstance(relative, str) or Path(relative).is_absolute() or '..' in Path(relative).parts:
@@ -884,7 +887,7 @@ class SyncEngine:
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('receipt_scan_signature',?)", (signature,))
         return warnings, conflicts
 
-    def sync(self, full=False):
+    def sync(self, full=False, recover_views=False):
         """Index the vault. `full` reads every source: no stored stat signature is taken on trust."""
         # Serialize recovery, source scan and projection across local processes.
         with self.store._connect() as db:
@@ -932,7 +935,8 @@ class SyncEngine:
                     db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
                 indexed[id] = payload
             cache.save(indexed)
-            conflicts.extend(project_receipts(self, db, warnings))
+            recovered_views = [] if recover_views else None
+            conflicts.extend(project_receipts(self, db, warnings, recover_views=recover_views, recovered=recovered_views))
             # A supersedes value that retires nothing is reported, not a degraded scan: no
             # source was excluded and the hook must not warn on every turn about it.
             dead_supersedes = resolve_supersedes([json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')])[1]
@@ -943,6 +947,8 @@ class SyncEngine:
         for entry in completed:
             entry.unlink(missing_ok=True)
         result = {'status': 'conflict' if conflicts else 'degraded' if warnings else 'succeeded', 'indexed': len(records), 'deleted': deleted, 'warnings': warnings, 'conflicts': conflicts}
+        if recover_views:
+            result['recovered_views'] = recovered_views or []
         if dead_supersedes:
             result['supersedes_issues'] = dead_supersedes[:20]
             result['supersedes_issue_count'] = len(dead_supersedes)
@@ -1204,5 +1210,10 @@ class SyncEngine:
             raise ReceiptConflict('receipt source changed before readback')
         self.store.submit_receipt(event_id, summary, refs, event['harness'])
         self._record_redactions(redacted)
-        return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
-                'redacted': redacted, 'secrets_redacted': redacted}
+        from beyin_v3_projections import is_receipt_view_conflict
+        view_conflicts = [item for item in result.get('conflicts', []) if is_receipt_view_conflict(item)]
+        receipt_res = {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
+                       'redacted': redacted, 'secrets_redacted': redacted}
+        if view_conflicts:
+            receipt_res['view_conflicts'] = view_conflicts
+        return receipt_res

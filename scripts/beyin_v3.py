@@ -411,6 +411,9 @@ def parser():
     sync_parser = sub.add_parser("sync", help="Reconcile Markdown sources into local state")
     sync_parser.add_argument("--full", action="store_true",
                              help="Read every source instead of trusting unchanged file signatures")
+    sync_parser.add_argument("--recover-views", action="store_true",
+                             help="Archive conflicting receipt views and regenerate from immutable receipts")
+    sub.add_parser("recover-views", help="Archive conflicting receipt views and regenerate from immutable receipts")
     sub.add_parser("skill-sync", help="Reconcile project-local shared skills")
     sub.add_parser("doctor", help="Read local hook health and pending metadata counts")
     recap = sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
@@ -560,7 +563,7 @@ def main(argv=None, return_result=False):
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
         engine = load_engine() if args.command != "jev" else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
-        sync = load_sync()(vault, state) if args.command in ("sync", "recap", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
+        sync = load_sync()(vault, state) if args.command in ("sync", "recover-views", "recap", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
         if args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
@@ -786,6 +789,8 @@ def main(argv=None, return_result=False):
             result['skill_conflicts'] = health.get('sync', {}).get('skill_conflicts', [])
             # Entries beside the skills that this vault never owned. Information only.
             result['skill_unmanaged'] = health.get('sync', {}).get('skill_unmanaged', [])
+            from beyin_v3_projections import is_receipt_view_conflict
+            result['receipt_view_conflicts'] = [c for c in health.get('sync', {}).get('conflicts', []) if is_receipt_view_conflict(c)]
             try:
                 result['task_completion'] = load_sync().reader(store).completion_health()
             except Exception as exc:
@@ -895,14 +900,17 @@ def main(argv=None, return_result=False):
             if any(entry['status'] == 'compacted' for entry in result['files'].values()):
                 # Index the shorter sources and the private archive before anyone reads them.
                 result['sync'] = {'status': load_sync()(vault, state).sync().get('status')}
-        elif args.command == "sync":
-            result = sync.sync(full=True) if args.full else sync.sync()
+        elif args.command in ("sync", "recover-views"):
+            recover = getattr(args, "recover_views", False) or args.command == "recover-views"
+            result = sync.sync(full=getattr(args, "full", False), recover_views=recover)
         elif args.command == "recap":
             days = 7 if args.days is None else args.days
             if not 1 <= days <= 366 or not 1 <= args.limit <= 100:
                 raise ValueError('recap days must be 1..366 and limit must be 1..100')
             refreshed = sync.sync()
-            if refreshed.get('status') == 'conflict':
+            from beyin_v3_projections import is_receipt_view_conflict
+            source_conflicts = [c for c in refreshed.get('conflicts', []) if not is_receipt_view_conflict(c)]
+            if source_conflicts:
                 raise RuntimeError('Recap blocked: source sync conflict. Run sync to inspect sources.')
             from beyin_v3_projections import recent_receipts
             with store._connect() as db:
@@ -938,7 +946,9 @@ def main(argv=None, return_result=False):
                 result['source_sync'] = {'status': 'skipped', 'reason': 'explicit_no_sync'}
             else:
                 refreshed = sync.sync()
-                if refreshed.get('status') == 'conflict':
+                from beyin_v3_projections import is_receipt_view_conflict
+                source_conflicts = [c for c in refreshed.get('conflicts', []) if not is_receipt_view_conflict(c)]
+                if source_conflicts:
                     raise RuntimeError('Context blocked: source sync '+str(refreshed.get('status', 'failed'))+'. Run sync with the same vault/state to inspect and reconcile source issues, then retry context.')
                 # Harness selection deliberately does not change retrieval semantics.
                 if args.jev:
