@@ -410,6 +410,46 @@ class HygieneCliTest(unittest.TestCase):
         archive = (self.directory / 'Arşiv' / f'Last-Session-{month}.md').read_text(encoding='utf-8')
         self.assertIn('CARD_11', archive, 'oldest session card is safely preserved in archive')
 
+    def test_private_source_decisions_are_not_promoted_to_internal_ledger(self):
+        cards = ['---\n{"visibility":"private"}\n---\n# Son oturum\n\n']
+        cards += [f'## 2026-09-{day:02d}: PRIVATE_CARD_{day}\n**Karar:** PRIVATE_ONLY_{day}\n' + FILLER * 5 + '\n'
+                  for day in range(25, 10, -1)]
+        self.write('Last-Session.md', ''.join(cards))
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'compacted')
+        self.assertFalse((self.directory / 'Kararlar.md').exists())
+        self.assertNotIn('decisions_added', result['files']['Last-Session.md'])
+
+    def test_invalid_existing_decision_ledger_leaves_live_cards_untouched(self):
+        cards = '# Son oturum\n\n' + ''.join(
+            f'## 2026-09-{day:02d}: CARD_{day}\n**Karar:** Decision_{day}\n' + FILLER * 5 + '\n'
+            for day in range(25, 10, -1))
+        last = self.write('Last-Session.md', cards)
+        ledger = self.directory / 'Kararlar.md'
+        ledger.write_bytes(b'\xff')
+        before = last.read_bytes()
+        result = self.run_cli('companion-compact')
+        self.assertEqual(result['status'], 'needs_attention')
+        self.assertEqual(last.read_bytes(), before)
+        self.assertFalse((self.directory / 'Arşiv').exists())
+
+    def test_decision_identity_preserves_equal_lines_from_distinct_cards_and_dedupes_retries(self):
+        line = '  - **Karar:** Aynı söz farklı iki toplantıda söylendi.'
+        first = [('## 2026-09-24 · kart A', line), ('## 2026-09-24 · kart A', line)]
+        archive = f'{COMPANION}/Arşiv/Last-Session-2026-09.md'
+        source = f'{COMPANION}/Last-Session.md'
+        args = (self.directory.resolve(), self.vault.resolve())
+        added = compact_module._record_decisions(*args, first, archive, '\n', source)
+        self.assertEqual(added, 1)
+        ledger = self.directory / 'Kararlar.md'
+        before = ledger.read_bytes()
+        self.assertEqual(compact_module._record_decisions(*args, first, archive.replace('09.md', '10.md'), '\n', source), 0)
+        self.assertEqual(ledger.read_bytes(), before)
+        second = [('## 2026-09-25 · kart B', line)]
+        self.assertEqual(compact_module._record_decisions(*args, second, archive, '\n', source), 1)
+        self.assertEqual(ledger.read_text(encoding='utf-8').count(line), 2)
+        self.assertIn('"remote_allowed": false', ledger.read_text(encoding='utf-8'))
+
     def test_decision_lines_of_moved_cards_are_copied_to_kararlar_once(self):
         moment = datetime(2026, 9, 26, 16, 30)
         cards = ['# Son oturum\n\n']

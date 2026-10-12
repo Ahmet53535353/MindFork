@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import errno
 import os
+import hashlib
+import json
 from pathlib import Path
 import re
 import time
@@ -44,7 +46,8 @@ BACKUP = '{} karakter tam metin yedeği (needs_rewrite)'
 POINTER_LINE = re.compile(r'Arşivlenen metin: `[^`\n]+`[ \t]*\r?\n?$')
 LOCK_NAME = '.beyin-compact.lock'
 DECISIONS = 'Kararlar.md'
-DECISION = re.compile(r'[ \t]*(?:[-*+][ \t]+)?\*\*(?:Karar|Decision)(?![^\W\d_])[^*\n]{0,60}\*\*', re.I)
+DECISION = re.compile(r'[ \t]*(?:[-*+][ \t]+)?\*\*(?:Karar(?:[ \t]+\d+)?(?:[ \t]+\([^*\n)]{1,40}\))?|Decision):[ \t]*\*\*', re.I)
+DECISION_KEY = re.compile(r'<!-- beyin-decision: ([0-9a-f]{64}) -->')
 
 
 class _LockError(Exception):
@@ -256,35 +259,69 @@ def decisions(text, moved_lines):
         if level and len(level[1]) >= 2:
             heading = line.strip()
         elif index in moved and DECISION.match(line):
-            found.append((heading, line.strip()))
+            found.append((heading, bare))
     return found
 
 
-def _record_decisions(target, vault, found, archive_relative, newline):
-    """Append decisions not yet in Kararlar.md; returns how many were added."""
+def _decision_source_allowed(text):
+    """A copied line must never broaden the source's local visibility or trust policy."""
+    from beyin_v3_sync import parse
+    from beyin_v3 import _rejected_inference
+    try:
+        metadata, _ = parse(text)
+    except (ValueError, TypeError):
+        return False
+    return (metadata.get('visibility', 'internal') in ('internal', 'public')
+            and metadata.get('trust') != 'untrusted' and metadata.get('trusted') is not False
+            and metadata.get('status') != 'untrusted' and metadata.get('kind') != 'untrusted'
+            and not _rejected_inference(metadata))
+
+
+def _decision_ledger_check(target, vault):
     path = target / DECISIONS
     _inside(path, vault)
-    if path.is_symlink():
-        return 0
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('decision ledger must be a real UTF-8 file inside the vault')
+    if path.exists():
+        from beyin_v3_sync import parse
+        metadata, _ = parse(path.read_bytes().decode('utf-8'))
+        if metadata.get('visibility') != 'private' and metadata.get('remote_allowed') is not False:
+            raise ValueError('existing decision ledger must have remote_allowed: false or visibility: private')
+
+
+def _record_decisions(target, vault, found, archive_relative, newline, source_relative=None):
+    """Append each source/card/line once, without losing identical decisions in other cards."""
+    path = target / DECISIONS
+    _inside(path, vault)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('decision ledger must be a real UTF-8 file inside the vault')
     existing = path.read_bytes().decode('utf-8') if path.exists() else None
-    known = {line.strip() for line in LINE.findall(existing or '')}
-    fresh = [(heading, line) for heading, line in found if line not in known]
+    known = set(DECISION_KEY.findall(existing or ''))
+    fresh = []
+    source_relative = source_relative or archive_relative
+    for heading, line in found:
+        key = hashlib.sha256(json.dumps([source_relative, heading, line], ensure_ascii=False).encode('utf-8')).hexdigest()
+        if key not in known:
+            known.add(key)
+            fresh.append((heading, line, key))
     if not fresh:
         return 0
     if existing is None:
         existing = newline.join([
-            '---', '{"kind": "note", "visibility": "internal", "title": "Kararlar"}', '---', '# Kararlar', '',
+            '---', '{"kind": "note", "visibility": "internal", "remote_allowed": false, "title": "Kararlar"}', '---', '# Kararlar', '',
             '`beyin.py companion-compact` arşive taşıdığı kartlardaki karar satırlarını buraya, kartın başlığı '
             've arşiv yoluyla kelimesi kelimesine ekler. Dosya yalnız eklenerek büyür; elle düzenleyebilirsin.', ''])
     elif not existing.endswith('\n'):
         existing += newline
-    added, last = [], None
-    for heading, line in fresh:
-        if heading != last:
-            added.append(newline + (heading if heading else '## (başlıksız)') + newline +
-                         'Arşiv: `' + archive_relative + '`' + newline)
-            last = heading
-        added.append(line + newline)
+    added, groups = [], []
+    for heading, line, key in fresh:
+        if not groups or groups[-1][0] != heading:
+            groups.append((heading, []))
+        groups[-1][1].append((line, key))
+    for heading, group in groups:
+        added.append(newline + ''.join('<!-- beyin-decision: ' + key + ' -->' + newline for _, key in group))
+        added.append((heading if heading else '## (başlıksız)') + newline + 'Arşiv: `' + archive_relative + '`' + newline)
+        added.extend(line + newline for line, _ in group)
     _write(path, existing + ''.join(added))
     return len(fresh)
 
@@ -424,7 +461,13 @@ def _compact_files(vault, target, configured, dry_run=False, now=None):
         # #168: a file that stays over the limit is rewritten by the agent next, which may
         # summarize. Its full remaining text goes to the archive first, verbatim, so the
         # rewrite can never be the only copy of anything.
-        found = decisions(text, result['moved_lines']) if result is not None else []
+        found = decisions(text, result['moved_lines']) if result is not None and _decision_source_allowed(text) else []
+        if found:
+            try:
+                _decision_ledger_check(target, vault)
+            except (ValueError, UnicodeError, OSError) as exc:
+                files[name] = dict(report, status='needs_attention', reason=str(exc) + '; nothing moved')
+                continue
         if dry_run:
             if found:
                 report.update(decisions_planned=len(found))
@@ -495,9 +538,11 @@ def _compact_files(vault, target, configured, dry_run=False, now=None):
                                reason='No Previous/Closed section and no older dated entry to move; full file backed up to '
                                       'the archive. Rewrite the file within the limit.')
             continue
-        _write(path, result['live'])
         if found:
-            report.update(decisions_added=_record_decisions(target, vault, found, archive_relative, result['newline']))
+            # Store the searchable copy before removing its original live card.
+            report.update(decisions_added=_record_decisions(target, vault, found, archive_relative, result['newline'],
+                                                           source_relative=f'{relative}/{name}'))
+        _write(path, result['live'])
         files[name] = dict(report, status='compacted')
     statuses = {entry['status'] for entry in files.values()}
     still_over = any(entry.get('within_limit_after') is False for entry in files.values())

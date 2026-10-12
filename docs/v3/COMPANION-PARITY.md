@@ -155,3 +155,5 @@ Bunlar kaynak aktarımı, kurulum ve koruma sözleşmelerinin testleridir. Yeni 
 konuşmalarında kişilik kalitesi için kör kullanıcı karşılaştırması yapılmadı. Öğrenme
 protokolünün uygulanması aktif ajanın talimat takibine bağlıdır; mevcut hafıza verisi
 otomatik olarak geriye dönük yeniden yazılmaz.
+
+Karar defteri kaynak kartın gizlilik ve güven sınırını genişletmez: private, untrusted veya reddedilmiş kaynaklardan karar kopyalanmaz. Yeni `Kararlar.md` yerel aramaya açık (`visibility: internal`) ve uzak danışmana kapalıdır (`remote_allowed: false`). Var olan defterin de `remote_allowed: false` veya `visibility: private` taşıması gerekir; bozuk ya da uygun olmayan defterde kartlar taşınmadan dikkat uyarısı döner. Aynı satır farklı kartlarda geçiyorsa her kartın kararı ayrı korunur; aynı kartın tekrar denemesi yeni kopya eklemez.
