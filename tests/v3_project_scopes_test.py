@@ -105,10 +105,10 @@ class ProjectScopesTest(unittest.TestCase):
     def test_folder_case_and_decomposed_disk_names_still_claim_their_notes(self):
         # macOS keeps names as typed (often NFD) and matches case-insensitively; a folder
         # typed in another case must not leave its notes in the shared scope.
-        client = unicodedata.normalize('NFD', 'Projeler/Müşteri X')
+        client = unicodedata.normalize('NFD', 'Projeler/İşbirliği X')
         self.note('client', client + '/Teklif.md')
         self.note('rules', 'Companion/Kurallar.md')
-        self.scopes({'folders': {'projeler/müşteri x': 'musteri'}, 'shared_unscoped': True})
+        self.scopes({'folders': {'projeler/işbirliği x': 'musteri'}, 'shared_unscoped': True})
         self.assertEqual(self.ids('musteri'), ['client', 'rules'])
         self.assertEqual(self.ids('oyun'), ['rules'])
 
