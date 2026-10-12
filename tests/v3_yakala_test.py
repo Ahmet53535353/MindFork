@@ -56,7 +56,12 @@ if name == 'npx':
     if not answer:
         raise SystemExit(1)
     sys.stdout.write(json.dumps(answer))
-elif name == 'whisper':
+elif name.startswith('whisper'):
+    if scenario.get('whisper_error') and value('--device') != scenario.get('whisper_works_on'):
+        sys.stderr.write('Detecting language...\n' + scenario['whisper_error'] + '\n')
+        if scenario.get('whisper_empty_output'):
+            Path(value('--output_dir'), 'ses.txt').write_text(' \n', encoding='utf-8')
+        raise SystemExit(scenario.get('whisper_exit', 0))
     Path(value('--output_dir'), 'ses.txt').write_text(scenario['audio'], encoding='utf-8')
 elif '-J' in args:
     if not scenario.get('video'):
@@ -289,6 +294,27 @@ class YakalaUnitTest(unittest.TestCase):
         self.assertEqual(read('empty'), 'tk panosu: Şifre')
         self.assertEqual(read('stuck', timeout=0.5), 'tk panosu: Şifre')
 
+    def test_fit_keeps_the_longest_prefix_that_fits(self):
+        # A fake font: every character is 10 px, so the answer is known without a display.
+        class Font:
+            def __init__(self, root=None, font=None):
+                pass
+
+            def measure(self, text):
+                return 10 * len(text)
+        class Canvas:  # stands in for a Tk canvas: the cache lives on it
+            pass
+        first, second = Canvas(), Canvas()
+        with patch('tkinter.font.Font', Font):
+            self.assertEqual(yakala._fit(first, 'kisa', ('f', 12), 100), 'kisa')
+            self.assertEqual(yakala._fit(first, 'abcdefghijkl', ('f', 12), 60), 'abcde…')
+            self.assertEqual(yakala._fit(first, 'ab   cdefgh', ('f', 12), 60), 'ab…')
+            self.assertEqual(yakala._fit(first, 'abc', ('f', 12), 5), '…')
+            self.assertEqual(list(first._fit_fonts), [('f', 12)])
+            # Another window's canvas, even in the same process, builds its own font.
+            yakala._fit(second, 'kisa', ('f', 12), 100)
+            self.assertIsNot(second._fit_fonts[('f', 12)], first._fit_fonts[('f', 12)])
+
     def test_kind_and_slug(self):
         self.assertEqual(yakala.kind_of('https://m.youtube.com/watch?v=1'), 'youtube')
         self.assertEqual(yakala.kind_of('https://x.com/a/status/1'), 'x')
@@ -379,6 +405,7 @@ class YakalaUnitTest(unittest.TestCase):
         for field in ('name', 'behavior', 'properties', 'noteContentFormat', 'noteNameFormat', 'path'):
             self.assertIn(field, template)
         self.assertEqual(template['path'], INBOX)
+        self.assertEqual(template['noteNameFormat'], '{{date|date:"YYYY-MM-DD-HHmm"}}-{{title|safe_name|kebab|slice:0,48}}')
         names = {prop['name']: prop['value'] for prop in template['properties']}
         self.assertEqual((names['tur'], names['durum']), ('yakala', 'bekliyor'))
         self.assertTrue(all(prop['type'] in ('text', 'multitext', 'number', 'checkbox', 'date', 'datetime')
@@ -1236,7 +1263,8 @@ class YakalaVideoLanguageTest(unittest.TestCase):
         (self.bin / 'scenario.json').write_text(json.dumps(scenario), encoding='utf-8')
         (self.bin / 'calls.jsonl').write_text('', encoding='utf-8')
         found = {'npx': 'npx' if npx else None, 'yt_dlp': 'yt-dlp' if yt_dlp else None,
-                 'whisper': 'whisper' if whisper else None, 'pdftotext': None, 'ffmpeg': None}
+                 'whisper': (whisper if isinstance(whisper, str) else 'whisper') if whisper else None,
+                 'pdftotext': None, 'ffmpeg': None}
         card = next((card['id'] for card in yakala.cards(self.vault) if card['meta'].get('url') == url), None) \
             or yakala.capture(self.vault, url=url)['id']
         with patch.object(yakala, 'tools', return_value=found):
@@ -1368,6 +1396,71 @@ class YakalaVideoLanguageTest(unittest.TestCase):
         entry, meta, raw = self.isle(dict(scenario, video=video('tr', audio=[('tr', -1)])), npx=False, whisper=True)
         self.assertEqual((entry['yontem'], meta.get('dil'), meta.get('uyari')), ('ses-whisper', 'tr', None))
         self.assertNotIn('not', entry)
+
+    def whisper_call(self):
+        return next(call for call in self.calls() if call[0].startswith('whisper'))
+
+    def test_audio_fallback_names_the_spoken_language_and_the_chosen_model(self):
+        # yt-dlp named the spoken language: Whisper is told it instead of guessing from the intro.
+        scenario = {'video': video('tr', audio=[('tr', -1)]), 'audio': TURKISH}
+        with patch.dict(os.environ, {'BEYIN_WHISPER_MODEL': ''}):
+            entry, meta, raw = self.isle(scenario, npx=False, whisper=True)
+        call = self.whisper_call()
+        self.assertEqual((entry['yontem'], call[call.index('--language') + 1]), ('ses-whisper', 'tr'))
+        self.assertNotIn('--model', call)  # the tool's own default unless the user picks one
+        with patch.dict(os.environ, {'BEYIN_WHISPER_MODEL': 'large-v3-turbo'}):
+            self.isle(scenario, npx=False, whisper=True)
+        call = self.whisper_call()
+        self.assertEqual(call[call.index('--model') + 1], 'large-v3-turbo')
+        # Unknown or dubbed: no language flag, Whisper detects it as before.
+        with patch.dict(os.environ, {'BEYIN_WHISPER_MODEL': ''}):
+            self.isle(dict(scenario, video=video(None, audio=[('tr', 5), ('en', -1)])), npx=False, whisper=True)
+        self.assertNotIn('--language', self.whisper_call())
+
+    def test_cuda_failure_in_whisper_ctranslate2_is_retried_on_the_cpu(self):
+        # ctranslate2 picks CUDA itself; without cuBLAS it fails yet exits 0. The CPU run is kept and the card says why.
+        cublas = 'RuntimeError: Library cublas64_12.dll is not found or cannot be loaded'
+        scenario = {'video': video('tr', audio=[('tr', -1)]), 'audio': TURKISH, 'whisper_error': cublas,
+                    'whisper_works_on': 'cpu'}
+        entry, meta, raw = self.isle(scenario, npx=False, whisper='whisper-ctranslate2')
+        self.assertEqual((entry['yontem'], meta.get('dil')), ('ses-whisper', 'tr'))
+        self.assertIn(TURKISH, raw)
+        runs = self.calls('whisper-ctranslate2')
+        self.assertEqual([call[call.index('--device') + 1] if '--device' in call else None for call in runs], [None, 'cpu'])
+        self.assertIn('--language', runs[1])  # the retry keeps the language and model it was given
+        for part in ('CPU ile', 'cublas64_12.dll'):
+            self.assertIn(part, meta.get('uyari', ''))
+
+    def test_empty_whisper_output_also_retries_cuda_and_reports_failure(self):
+        scenario = {'video': video('tr', audio=[('tr', -1)]), 'audio': TURKISH,
+                    'whisper_error': 'RuntimeError: Library cublas64_12.dll is not found',
+                    'whisper_works_on': 'cpu', 'whisper_empty_output': True}
+        entry, meta, raw = self.isle(scenario, npx=False, whisper='whisper-ctranslate2')
+        self.assertEqual(entry['yontem'], 'ses-whisper')
+        self.assertIn(TURKISH, raw)
+        self.assertEqual(len(self.calls('whisper-ctranslate2')), 2)
+        entry, meta, _raw = self.isle(dict(scenario, whisper_works_on='never'),
+                                    npx=False, whisper='whisper-ctranslate2')
+        self.assertEqual(entry['durum'], 'hata')
+        self.assertIn('Whisper metin uretmedi', entry.get('not', ''))
+
+    def test_whisper_failure_names_whisper_error_instead_of_a_missing_tool(self):
+        # Both runs fail (or the tool is not ctranslate2): the card carries Whisper's own last error line.
+        scenario = {'video': video('tr', audio=[('tr', -1)]), 'audio': TURKISH,
+                    'whisper_error': 'RuntimeError: CUDA failed with error out of memory', 'whisper_works_on': 'never'}
+        entry, meta, raw = self.isle(scenario, npx=False, whisper='whisper-ctranslate2')
+        self.assertEqual(len(self.calls('whisper-ctranslate2')), 2)
+        self.assertIn('Whisper metin uretmedi: RuntimeError: CUDA failed', entry.get('not', '') + meta.get('uyari', ''))
+        self.assertNotIn('bulunamadi', entry.get('not', ''))
+        # openai-whisper falls back to the CPU on its own: no retry, only the error is named.
+        entry, meta, raw = self.isle(dict(scenario, whisper_error='Killed', whisper_exit=1), npx=False, whisper=True)
+        self.assertEqual(len(self.calls('whisper')), 1)
+        self.assertIn('Whisper metin uretmedi: Killed', entry.get('not', '') + meta.get('uyari', ''))
+
+    def test_whisper_language_flag_takes_only_a_plain_language_code(self):
+        self.assertEqual(yakala._whisper_options('pt-BR')[1], ['--language', 'pt'])
+        for odd in (None, '', 'und&calc', 'x' * 9):
+            self.assertEqual(yakala._whisper_options(odd)[1], [])
 
     def test_refused_metadata_request_keeps_defuddle_and_asks_for_no_track(self):
         entry, meta, raw = self.isle({'video': None, 'defuddle': {'': defuddle('ar', ARABIC)}})
