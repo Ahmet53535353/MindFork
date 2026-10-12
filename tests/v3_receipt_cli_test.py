@@ -1,5 +1,6 @@
 """Receipt field flags and JSON modes through the installed public entry point."""
 from contextlib import closing
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -138,11 +139,82 @@ class ReceiptCliTest(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assert_parse_error([flag], 'expected one argument')
 
+    def test_links_name_external_results_beside_vault_refs(self):
+        pull = 'https://github.com/avenoxai/avenoxbeyin/pull/320#issuecomment-1'
+        flags = self.submit('--harness', 'claude', '--event-id', 'linked', '--summary', 'PR açıldı.',
+                            '--ref', 'notes/ilk.md', '--link', pull, '--link', 'http://örnek.test/a:b', '--link', pull)
+        saved = self.saved('linked')
+        self.assertEqual(saved['links'], [pull, 'http://örnek.test/a:b'])  # kept in order, once each
+        self.assertEqual(saved['refs'], ['notes/ilk.md'])
+        source = self.vault / flags['source']
+        self.assertIn(pull, source.read_text(encoding='utf-8'))
+        # JSON mode gives the same receipt; a different link set for the same event id is a collision.
+        payload = {'event_id': 'linked', 'summary': 'PR açıldı.', 'refs': ['notes/ilk.md'],
+                   'links': [pull, 'http://örnek.test/a:b']}
+        self.assertEqual(self.submit('--harness', 'claude', '--file', '-', payload=payload), flags)
+        changed = self.cli('--harness', 'claude', '--file', '-', payload=dict(payload, links=[pull]))
+        self.assertNotEqual(changed.returncode, 0)
+        self.assertIn('collision', changed.stderr.decode('utf-8') + changed.stdout.decode('utf-8'))
+        # Recap shows the links; a fresh state rebuilds them from the receipt source.
+        recap = run_python(self.vault / 'beyin.py', ['recap'], self.vault, self.env)
+        self.assertEqual(recap.returncode, 0, recap.stderr.decode('utf-8'))
+        item = next(item for item in json.loads(recap.stdout.decode('utf-8'))['items'] if item['source'] == flags['source'])
+        self.assertEqual(item['links'], saved['links'])
+        (self.state / 'memory.sqlite3').unlink()
+        rebuilt = run_python(self.vault / 'beyin.py', ['sync'], self.vault, self.env)
+        self.assertEqual(rebuilt.returncode, 0, rebuilt.stderr.decode('utf-8'))
+        self.assertEqual(self.saved('linked')['links'], saved['links'])
+
+    def test_receipt_without_links_is_unchanged(self):
+        result = self.submit('--event-id', 'no-links', '--summary', 'Öğrenilen: yok', '--ref', 'notes/ilk.md')
+        self.assertNotIn('links', self.saved('no-links'))
+        self.assertNotIn('"links"', (self.vault / result['source']).read_text(encoding='utf-8'))
+
+    def test_unsafe_links_are_refused_and_nothing_is_written(self):
+        token = 'github_pat_' + 'A1b2C3d4E5' * 4
+        for link in ('notes/ilk.md', 'ftp://example.com/a', 'javascript:alert(1)', 'https://user:pw@example.com/',
+                     'https://example.com/a b', 'https://example.com/\x07', 'https:///no-host',
+                     'https://example.com/?token=' + token, 'https://example.com/' + 'a' * 2048):
+            with self.subTest(link=link[:40]):
+                before = snapshot(self.vault)
+                result = self.cli('--event-id', 'unsafe', '--summary', 'Özet', '--ref', 'notes/ilk.md', '--link', link)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(snapshot(self.vault), before)  # no receipt source; state may hold a first sync
+        too_many = {'event_id': 'many', 'summary': 'Özet', 'refs': ['notes/ilk.md'],
+                    'links': ['https://example.com/' + str(n) for n in range(21)]}
+        self.assertNotEqual(self.cli('--file', '-', payload=too_many).returncode, 0)
+
     def test_help_lists_json_and_flag_modes(self):
         result = self.cli('--help')
         self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8'))
-        for flag in ('--file', '--harness', '--event-id', '--summary', '--summary-file', '--ref', '--session'):
+        for flag in ('--file', '--harness', '--event-id', '--summary', '--summary-file', '--ref', '--link', '--session'):
             self.assertIn(flag, result.stdout.decode('utf-8'))
+
+    def test_synced_links_have_the_same_secret_and_count_gate(self):
+        token = 'github_pat_' + 'A1b2C3d4E5' * 4
+        cases = [
+            ['https://example.com/?token=' + token],
+            ['https://example.com/?token=' + token.replace('_', '%5F')],
+            ['https://example.com/' + str(n) for n in range(21)],
+        ]
+        receipts = self.vault / 'receipts'
+        receipts.mkdir(exist_ok=True)
+        for index, links in enumerate(cases):
+            ident = 'remote-unsafe-' + str(index)
+            path = receipts / (hashlib.sha256(ident.encode()).hexdigest() + '.md')
+            data = {'kind': 'receipt', 'event_id': ident, 'harness': 'codex', 'refs': ['notes/ilk.md'],
+                    'links': links, 'visibility': 'internal', 'created_at': '2026-10-12T12:00:00+00:00'}
+            path.write_text('---\n' + json.dumps(data) + '\n---\nRemote outcome\n', encoding='utf-8')
+        before = snapshot(receipts)
+        result = run_python(self.vault / 'beyin.py', ['sync'], self.vault, self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['status'], 'degraded')
+        self.assertEqual(snapshot(receipts), before)
+        with closing(sqlite3.connect(self.state / 'memory.sqlite3')) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM receipts').fetchone()[0], 0)
+        recap = run_python(self.vault / 'beyin.py', ['recap'], self.vault, self.env)
+        self.assertNotIn(token.encode(), recap.stdout)
+        self.assertEqual(json.loads(recap.stdout)['items'], [])
 
 
 if __name__ == '__main__':

@@ -79,6 +79,20 @@ class ReceiptConflict(ValueError):
     pass
 
 
+MAX_RECEIPT_LINKS = 20
+
+
+def _plain_link(value):
+    """An http(s) URL a receipt may name as an external result: no spaces, controls or credentials."""
+    if not 0 < len(value) <= 2048 or re.search(r"[\s\x00-\x1f\x7f]", value):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(value)
+        return parts.scheme in ("http", "https") and bool(parts.hostname) and parts.username is None and parts.password is None
+    except ValueError:
+        return False
+
+
 def _json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -732,7 +746,7 @@ class MemoryStore:
                 record.get("trust") != "untrusted" and record.get("trusted") is not False and
                 record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 
-    def submit_receipt(self, event_id, summary, refs, harness):
+    def submit_receipt(self, event_id, summary, refs, harness, links=None):
         self._require_writable()
         if not isinstance(event_id, str) or not event_id.strip():
             raise ValueError("event_id required")
@@ -743,13 +757,18 @@ class MemoryStore:
         if not isinstance(refs, list) or not refs:
             raise ValueError("source refs required")
         event = {"event_id": event_id, "summary": summary, "refs": [self._source(ref) for ref in refs], "harness": harness}
+        if links:
+            if not isinstance(links, list) or len(links) > MAX_RECEIPT_LINKS or not all(
+                    isinstance(link, str) and _plain_link(link) for link in links):
+                raise ValueError("links must be http(s) URLs without spaces or credentials")
+            event["links"] = list(links)
         payload = _json(event)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT payload FROM receipts WHERE id=?", (event_id,)).fetchone()
             if old:
                 previous = json.loads(old[0])
-                if previous["summary"] != summary or previous["refs"] != event["refs"]:
+                if (previous["summary"], previous["refs"], previous.get("links")) != (summary, event["refs"], event.get("links")):
                     raise ReceiptConflict("event_id reused with different payload")
                 event = previous
             db.execute("INSERT OR IGNORE INTO receipts VALUES (?,?)", (event_id, payload))
