@@ -103,9 +103,12 @@ class HookInstallerTest(unittest.TestCase):
 
     def test_hook_uses_local_state_when_synced_pin_is_from_another_user(self):
         from beyin_v3 import default_state
-        with patch.dict(os.environ, {'LOCALAPPDATA': self.env['LOCALAPPDATA']}):
+        with patch.dict(os.environ, self.env, clear=True):
             expected = default_state(self.vault).resolve()
-            foreign = self.root / 'other-user' / 'localappdata' / 'beyin-v3' / expected.name
+            foreign_base = ('C:/Users/foreign-user/AppData/Local' if sys.platform == 'win32'
+                            else '/Users/foreign-user/Library/Application Support' if sys.platform == 'darwin'
+                            else '/home/foreign-user/.local/state')
+            foreign = Path(foreign_base) / 'beyin-v3' / expected.name
             result = self.invoke(self.payload, extra=['--metadata-only', '--state', str(foreign)])
         self.assertEqual(result, {})
         self.assertTrue((expected / 'hook-queue').is_dir())
@@ -113,7 +116,7 @@ class HookInstallerTest(unittest.TestCase):
 
     def test_hook_uses_local_state_when_synced_pin_is_from_another_os(self):
         from beyin_v3 import default_state
-        with patch.dict(os.environ, {'LOCALAPPDATA': self.env['LOCALAPPDATA']}):
+        with patch.dict(os.environ, self.env, clear=True):
             expected = default_state(self.vault).resolve()
             foreign = f"/home/other-user/.local/state/beyin-v3/{expected.name}"
             result = self.invoke(self.payload, extra=['--metadata-only', '--state', foreign])
