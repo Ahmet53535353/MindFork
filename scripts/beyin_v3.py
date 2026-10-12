@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -26,43 +27,26 @@ def default_state(vault: Path) -> Path:
 
 
 def resolve_state(vault: Path, pinned: Path) -> Path:
-    """Use this machine's default state when a synced pin belongs to another user or OS.
-
-    The older cross-platform fallback only rejected pins that were not absolute. A
-    vault copied from another user account or another OS (Windows, Linux, macOS)
-    may carry an absolute path from the source system or a foreign path format, but
-    the default layout is recognizable across platforms by its final
-    ``beyin-v3/<vault-key>`` suffix under an OS default state directory (``AppData/Local``,
-    ``.local/state``, or ``Library/Application Support``).
-    Do not reinterpret explicit custom state paths or MSIX package paths.
-    """
-    vault = Path(vault).resolve()
+    """Resolve a foreign OS/user's conventional default; preserve custom and local pins."""
     expected = default_state(vault).resolve()
-    pinned_str = str(pinned).strip()
-    if not pinned_str:
+    raw = str(pinned)
+    if not raw:
         return expected
-    parts = [part.lower() for part in pinned_str.replace("\\", "/").split("/") if part]
-    if _in_package_container(pinned_str):
+    if _in_package_container(raw):
         return Path(pinned).expanduser().resolve()
-
-    expected_parts = [part.lower() for part in str(expected).replace("\\", "/").split("/") if part]
-    expected_key = expected_parts[-1]
-    default_parents = {"local", "state", "application support"}
-    if len(expected_parts) >= 3:
-        default_parents.add(expected_parts[-3])
-
-    if (len(parts) >= 3 and
-            parts[-1] == expected_key and
-            parts[-2] == "beyin-v3" and
-            parts[-3] in default_parents):
+    portable = raw.replace("\\", "/")
+    # Match complete standard layouts, rather than a generic /state/ or /local/ suffix.
+    # A copied vault normally changes its absolute path and therefore its hash.
+    conventional = re.fullmatch(
+        r"(?:[A-Za-z]:/Users/[^/]+/AppData/Local|/home/[^/]+/\.local/state|"
+        r"/root/\.local/state|/Users/[^/]+/Library/Application Support)/beyin-v3/[0-9a-f]{16}",
+        portable, re.IGNORECASE)
+    local_parent = str(expected.parent).replace("\\", "/").casefold()
+    if conventional and portable.rsplit("/", 1)[0].casefold() != local_parent:
         return expected
-
     if not Path(pinned).expanduser().is_absolute():
-        if re.match(r"^[a-zA-Z]:[/\\]", pinned_str):
+        if re.match(r"^[A-Za-z]:[/\\]", raw) or (sys.platform == "win32" and raw.startswith(("/", "\\"))):
             return expected
-        if sys.platform == "win32" and pinned_str.startswith(("/", "\\")):
-            return expected
-
     return Path(pinned).expanduser().resolve()
 
 
@@ -158,6 +142,9 @@ def state_location(vault: Path, state: Path, windows=None) -> dict:
             "through a synced vault or edited by hand (#249); the installed beyin.py reads this "
             "machine's default state instead. Installation files are per machine and stay out of "
             "the sync; see docs/v3/MULTI-MACHINE.md.")
+    elif resolve_state(vault, Path(pinned)) != Path(pinned).expanduser().resolve():
+        report['warnings'].append('foreign_default_state: the synced default state belongs to another user or OS; '
+                                  'this machine uses its local default. Reinstall here to bind lifecycle commands.')
     try:
         resolved = Path(pinned).expanduser().resolve()
     except (OSError, ValueError, RuntimeError):

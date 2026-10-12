@@ -164,6 +164,12 @@ class CrossPlatformPinTest(unittest.TestCase):
         # Explicit custom state is preserved
         custom = (self.root / "custom-state").resolve()
         self.assertEqual(cli.resolve_state(self.vault, custom), custom)
+        changed_key = 'fedcba9876543210'
+        self.assertEqual(cli.resolve_state(self.vault, Path('/home/foreign/.local/state/beyin-v3/' + changed_key)), expected)
+        custom_layout = self.root.resolve() / 'state/beyin-v3' / expected.name
+        self.assertEqual(cli.resolve_state(self.vault, custom_layout), custom_layout)
+        previous_local = expected.parent / changed_key
+        self.assertEqual(cli.resolve_state(self.vault, previous_local), previous_local)
 
     def test_only_the_pin_may_differ(self):
         spec = importlib.util.spec_from_file_location('install_v3_cross_pin', ROOT / 'scripts/install_v3.py')
