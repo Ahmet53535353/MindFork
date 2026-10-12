@@ -859,9 +859,11 @@ class MemoryStore:
         return weighted
 
     def _strict_rank(self, ranked, terms, vocabularies):
-        """Keep only meaningful lexical matches; see STRICT_* for the calibrated rules."""
+        """Keep meaningful matches without making one-word queries impossible."""
+        min_shared = min(self.STRICT_MIN_SHARED, len(terms))
+        min_weight = self.STRICT_SINGLE_TERM_MIN_WEIGHT if len(terms) == 1 else self.STRICT_MIN_WEIGHT
         return self._by_weight([(weight, record) for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies)
-                                if shared_count >= self.STRICT_MIN_SHARED and weight >= self.STRICT_MIN_WEIGHT])
+                                if shared_count >= min_shared and weight >= min_weight])
 
     BM25_K1 = 1.5
     BM25_B = 0.75
@@ -888,8 +890,9 @@ class MemoryStore:
             weighted.append((weight, record))
         return self._by_weight(weighted)
 
-    # Strict automatic context: used by the per-turn hook so that a single shared common
-    # word never pulls an unrelated note into the prompt. Weight = sum of relative idf over
+    # Strict automatic context: multiword queries need two shared words so that an incidental
+    # common word cannot pull an unrelated note into the prompt. One-word queries use a
+    # separate weight floor and still reject weak matches. Weight = sum of relative idf over
     # shared terms, divided by log(10 + note vocabulary size). Relative idf (idf / idf of a
     # term seen in exactly one note) keeps the scale independent of vault size, so the
     # threshold works for a 20-note vault and a 300-note vault alike.
@@ -897,6 +900,8 @@ class MemoryStore:
     # relevant 0.33-1.21; 0.30 silenced 6/7 irrelevant and kept 7/7 relevant.
     STRICT_MIN_SHARED = 2
     STRICT_MIN_WEIGHT = 0.30
+    # A single query term cannot meet the two-term gate; still exclude incidental long-note hits.
+    STRICT_SINGLE_TERM_MIN_WEIGHT = 0.20
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
     # Per-turn strict context ranks Markdown passages instead of whole notes and delivers the
@@ -923,7 +928,11 @@ class MemoryStore:
         scopes = read_project_scopes(self.vault_root) if project is not None else None
         eligible = []
         stale_count = 0
+        from beyin_v3_hygiene import sensitive_source
         for record in records:
+            # Old indexes can still hold these notes until the next sync. Never deliver them.
+            if sensitive_source(record.get("source")):
+                continue
             if record["visibility"] not in allowed or record.get("trust") == "untrusted" or record.get("trusted") is False or record.get("status") == "untrusted" or record.get("kind") == "untrusted" or _rejected_inference(record) != rejected_only:
                 continue
             if project is not None:
