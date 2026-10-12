@@ -19,6 +19,7 @@ if _SCRIPTS not in sys.path:
     sys.path.append(_SCRIPTS)
 
 import beyin_v3_triage as triage_module
+import beyin_v3_hygiene as hygiene_module
 from beyin_entry import human_result
 
 
@@ -50,8 +51,8 @@ class TriageTest(unittest.TestCase):
         t = self.now - (days * 86400)
         os.utime(path, (t, t))
 
-    def test_inbox_scanning_with_varied_folder_names_and_sync_immunity(self):
-        # 1. Emoji inbox folder (Batuhan review item #6)
+    def test_inbox_scanning_with_hygiene_report_and_sync_immunity(self):
+        # 1. Emoji inbox folder matching generic INBOX_WORDS
         inbox1 = self.vault / '📥 000-Inbox'
         inbox1.mkdir(parents=True)
         # Note with frontmatter date 20 days ago, but mtime set to 1 day ago (simulating git sync / pull)
@@ -59,12 +60,10 @@ class TriageTest(unittest.TestCase):
         f1.write_text('---\ncreated: 2026-09-22\ntur: note\n---\nEski not.', encoding='utf-8')
         self.set_age(f1, 1)  # mtime is 1 day ago
 
-        # 2. Kaynaklar folder (Batuhan review item #6)
-        sources_folder = self.vault / 'Kaynaklar'
-        sources_folder.mkdir(parents=True)
-        f2 = sources_folder / 'report.pdf'
-        f2.write_bytes(b'%PDF-dummy-content')
-        self.set_age(f2, 5)
+        # 2. Config/asset file (.json): must NOT be counted as a pending capture note
+        f2_json = inbox1 / 'beyne-at-web-clipper.json'
+        f2_json.write_text('{"setting": true}', encoding='utf-8')
+        self.set_age(f2_json, 5)
 
         # 3. Processed yakala card: should be ignored
         f3 = inbox1 / 'processed.md'
@@ -74,21 +73,33 @@ class TriageTest(unittest.TestCase):
         # 4. Sensitive folder: must NEVER be scanned
         secret_box = self.vault / '🔐 Kasa' / 'inbox'
         secret_box.mkdir(parents=True)
-        (secret_box / 'passwords.txt').write_text('secret', encoding='utf-8')
+        (secret_box / 'passwords.md').write_text('---\ncreated: 2026-09-01\n---\nsecret', encoding='utf-8')
 
-        report = triage_module.scan_inbox(self.vault, self.now)
-        # Only f1 and f2 should be found
-        self.assertEqual(report['count'], 2)
-        paths = [item['path'] for item in report['items']]
-        self.assertIn('📥 000-Inbox/capture-old.md', paths)
-        self.assertIn('Kaynaklar/report.pdf', paths)
-        self.assertNotIn('🔐 Kasa/inbox/passwords.txt', paths)
+        # 5. User-configured custom inbox folder via inbox-report.json (#253)
+        custom_folder = self.vault / 'Yakala'
+        custom_folder.mkdir(parents=True)
+        f4 = custom_folder / 'web-note.md'
+        f4.write_text('---\ncreated: 2026-10-10\n---\nYeni not.', encoding='utf-8')
+        self.set_age(f4, 2)
+        # Write inbox-report.json configuring 'Yakala' in state
+        (self.state / 'inbox-report.json').write_text(
+            json.dumps({'schema': 1, 'enabled': True, 'max_items': 10, 'max_days': 7, 'folders': ['Yakala']}),
+            encoding='utf-8'
+        )
 
-        # Sync immunity verification: f1 has frontmatter date 2026-09-22 (~20 days old), NOT 1 day!
-        old_note = next(item for item in report['items'] if item['name'] == 'capture-old.md')
-        self.assertGreaterEqual(old_note['age_days'], 19.0)
+        report = triage_module.scan_inbox(self.vault, self.now, state=self.state)
+        # Should find 1 note in Yakala (since folders setting restricts to configured folders)
+        self.assertEqual(report['count'], 1)
+        folder_names = [f['folder'] for f in report['folders']]
+        self.assertIn('Yakala', folder_names)
 
-    def test_stale_tasks_detection_and_sync_immunity(self):
+        # Without state / without custom folders configured: defaults to INBOX_WORDS folders
+        report_default = triage_module.scan_inbox(self.vault, self.now, state=None)
+        # Only f1 in '📥 000-Inbox' should be counted (.json, processed and sensitive ignored)
+        self.assertEqual(report_default['count'], 1)
+        self.assertGreaterEqual(report_default['oldest_days'], 19)
+
+    def test_stale_tasks_detection_sync_immunity_and_waiting_status(self):
         tasks = self.vault / 'tasks'
         tasks.mkdir(parents=True)
 
@@ -102,21 +113,44 @@ class TriageTest(unittest.TestCase):
         t_stale.write_text('---\nstatus: open\nupdated_at: 2026-09-17\n---\n# Hareketsiz Gorev\n- [ ] Eski is\n', encoding='utf-8')
         self.set_age(t_stale, 1)  # mtime 1 day ago
 
-        # 3. Completed task (25 days old, but closed)
+        # 3. Waiting task: updated 18 days ago -> should be reported as stale with status 'waiting'
+        t_waiting = tasks / 'waiting.md'
+        t_waiting.write_text('---\nstatus: waiting\nupdated_at: 2026-09-24\n---\n# Bekleyen Gorev\n', encoding='utf-8')
+        self.set_age(t_waiting, 1)  # mtime 1 day ago
+
+        # 4. Undated task: no frontmatter date at all, mtime set to 1 day ago
+        # Must NOT invent age from mtime; listed in undated_tasks
+        t_undated = tasks / 'undated.md'
+        t_undated.write_text('---\nstatus: open\n---\n# Tarihsiz Gorev\n', encoding='utf-8')
+        self.set_age(t_undated, 1)
+
+        # 5. Completed task (25 days old, but closed)
         t_done = tasks / 'done.md'
         t_done.write_text('---\nstatus: completed\n---\n# Biten Gorev\n- [x] Bitti\n', encoding='utf-8')
         self.set_age(t_done, 25)
 
-        # 4. Kapandi task (Turkish terminal status)
+        # 6. Kapandi task (Turkish terminal status)
         t_kapandi = tasks / 'kapandi.md'
         t_kapandi.write_text('---\nstatus: kapandi\n---\n# Kapanan Gorev\n', encoding='utf-8')
         self.set_age(t_kapandi, 30)
 
         report = triage_module.scan_stale_tasks(self.vault, self.now, stale_days=14)
-        self.assertEqual(report['open_count'], 2)
-        self.assertEqual(report['stale_count'], 1)
-        self.assertEqual(report['stale_tasks'][0]['title'], 'Hareketsiz Gorev')
-        self.assertGreaterEqual(report['stale_tasks'][0]['age_days'], 24.0)
+        # Open tasks: fresh, stale, waiting, undated = 4
+        self.assertEqual(report['open_count'], 4)
+        # Stale tasks: stale (25d) + waiting (18d) = 2
+        self.assertEqual(report['stale_count'], 2)
+        # Undated tasks: 1
+        self.assertEqual(report['undated_count'], 1)
+        self.assertEqual(report['undated_tasks'][0]['title'], 'Tarihsiz Gorev')
+        self.assertIsNone(report['undated_tasks'][0]['age_days'])
+
+        stale_titles = [t['title'] for t in report['stale_tasks']]
+        self.assertIn('Hareketsiz Gorev', stale_titles)
+        self.assertIn('Bekleyen Gorev', stale_titles)
+
+        waiting_task = next(t for t in report['stale_tasks'] if t['title'] == 'Bekleyen Gorev')
+        self.assertEqual(waiting_task['status'], 'waiting')
+        self.assertGreaterEqual(waiting_task['age_days'], 17.0)
 
     def test_knowledge_digest_scanning(self):
         knowledge = self.vault / '🧠 500-Knowledge' / 'concepts'
@@ -142,14 +176,27 @@ class TriageTest(unittest.TestCase):
         self.assertIn('Kazanimlar ve Sonuclar', titles)
         self.assertNotIn('Eski DB', titles)
 
-    def test_companion_status_parsing(self):
+    def test_companion_status_parsing_and_active_threads_from_headings(self):
         comp = self.vault / '🔮 850-Companion'
         comp.mkdir(parents=True)
 
         (comp / 'Kurallar.md').write_text(
             '# Kurallar\n\n- Kural 1\n* Kural 2\n1. Kural 3\n- Kural 4\n', encoding='utf-8')
-        (comp / 'Threads.md').write_text(
-            '## Threads\n### T1\n**Status:** active\n### T2\n**status:** active\n', encoding='utf-8')
+
+        # Upstream template format with emoji in status line
+        threads_content = (
+            "# Threads\n\n"
+            "Ongoing storylines that span multiple sessions.\n\n"
+            "## Active Threads\n"
+            "### Thread: Setting up the second brain\n"
+            "**Status:** 🟢 Active: created 2026-10-01\n\n"
+            "### Thread: Multi-agent coordination\n"
+            "**Status:** 🟢 Active: ongoing\n\n"
+            "## Closed Threads\n"
+            "### Thread: Legacy migration\n"
+            "**Status:** ⚪ Closed\n"
+        )
+        (comp / 'Threads.md').write_text(threads_content, encoding='utf-8')
         (comp / 'Last-Session.md').write_text(
             '# Son\n## 2026-10-12 06:30 · deneme · abcd1234\nDevir.\n', encoding='utf-8')
 
@@ -160,15 +207,16 @@ class TriageTest(unittest.TestCase):
 
         report = triage_module.scan_companion(self.vault, now=self.now)
         self.assertEqual(report['rules_count'], 4)
+        # Exactly 2 active threads under ## Active Threads (closed one excluded!)
         self.assertEqual(report['active_threads'], 2)
         self.assertEqual(report['last_session'], '2026-10-12 06:30')
         self.assertEqual(report['active_presence'], 1)
 
     def test_triage_full_and_format_human(self):
-        inbox = self.vault / '000-Inbox'
+        inbox = self.vault / '📥 000-Inbox'
         inbox.mkdir(parents=True)
         f = inbox / 'quick-note.md'
-        f.write_text('Fikir.', encoding='utf-8')
+        f.write_text('---\ncreated: 2026-10-07\n---\nFikir.', encoding='utf-8')
         self.set_age(f, 5)
 
         full_report = triage_module.triage(self.vault, stale_days=14, digest_days=7, now=self.now)

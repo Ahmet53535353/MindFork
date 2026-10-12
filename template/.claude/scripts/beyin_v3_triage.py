@@ -18,6 +18,8 @@ try:
         TERMINAL_STATUSES,
         _inbox_folder,
         CODE_DIRS,
+        inbox_report,
+        read_inbox_settings,
     )
 except ImportError:
     _TR_FOLD = str.maketrans({'ş': 's', 'ğ': 'g', 'ü': 'u', 'ö': 'o', 'ç': 'c', 'ı': 'i', 'â': 'a', 'î': 'i', 'û': 'u'})
@@ -40,6 +42,12 @@ except ImportError:
     def _inbox_folder(name, configured=None):
         f = fold(name)
         return 'inbox' in f or 'gelen' in f or 'kaynak' in f or 'source' in f or 'yakala' in f
+
+    def read_inbox_settings(state):
+        return {'enabled': False, 'max_items': 10, 'max_days': 7, 'folders': []}, False
+
+    def inbox_report(vault, state=None, max_items=10, max_days=7, now=None, folders=None):
+        return {'folders': [], 'attention': False, 'max_items': max_items, 'max_days': max_days}
 
 EXTENDED_TERMINAL_STATUSES = frozenset(TERMINAL_STATUSES | {'completed', 'tamamlandi', 'iptal', 'closed'})
 
@@ -79,32 +87,52 @@ def _front_values(text: str, keys: tuple[str, ...], fold_values: bool = True) ->
 
 
 def _parse_timestamp(val: str) -> float | None:
+    """Parse a date or timestamp.
+
+    Date-only strings (e.g. 2026-10-12) evaluate against the local calendar day,
+    matching recap (#229). Timestamps with time use UTC unless offset specified.
+    Also accepts Turkish calendar formats (DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY).
+    """
     if not val or not isinstance(val, str):
         return None
-    match = DATE_PATTERN.search(val.strip())
+    val_str = val.strip()
+    match = DATE_PATTERN.search(val_str)
     if not match:
+        m_tr = re.search(r'(\d{2})[-/. ](\d{2})[-/. ](\d{4})', val_str)
+        if m_tr:
+            d, m, y = int(m_tr[1]), int(m_tr[2]), int(m_tr[3])
+            try:
+                return datetime(y, m, d).timestamp()
+            except (ValueError, OverflowError):
+                return None
+        m_slash = re.search(r'(\d{4})/(\d{2})/(\d{2})', val_str)
+        if m_slash:
+            y, m, d = int(m_slash[1]), int(m_slash[2]), int(m_slash[3])
+            try:
+                return datetime(y, m, d).timestamp()
+            except (ValueError, OverflowError):
+                return None
         return None
+
     year, month, day = int(match[1]), int(match[2]), int(match[3])
+    has_time = bool(match[4])
     hour = int(match[4]) if match[4] else 0
     minute = int(match[5]) if match[5] else 0
     second = int(match[6]) if match[6] else 0
     try:
-        dt = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
-        return dt.timestamp()
+        if has_time:
+            dt = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+            return dt.timestamp()
+        else:
+            # Naive datetime evaluates to start of local calendar day (#229 compatibility)
+            dt = datetime(year, month, day)
+            return dt.timestamp()
     except (ValueError, OverflowError):
         return None
 
 
-def _note_age_days(path: Path, now: float, front_keys: tuple[str, ...]) -> float:
-    """Age of a note in days, prioritized by frontmatter date keys for sync immunity,
-
-    falling back to file mtime if no valid frontmatter date is present.
-    """
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return 0.0
-
+def _note_frontmatter_timestamp(path: Path, front_keys: tuple[str, ...]) -> float | None:
+    """Timestamp from frontmatter keys, prioritizing explicit metadata for sync immunity."""
     try:
         with path.open(encoding='utf-8', errors='replace') as handle:
             head = handle.read(4096)
@@ -114,9 +142,25 @@ def _note_age_days(path: Path, now: float, front_keys: tuple[str, ...]) -> float
             if raw:
                 ts = _parse_timestamp(raw)
                 if ts is not None:
-                    return max(0.0, (now - ts) / 86400.0)
+                    return ts
     except Exception:
         pass
+    return None
+
+
+def _note_age_days(path: Path, now: float, front_keys: tuple[str, ...]) -> float:
+    """Age of a note in days, prioritized by frontmatter date keys for sync immunity,
+
+    falling back to file mtime if no valid frontmatter date is present (used for knowledge notes/outcomes).
+    """
+    ts = _note_frontmatter_timestamp(path, front_keys)
+    if ts is not None:
+        return max(0.0, (now - ts) / 86400.0)
+
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return 0.0
 
     return max(0.0, (now - mtime) / 86400.0)
 
@@ -148,96 +192,62 @@ def _find_top_matching_dirs(vault: Path, matcher, extra_exact: tuple[str, ...] =
     return matched
 
 
-def scan_inbox(vault: Path, now: float) -> dict:
+def scan_inbox(vault: Path, now: float, state: Path | None = None) -> dict:
+    """Scan inbox items using the unified hygiene inbox report (#253).
+
+    Respects user-configured --inbox-folder / inbox-report.json settings and
+    index-excluded lists (#275). Only counts Markdown capture notes, ignoring
+    configuration or asset files (such as web clipper JSONs).
+    """
     vault = Path(vault).resolve()
-    items = []
-    companions = companion_names(vault)
-    seen_dirs = set()
-    inbox_folders = []
-
-    def is_inbox(name: str, folded: str) -> bool:
-        if name in companions or sensitive_excluded(name):
-            return False
-        return (
-            _inbox_folder(name, None)
-            or folded in ('sources', 'kaynaklar', 'kaynak', 'yakala')
-            or any(w in folded for w in ('inbox', 'gelenkutusu', 'gelenkutum'))
-        )
-
-    for folder in _find_top_matching_dirs(vault, is_inbox, extra_exact=('000-inbox', 'sources', 'kaynaklar')):
+    folders = None
+    if state is not None:
         try:
-            res = folder.resolve()
-            if res not in seen_dirs:
-                seen_dirs.add(res)
-                inbox_folders.append(res)
-        except OSError:
-            pass
+            cfg, valid = read_inbox_settings(state)
+            if valid and cfg.get('folders'):
+                folders = cfg['folders']
+        except Exception:
+            folders = None
 
-    # If vault has a default starter folder not matched yet:
-    for starter in ('📥 000-Inbox', '000-Inbox', 'sources', 'Sources', 'Kaynaklar'):
-        folder = vault / starter
-        if folder.is_dir() and not folder.is_symlink():
-            try:
-                res = folder.resolve()
-                if res not in seen_dirs:
-                    seen_dirs.add(res)
-                    inbox_folders.append(res)
-            except OSError:
-                pass
+    try:
+        rep = inbox_report(vault, state=state, now=now, folders=folders)
+        folder_rows = rep.get('folders', [])
+        total_notes = sum(f.get('notes', 0) for f in folder_rows)
+        oldest_days = None
+        for f in folder_rows:
+            od = f.get('oldest_days')
+            if od is not None:
+                if oldest_days is None or od > oldest_days:
+                    oldest_days = od
 
-    for folder in inbox_folders:
-        for root, dirs, files in os.walk(folder):
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in CODE_DIRS]
-            for f in files:
-                file_path = Path(root) / f
-                if not _is_safe_file(file_path):
-                    continue
-
-                # Skip already processed yakala cards
-                if file_path.suffix.lower() == '.md':
-                    try:
-                        with file_path.open(encoding='utf-8', errors='replace') as handle:
-                            head = handle.read(2048)
-                        val = _front_values(head, ('tur', 'durum'), fold_values=True)
-                        if val.get('tur') == 'yakala' and val.get('durum') == 'islendi':
-                            continue
-                    except OSError:
-                        continue
-
-                age = _note_age_days(file_path, now, ('created', 'created_at', 'yakalandi', 'date', 'tarih'))
-                try:
-                    rel = file_path.relative_to(vault).as_posix()
-                except ValueError:
-                    rel = str(file_path)
-
-                ext = file_path.suffix.lower()
-                kind = (
-                    'note' if ext in ('.md', '.txt')
-                    else 'data' if ext in ('.json', '.csv', '.yaml', '.yml')
-                    else 'media' if ext in ('.png', '.jpg', '.jpeg', '.webp', '.mp4', '.m4a', '.mp3', '.pdf')
-                    else 'file'
-                )
-
-                items.append({
-                    'path': rel,
-                    'name': f,
-                    'kind': kind,
-                    'age_days': round(age, 1),
-                })
-
-    items.sort(key=lambda x: x['age_days'], reverse=True)
-    oldest = items[0] if items else None
-    return {
-        'count': len(items),
-        'items': items,
-        'oldest': oldest,
-    }
+        return {
+            'count': total_notes,
+            'oldest_days': oldest_days,
+            'attention': rep.get('attention', False),
+            'folders': folder_rows,
+        }
+    except Exception as exc:
+        return {
+            'count': 0,
+            'oldest_days': None,
+            'attention': False,
+            'folders': [],
+            'error': str(exc),
+        }
 
 
 def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
+    """Scan open tasks for inactivity.
+
+    Follows core sync invariant (beyin_v3.py:637-639: 'file mtime is not a date:
+    synced vaults rewrite it'). Tasks without frontmatter date are listed as
+    undated (age_days: None) rather than inventing an age from file mtime.
+    Open tasks include active, waiting, and blocked tasks.
+    """
     vault = Path(vault).resolve()
     open_tasks = []
     stale_tasks = []
+    undated_tasks = []
     seen_dirs = set()
     task_folders = []
 
@@ -307,28 +317,48 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
                 if not title:
                     title = f.replace('.md', '')
 
-                age = _note_age_days(file_path, now, ('updated_at', 'updated', 'modified', 'last_modified', 'date_modified', 'created_at', 'created', 'date'))
+                # Date priority: frontmatter ONLY (sync immunity).
+                # Follow core invariant (beyin_v3.py:639): "file mtime is not a date: synced vaults rewrite it".
+                ts = _note_frontmatter_timestamp(
+                    file_path,
+                    ('updated_at', 'updated', 'modified', 'last_modified', 'date_modified', 'created_at', 'created', 'date', 'tarih')
+                )
+
                 try:
                     rel = file_path.relative_to(vault).as_posix()
                 except ValueError:
                     rel = str(file_path)
 
-                task_info = {
-                    'path': rel,
-                    'title': title,
-                    'status': status,
-                    'age_days': round(age, 1),
-                }
-                open_tasks.append(task_info)
-                if age >= stale_days:
-                    stale_tasks.append(task_info)
+                if ts is None:
+                    # Date unknown; do not invent age from mtime
+                    task_info = {
+                        'path': rel,
+                        'title': title,
+                        'status': status,
+                        'age_days': None,
+                    }
+                    undated_tasks.append(task_info)
+                    open_tasks.append(task_info)
+                else:
+                    age = max(0.0, (now - ts) / 86400.0)
+                    task_info = {
+                        'path': rel,
+                        'title': title,
+                        'status': status,
+                        'age_days': round(age, 1),
+                    }
+                    open_tasks.append(task_info)
+                    if age >= stale_days:
+                        stale_tasks.append(task_info)
 
     stale_tasks.sort(key=lambda x: x['age_days'], reverse=True)
     return {
         'open_count': len(open_tasks),
         'stale_count': len(stale_tasks),
+        'undated_count': len(undated_tasks),
         'stale_days_threshold': stale_days,
         'stale_tasks': stale_tasks,
+        'undated_tasks': undated_tasks,
     }
 
 
@@ -425,6 +455,11 @@ def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict
 
 
 def scan_companion(vault: Path, state: Path | None = None, now: float | None = None) -> dict:
+    """Scan companion folder: rule count, active threads, and latest session stamp.
+
+    Active threads are counted from '### ' headings under ## Active Threads section,
+    matching both the template structure and companion-compact conventions.
+    """
     vault = Path(vault).resolve()
     info = {'rules_count': 0, 'active_threads': 0, 'last_session': None, 'active_presence': 0}
     comp_dir = None
@@ -524,13 +559,17 @@ def scan_companion(vault: Path, state: Path | None = None, now: float | None = N
 
 def generate_recommendations(inbox: dict, tasks: dict, digest: dict, companion: dict) -> list[str]:
     recs = []
-    if inbox['count'] > 0:
+    if inbox.get('count', 0) > 0:
         recs.append(
             f"Gelen kutusunda bekleyen {inbox['count']} kaynak var. Kalici bilgi notlarina donusturmek icin 'beyin-yakala' kullanin."
         )
-    if tasks['stale_count'] > 0:
+    if tasks.get('stale_count', 0) > 0:
         recs.append(
-            f"{tasks['stale_count']} gorev {tasks['stale_days_threshold']} gunden uzun suredir hareketsiz. Bu gorevleri tamamlayin, kapatin veya guncelleyin."
+            f"{tasks['stale_count']} gorev {tasks['stale_days_threshold']} gunden uzun suredir hareketsiz (waiting/blocked dahil). Bu gorevleri tamamlayin, takibini yapin veya guncelleyin."
+        )
+    if tasks.get('undated_count', 0) > 0:
+        recs.append(
+            f"{tasks['undated_count']} gorevde frontmatter tarih bilgisi (updated_at/created_at) eksik. Senkron guvenligi icin tarih ekleyin."
         )
     if companion.get('active_threads', 0) > 4:
         recs.append(
@@ -540,7 +579,7 @@ def generate_recommendations(inbox: dict, tasks: dict, digest: dict, companion: 
         recs.append(
             f"Kurallar.md dosyasinda {companion['rules_count']} kural birikmis. Ajanin dikkat penceresini rahatlatmak icin eski veya genel kurallari sadelestirin."
         )
-    if digest['count'] == 0:
+    if digest.get('count', 0) == 0:
         recs.append(
             f"Son {digest['digest_days']} gunde yeni bilgi/karar notu uretilmedi. Ogrenilenleri knowledge/ altina damitin."
         )
@@ -560,17 +599,17 @@ def triage(
 ) -> dict:
     now_ts = time.time() if now is None else now
     vault = Path(vault).resolve()
-    inbox_report = scan_inbox(vault, now_ts)
+    inbox_report_res = scan_inbox(vault, now_ts, state=state)
     tasks_report = scan_stale_tasks(vault, now_ts, stale_days=stale_days)
     digest_report = scan_knowledge_digest(vault, now_ts, digest_days=digest_days)
     companion_report = scan_companion(vault, state, now=now_ts)
-    recs = generate_recommendations(inbox_report, tasks_report, digest_report, companion_report)
+    recs = generate_recommendations(inbox_report_res, tasks_report, digest_report, companion_report)
 
     return {
         'schema': 1,
         'vault': str(vault),
         'generated_at': datetime.fromtimestamp(now_ts, timezone.utc).isoformat(),
-        'inbox': inbox_report,
+        'inbox': inbox_report_res,
         'tasks': tasks_report,
         'digest': digest_report,
         'companion': companion_report,
@@ -587,21 +626,39 @@ def format_human(report: dict) -> str:
     inbox = report.get('inbox', {})
     lines.append('[Gelen Kutusu / Yakalananlar]')
     lines.append(f"  Bekleyen kaynak: {inbox.get('count', 0)}")
-    oldest = inbox.get('oldest')
-    if oldest:
-        lines.append(f"  En eski: {oldest.get('path')} ({oldest.get('age_days', 0)} gun once)")
+    folders = inbox.get('folders', [])
+    if folders:
+        for f in folders:
+            fn = f.get('folder', '')
+            cnt = f.get('notes', 0)
+            od = f.get('oldest_days')
+            if od is not None:
+                lines.append(f"  - {fn}: {cnt} not (en eski: {od} gun once)")
+            else:
+                lines.append(f"  - {fn}: {cnt} not")
+    elif inbox.get('oldest_days') is not None:
+        lines.append(f"  En eski: {inbox.get('oldest_days')} gun once")
     lines.append('')
 
     tasks = report.get('tasks', {})
     stale_count = tasks.get('stale_count', 0)
+    undated_count = tasks.get('undated_count', 0)
     stale_thresh = tasks.get('stale_days_threshold', 14)
     lines.append(f"[Hareketsiz Gorevler] (>{stale_thresh} gun)")
-    lines.append(f"  Acik gorev: {tasks.get('open_count', 0)}, Hareketsiz: {stale_count}")
+    summary_parts = [f"Acik gorev: {tasks.get('open_count', 0)}", f"Hareketsiz: {stale_count}"]
+    if undated_count > 0:
+        summary_parts.append(f"Tarihsiz: {undated_count}")
+    lines.append('  ' + ', '.join(summary_parts))
+
     for t in tasks.get('stale_tasks', [])[:5]:
         title = _strip_terminal_controls(t.get('title', ''))
-        lines.append(f"  - {t.get('path')}: {title} ({t.get('age_days', 0)} gun once)")
+        st = t.get('status', 'open')
+        st_label = f" [{st}]" if st not in ('open', 'active') else ""
+        lines.append(f"  - {t.get('path')}: {title}{st_label} ({t.get('age_days', 0)} gun once)")
     if stale_count > 5:
         lines.append(f"  ... ve {stale_count - 5} gorev daha")
+    if undated_count > 0:
+        lines.append(f"  (Not: {undated_count} gorevde frontmatter tarih alani yok; mtime yerine tarihsiz sayildi)")
     lines.append('')
 
     digest = report.get('digest', {})
