@@ -25,6 +25,25 @@ def default_state(vault: Path) -> Path:
     return base / "beyin-v3" / key
 
 
+def resolve_state(vault: Path, pinned: Path) -> Path:
+    """Use this machine's default state when a synced pin belongs to another user.
+
+    The older cross-platform fallback only rejected pins that were not absolute. A
+    Windows vault copied from another account still has an absolute path, but the
+    default layout is recognizable by its final ``beyin-v3/<vault-key>`` suffix.
+    Do not reinterpret explicit state paths or MSIX package paths.
+    """
+    vault, pinned = Path(vault).resolve(), Path(pinned).expanduser()
+    expected = default_state(vault).resolve()
+    if not pinned.is_absolute() or _in_package_container(str(pinned)):
+        return pinned
+    candidate = [part.casefold() for part in pinned.parts[-3:]]
+    default = [part.casefold() for part in expected.parts[-3:]]
+    if candidate == default and os.path.normcase(str(pinned)) != os.path.normcase(str(expected)):
+        return expected
+    return pinned
+
+
 def _in_package_container(pinned: str) -> bool:
     """True when a pinned path runs through an MSIX package container.
 

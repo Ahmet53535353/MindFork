@@ -1,5 +1,6 @@
 """Human entrypoint smoke: a novice sees an honest short status, tools retain JSON."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -127,6 +128,19 @@ class CrossPlatformPinTest(unittest.TestCase):
         refused = install(self.vault, self.state, self.env)
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn('Reinstall conflict: managed file changed .beyin-runtime.json', refused.stderr.decode('utf-8'))
+
+    def test_same_os_foreign_user_pin_uses_this_machine_default_state(self):
+        if sys.platform != 'win32':
+            self.skipTest('The regression is Windows user-profile path portability')
+        expected = Path(self.env['LOCALAPPDATA']) / 'beyin-v3' / hashlib.sha256(
+            str(self.vault.resolve()).encode()).hexdigest()[:16]
+        foreign = self.root / 'other-user' / 'localappdata' / 'beyin-v3' / expected.name
+        pin(self.vault, str(foreign))
+        doctor = run_python(self.vault / 'beyin.py', ['doctor'], self.vault, self.env)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        location = json.loads(doctor.stdout)['state_location']
+        self.assertEqual(Path(location['effective_state']).resolve(), expected.resolve())
+        self.assertIn('effective_state_differs', codes(location))
 
     def test_only_the_pin_may_differ(self):
         spec = importlib.util.spec_from_file_location('install_v3_cross_pin', ROOT / 'scripts/install_v3.py')

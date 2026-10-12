@@ -14,6 +14,7 @@ import posixpath
 import re
 import sqlite3
 import stat
+import sys
 import unicodedata
 import urllib.parse
 
@@ -26,6 +27,31 @@ REJECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::
 
 # Frontmatter keys other tools write instead of updated_at, in precedence order.
 RECENCY_ALIASES = ("updated", "modified", "last_modified", "date_modified")
+
+
+def default_state(vault: Path) -> Path:
+    """Keep mutable state outside the vault, separated by canonical vault path."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library/Application Support"
+    else:
+        base = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    key = hashlib.sha256(str(Path(vault).resolve()).encode()).hexdigest()[:16]
+    return base / "beyin-v3" / key
+
+
+def resolve_state(vault: Path, pinned: Path) -> Path:
+    """Use this machine's default state when a synced pin belongs to another user."""
+    expected = default_state(vault).resolve()
+    pinned = Path(pinned).expanduser()
+    if not pinned.is_absolute() or "packages" in [part.casefold() for part in pinned.parts]:
+        return pinned
+    if ([part.casefold() for part in pinned.parts[-3:]] ==
+            [part.casefold() for part in expected.parts[-3:]] and
+            os.path.normcase(str(pinned)) != os.path.normcase(str(expected))):
+        return expected
+    return pinned
 
 
 class RevisionConflict(ValueError):

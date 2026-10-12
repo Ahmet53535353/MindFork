@@ -87,6 +87,16 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(len(lines), 1, 'Hook stdout must contain exactly one JSON response')
         return json.loads(lines[0])
 
+    def test_hook_uses_local_state_when_synced_pin_is_from_another_user(self):
+        from beyin_v3 import default_state
+        with patch.dict(os.environ, {'LOCALAPPDATA': self.env['LOCALAPPDATA']}):
+            expected = default_state(self.vault).resolve()
+            foreign = self.root / 'other-user' / 'localappdata' / 'beyin-v3' / expected.name
+            result = self.invoke(self.payload, extra=['--metadata-only', '--state', str(foreign)])
+        self.assertEqual(result, {})
+        self.assertTrue((expected / 'hook-queue').is_dir())
+        self.assertFalse(foreign.exists())
+
     def lifecycle(self, event, session, harness='claude', extra=None, **fields):
         self.lifecycle_count = getattr(self, 'lifecycle_count', 0) + 1
         payload = dict({'hook_event_name': event, 'session_id': session,
