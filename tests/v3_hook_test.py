@@ -422,6 +422,20 @@ class HookInstallerTest(unittest.TestCase):
         error = json.loads((self.state / 'hook-error.json').read_text(encoding='utf-8'))
         self.assertEqual(error['error'], 'JSONDecodeError')
 
+    def test_utf8_bom_stdin_payload_injects_context_without_error(self):
+        """PowerShell wrapper on Windows can prepend a UTF-8 BOM to stdin; the hook must decode cleanly."""
+        self.seed()
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'bom-session', 'event_id': 'bom-1',
+                   'prompt': 'Nebula calibration owner'}
+        bom_data = b'\xef\xbb\xbf' + json.dumps(payload).encode('utf-8')
+        result = subprocess.run([sys.executable, str(HOOK), '--vault', str(self.vault), '--state', str(self.state),
+                                 '--harness', 'claude'], input=bom_data, capture_output=True, cwd=self.vault,
+                                env=self.env, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        self.assertIn('Nebula calibration owner', output['hookSpecificOutput']['additionalContext'])
+        self.assertFalse((self.state / 'hook-error.json').exists())
+
     def test_stop_receipt_reminder_session_closes_the_gap(self):
         engine = self.seed()
         self.lifecycle('UserPromptSubmit', 'gap-session', 'claude', prompt='update the calibration note')
@@ -835,6 +849,18 @@ class HookInstallerTest(unittest.TestCase):
                                  '--state', str(self.state), 'receipt'], input=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
                                 capture_output=True, cwd=self.vault, env=dict(self.env, PYTHONIOENCODING='cp1252'), timeout=20)
         self.assertEqual(result.returncode, 0)
+        receipt = json.loads(result.stdout.decode('utf-8'))
+        self.assertIn(summary, (self.vault / receipt['source']).read_text(encoding='utf-8'))
+
+    def test_cli_reads_utf8_bom_json_stdin(self):
+        self.seed()
+        summary = 'BOM stdin receipt'
+        payload = {'event_id': 'bom-stdin', 'summary': summary, 'refs': ['notes/task.md']}
+        bom_data = b'\xef\xbb\xbf' + json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'receipt'], input=bom_data,
+                                capture_output=True, cwd=self.vault, env=self.env, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
         receipt = json.loads(result.stdout.decode('utf-8'))
         self.assertIn(summary, (self.vault / receipt['source']).read_text(encoding='utf-8'))
 

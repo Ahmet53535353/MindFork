@@ -25,7 +25,18 @@ STATE_DIR = SCRIPT_DIR / ".state"
 
 
 def _read_payload(stream: Any = sys.stdin) -> dict[str, Any]:
-    payload = json.load(stream)
+    if hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8-sig", errors="replace")
+        except Exception:
+            pass
+    raw = stream.read()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8-sig", errors="replace")
+    if isinstance(raw, str):
+        payload = json.loads(raw.lstrip("\ufeff").strip() or "{}")
+    else:
+        payload = json.load(stream)
     if not isinstance(payload, dict):
         raise ValueError("hook-input-not-object")
     return payload
