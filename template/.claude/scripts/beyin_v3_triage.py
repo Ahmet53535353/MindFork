@@ -165,6 +165,19 @@ def _note_age_days(path: Path, now: float, front_keys: tuple[str, ...]) -> float
     return max(0.0, (now - mtime) / 86400.0)
 
 
+def _path_key(path: Path) -> tuple:
+    """Canonical identifier for a filesystem path across case-insensitive and symlinked systems."""
+    try:
+        resolved = Path(path).resolve()
+        st = resolved.stat()
+        return (st.st_dev, st.st_ino, str(resolved).lower())
+    except OSError:
+        try:
+            return (str(Path(path).resolve()).lower(),)
+        except OSError:
+            return (str(path).lower(),)
+
+
 def _find_top_matching_dirs(vault: Path, matcher, extra_exact: tuple[str, ...] = ()) -> list[Path]:
     vault = Path(vault).resolve()
     matched = []
@@ -184,8 +197,9 @@ def _find_top_matching_dirs(vault: Path, matcher, extra_exact: tuple[str, ...] =
         if matcher(name, folded) or folded in extra_exact:
             try:
                 resolved = entry.resolve()
-                if resolved not in seen:
-                    seen.add(resolved)
+                key = _path_key(resolved)
+                if key not in seen:
+                    seen.add(key)
                     matched.append(resolved)
             except OSError:
                 pass
@@ -250,6 +264,7 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
     undated_tasks = []
     seen_dirs = set()
     task_folders = []
+    seen_files = set()
 
     def is_task_dir(name: str, folded: str) -> bool:
         return 'task' in folded or 'gorev' in folded
@@ -257,19 +272,21 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
     for folder in _find_top_matching_dirs(vault, is_task_dir, extra_exact=('tasks', '500-tasks', 'gorevler')):
         try:
             res = folder.resolve()
-            if res not in seen_dirs:
-                seen_dirs.add(res)
+            key = _path_key(res)
+            if key not in seen_dirs:
+                seen_dirs.add(key)
                 task_folders.append(res)
         except OSError:
             pass
 
-    for starter in ('tasks', 'Tasks', '500-Tasks', 'Görevler', 'Gorevler', '✅ 500-Tasks'):
+    for starter in ('tasks', '500-Tasks', 'Görevler', '✅ 500-Tasks'):
         f = vault / starter
         if f.is_dir() and not f.is_symlink():
             try:
                 res = f.resolve()
-                if res not in seen_dirs:
-                    seen_dirs.add(res)
+                key = _path_key(res)
+                if key not in seen_dirs:
+                    seen_dirs.add(key)
                     task_folders.append(res)
             except OSError:
                 pass
@@ -281,6 +298,11 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
                 file_path = Path(root) / f
                 if not _is_safe_file(file_path) or file_path.suffix.lower() != '.md':
                     continue
+
+                f_key = _path_key(file_path)
+                if f_key in seen_files:
+                    continue
+                seen_files.add(f_key)
 
                 try:
                     text = file_path.read_text(encoding='utf-8', errors='replace')
@@ -367,6 +389,7 @@ def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict
     recent_items = []
     seen_dirs = set()
     knowledge_folders = []
+    seen_files = set()
 
     def is_knowledge_dir(name: str, folded: str) -> bool:
         return 'knowledge' in folded or 'bilgi' in folded or 'decision' in folded or 'karar' in folded
@@ -377,19 +400,21 @@ def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict
     ):
         try:
             res = folder.resolve()
-            if res not in seen_dirs:
-                seen_dirs.add(res)
+            key = _path_key(res)
+            if key not in seen_dirs:
+                seen_dirs.add(key)
                 knowledge_folders.append(res)
         except OSError:
             pass
 
-    for starter in ('knowledge', 'Knowledge', '🧠 500-Knowledge', '500-Knowledge', 'decisions', 'Decisions'):
+    for starter in ('knowledge', '🧠 500-Knowledge', '500-Knowledge', 'decisions'):
         f = vault / starter
         if f.is_dir() and not f.is_symlink():
             try:
                 res = f.resolve()
-                if res not in seen_dirs:
-                    seen_dirs.add(res)
+                key = _path_key(res)
+                if key not in seen_dirs:
+                    seen_dirs.add(key)
                     knowledge_folders.append(res)
             except OSError:
                 pass
@@ -401,6 +426,11 @@ def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict
                 file_path = Path(root) / f
                 if not _is_safe_file(file_path) or file_path.suffix.lower() != '.md':
                     continue
+
+                f_key = _path_key(file_path)
+                if f_key in seen_files:
+                    continue
+                seen_files.add(f_key)
 
                 age = _note_age_days(
                     file_path, now,

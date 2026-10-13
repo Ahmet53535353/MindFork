@@ -27,9 +27,9 @@ class TriageTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v3-triage-')
         self.addCleanup(self.tmp.cleanup)
-        self.vault = Path(self.tmp.name) / 'vault'
+        self.vault = (Path(self.tmp.name) / 'vault').resolve()
         self.vault.mkdir()
-        self.state = Path(self.tmp.name) / 'state'
+        self.state = (Path(self.tmp.name) / 'state').resolve()
         self.state.mkdir()
 
         # Initialize mock runtime for beyin.py entry tests
