@@ -320,8 +320,12 @@ def _has_conflict_markers(text):
 # File-sync services keep both sides of a clash as two files (#205). Some name the copy with
 # their own stamp; nothing a person types looks like it, so such a copy is left out of the
 # index with a warning, and never moved: the user decides which side is right.
-_STAMPED_COPY = re.compile(r'.*\((?:[^()]*\bconflicted copy\b[^()]*|[^()]*\bcase conflict\b[^()]*)\)\.md'
-                           r'|.*\.sync-conflict-\d{8}-\d{6}-[0-9A-Za-z]+\.md', re.IGNORECASE)
+_STAMPED_COPY = re.compile(
+    r'.*\((?:[^()]*\bconflicted copy\b[^()]*|[^()]*\bcase conflict\b[^()]*'
+    r'|[^()]*\bçakışan kopya\b[^()]*|[^()]*\bcakisan kopya\b[^()]*'
+    r'|[^()]*\btekrarlanan kopya\b[^()]*|[^()]*\bçakışma kopyası\b[^()]*|[^()]*\bcakisma kopyasi\b[^()]*)\)\.md'
+    r'|.*\.sync-conflict-\d{8}(?:-\d{6})?-[0-9A-Za-z]+\.md'
+    r'|.*_conflict-\d{8}-\d{6}\.md', re.IGNORECASE)
 # iCloud ("Note 2.md") and Google Drive or Windows ("Note (1).md") number the copy instead. A
 # person names notes like that too ("Sezon 2.md"), so such a file is indexed as usual and only
 # listed, with its sibling and whether the two hold the same bytes.
@@ -951,6 +955,21 @@ class SyncEngine:
         # Serialize recovery, source scan and projection across local processes.
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            state_regression_warnings = []
+            now_sec = int(time.time())
+            stored_sync = db.execute("SELECT value FROM metadata WHERE key='last_sync_time'").fetchone()
+            if stored_sync and stored_sync[0]:
+                try:
+                    prev_sync = int(stored_sync[0])
+                    if prev_sync > now_sec + 180:
+                        state_regression_warnings.append({
+                            'source': 'state',
+                            'reason': 'state regression detected (stored sync timestamp is in the future); '
+                                      'run sync --full to re-verify state consistency'
+                        })
+                except (ValueError, TypeError):
+                    pass
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('last_sync_time', ?)", (str(now_sec),))
             completed, recovery_conflicts = self._recover(db)
             receipt_warnings, receipt_conflicts = self._scan_receipts(db)
             old_sources = dict(db.execute('SELECT id, source FROM markdown_sources ORDER BY id'))
@@ -959,6 +978,7 @@ class SyncEngine:
             old_payloads = dict(db.execute('SELECT id, payload FROM records'))
             cache = _SignatureCache(db, old_sources, old_payloads, full=full)
             records, warnings, conflicts = self._scan(cache)
+            warnings.extend(state_regression_warnings)
             warnings.extend(receipt_warnings)
             conflicts.extend(recovery_conflicts + receipt_conflicts)
             deleted = 0
