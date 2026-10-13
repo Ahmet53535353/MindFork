@@ -233,7 +233,7 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None, since=None, un
     return result
 
 
-def _checkpoint_schema(db):
+def _checkpoint_schema(db, state=None):
     db.execute('CREATE TABLE IF NOT EXISTS receipt_checkpoints(harness TEXT, session TEXT, at REAL, turn_at REAL DEFAULT 0, PRIMARY KEY(harness,session))')
     if 'turn_at' not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
         db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN turn_at REAL DEFAULT 0')
@@ -245,6 +245,76 @@ def _checkpoint_schema(db):
     for column in ('project', 'project_id'):
         if column not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
             db.execute(f'ALTER TABLE receipt_checkpoints ADD COLUMN {column} TEXT')
+    if state is not None:
+        backfill_edit_at(db, state)
+
+
+def backfill_edit_at(db, state):
+    """Backfill missing edit_at timestamps for receipt checkpoints from historical hook-done events (#212)."""
+    if not state:
+        return 0
+    state_dir = Path(state)
+    marker = state_dir / ".edit_at_backfilled"
+    if marker.exists():
+        return 0
+    hook_done = state_dir / "hook-done"
+    if not hook_done.is_dir():
+        return 0
+
+    unfilled = {
+        row[0]: {'harness': row[1], 'turn_at': row[2], 'at': row[3]}
+        for row in db.execute("SELECT session, harness, turn_at, at FROM receipt_checkpoints WHERE edit_at IS NULL OR edit_at = 0")
+    }
+    if not unfilled:
+        try:
+            marker.touch()
+        except OSError:
+            pass
+        return 0
+
+    edits = {}
+    prompt_turns = {}
+    try:
+        for path in hook_done.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError, UnicodeError):
+                continue
+            sess = data.get('session')
+            if sess not in unfilled:
+                continue
+            ev = data.get('event')
+            ev_at = data.get('at', 0)
+            if ev in ('UserPromptSubmit', 'SessionStart') and ev_at:
+                prompt_turns.setdefault(sess, []).append(ev_at)
+            elif ev == 'PostToolUse' and ev_at:
+                edits.setdefault(sess, []).append(ev_at)
+    except OSError:
+        return 0
+
+    count = 0
+    for sess, edit_times in edits.items():
+        sess_info = unfilled[sess]
+        turns = sorted(prompt_turns.get(sess, []))
+        turn_edit_starts = []
+        for e_at in edit_times:
+            t_candidates = [t for t in turns if t <= e_at]
+            if t_candidates:
+                turn_edit_starts.append(max(t_candidates))
+            elif sess_info['turn_at'] and sess_info['turn_at'] <= e_at:
+                turn_edit_starts.append(sess_info['turn_at'])
+            else:
+                turn_edit_starts.append(e_at)
+        if turn_edit_starts:
+            target_edit_at = max(turn_edit_starts)
+            db.execute("UPDATE receipt_checkpoints SET edit_at = MAX(edit_at, ?) WHERE session = ?", (target_edit_at, sess))
+            count += 1
+
+    try:
+        marker.touch()
+    except OSError:
+        pass
+    return count
 
 
 def record_checkpoints(engine, events):
@@ -294,17 +364,17 @@ def _coverage_threshold(at, turn_at, edit_at):
     return edit_at or turn_at or at
 
 
-def receipt_coverage(db, now=None):
+def receipt_coverage(db, now=None, state=None):
     if now is None:
         now = time.time()
     seven_days = now - 7 * 86400
     thirty_days = now - 30 * 86400
-    _checkpoint_schema(db)
+    _checkpoint_schema(db, state=state)
     latest = _latest_receipts(db)
     windows = {
-        'all_time': {'total': 0, 'covered': 0, 'missing': 0},
-        'last_7d': {'total': 0, 'covered': 0, 'missing': 0},
-        'last_30d': {'total': 0, 'covered': 0, 'missing': 0},
+        'all_time': {'total': 0, 'covered': 0, 'missing': 0, 'no_observed_edit': 0},
+        'last_7d': {'total': 0, 'covered': 0, 'missing': 0, 'no_observed_edit': 0},
+        'last_30d': {'total': 0, 'covered': 0, 'missing': 0, 'no_observed_edit': 0},
     }
     for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at,edit_at FROM receipt_checkpoints'):
         if not row[2] or row[2] < row[3]:
@@ -315,9 +385,12 @@ def receipt_coverage(db, now=None):
         chk_at = row[2]
         threshold = _coverage_threshold(row[2], row[3], row[7])
         matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
+        is_no_edit = not bool(row[7])
         for w_name, w_active in (('all_time', True), ('last_30d', chk_at >= thirty_days), ('last_7d', chk_at >= seven_days)):
             if w_active:
                 windows[w_name]['total'] += 1
+                if is_no_edit:
+                    windows[w_name]['no_observed_edit'] += 1
                 if matched:
                     windows[w_name]['covered'] += 1
                 else:
@@ -328,24 +401,27 @@ def receipt_coverage(db, now=None):
         'covered': windows['all_time']['covered'],
         'total': windows['all_time']['total'],
         'missing': windows['all_time']['missing'],
+        'no_observed_edit': windows['all_time']['no_observed_edit'],
         'last_7d': {
             'ratio': round(windows['last_7d']['covered'] / windows['last_7d']['total'], 3) if windows['last_7d']['total'] else None,
             'covered': windows['last_7d']['covered'],
             'total': windows['last_7d']['total'],
             'missing': windows['last_7d']['missing'],
+            'no_observed_edit': windows['last_7d']['no_observed_edit'],
         },
         'last_30d': {
             'ratio': round(windows['last_30d']['covered'] / windows['last_30d']['total'], 3) if windows['last_30d']['total'] else None,
             'covered': windows['last_30d']['covered'],
             'total': windows['last_30d']['total'],
             'missing': windows['last_30d']['missing'],
+            'no_observed_edit': windows['last_30d']['no_observed_edit'],
         }
     }
 
 
 def refresh_gaps(engine, db):
     atomic = engine.projection_helpers()[1]
-    _checkpoint_schema(db)
+    _checkpoint_schema(db, state=engine.state)
     latest = _latest_receipts(db)
     gaps = []
     for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,edit_at,prompt_at FROM receipt_checkpoints'):
@@ -357,7 +433,7 @@ def refresh_gaps(engine, db):
             gaps.append({'harness': row[0], 'session': row[1], 'checkpoint_at': row[2], 'turn_at': row[3], 'scope': 'session_only' if row[0] == 'antigravity' else 'turn' if row[3] else 'terminal_only'})
             if row[4] and row[5]:
                 gaps[-1].update(project=row[4], project_id=row[5])
-    coverage = receipt_coverage(db, now=time.time())
+    coverage = receipt_coverage(db, now=time.time(), state=engine.state)
     atomic(engine.state/'receipt-gaps.json', json.dumps({
         'potential_missing_receipts': len(gaps),
         'receipt_coverage': coverage,
