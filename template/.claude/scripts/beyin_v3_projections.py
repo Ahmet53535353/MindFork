@@ -531,10 +531,9 @@ def archived_receipt_view_aliases(engine, warnings):
                     source = item['source']
                     try:
                         _, resolved = engine._scan_path(source)
-                        original = item.get('identity')
-                        current = engine._source_identity(resolved)
-                        if (current == (tuple(original) if isinstance(original, list) else original) or
-                                hashlib.sha256(resolved.read_bytes()).hexdigest() == data['sha256']):
+                        # Inode numbers can be recycled after unlink. Even an
+                        # identical recorded identity needs unchanged view bytes.
+                        if hashlib.sha256(resolved.read_bytes()).hexdigest() == data['sha256']:
                             aliases.add(source)
                     except (ValueError, OSError):
                         # One missing or unreadable alias must not discard other

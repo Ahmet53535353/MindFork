@@ -22,7 +22,7 @@ class ReceiptViewIsolationTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v3-view-isolation-')
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.vault = self.root / 'vault'
         self.state = self.root / 'state'
         self.write('notes/task.md', subject.render(
@@ -322,6 +322,7 @@ class ReceiptViewIsolationTest(unittest.TestCase):
             self.assertNotIn('CANARY', receipt_context(self.vault, self.engine.state))
             self.assertEqual(self.view.read_bytes(), original)
 
+    @unittest.skipUnless(os.name == 'posix', 'Directory fsync barriers require POSIX')
     def test_archive_directory_barriers_precede_replacement_and_retirement(self):
         import stat
         for retire in (False, True):
@@ -353,11 +354,11 @@ class ReceiptViewIsolationTest(unittest.TestCase):
                     self.assertLess(events.index(('directory', archive.parent.stat().st_ino)),
                                     events.index(('directory', self.view.parent.stat().st_ino)))
                 def replacing(src, dst):
-                    if Path(dst) == self.view:
+                    if Path(dst).resolve() == self.view.resolve():
                         before_destroy()
                     return replace(src, dst)
                 def removing(path, *args, **kwargs):
-                    if path == self.view:
+                    if path.resolve() == self.view.resolve():
                         before_destroy()
                     return unlink(path, *args, **kwargs)
                 with patch('os.fsync', flush), patch('os.replace', replacing), patch.object(Path, 'unlink', removing):
@@ -365,6 +366,7 @@ class ReceiptViewIsolationTest(unittest.TestCase):
                 self.assertEqual(result['status'], 'succeeded', result)
                 self.assertIn(('destroy', None), events)
 
+    @unittest.skipUnless(os.name == 'posix', 'Directory fsync barriers require POSIX')
     def test_failed_archive_directory_barrier_preserves_original_and_tracking(self):
         import stat
         for fail_parent in (False, True):
@@ -564,6 +566,48 @@ class ReceiptViewIsolationTest(unittest.TestCase):
         self.engine.sync()
         self.assertIn('notes/view-alias.md', [r['source'] for r in self.records()])
         self.assertIn('CLEAN_REUSED_ALIAS', self.cli('context', 'CLEAN_REUSED_ALIAS').stdout)
+
+    def test_recycled_alias_inode_does_not_hide_new_source(self):
+        self.damage_view()
+        alias = self.vault / 'notes/recycled-alias.md'
+        try:
+            os.link(self.view, alias)
+        except OSError as exc:
+            self.skipTest('Hard links unavailable: ' + str(exc))
+        old_identity = self.engine._source_identity(alias)
+        self.engine.sync()
+        self.assertEqual(self.engine.sync(recover_views=True)['status'], 'succeeded')
+        alias.unlink()
+        alias.write_text('Nebula calibration CLEAN_RECYCLED_INODE', encoding='utf-8')
+        identity = subject.SyncEngine._source_identity
+        def recycled(path):
+            return old_identity if path.resolve() == alias.resolve() else identity(path)
+        # Model the inode reuse observed on CI without depending on the local allocator.
+        with patch.object(subject.SyncEngine, '_source_identity', staticmethod(recycled)):
+            self.engine.sync()
+        self.assertIn('notes/recycled-alias.md', [r['source'] for r in self.records()])
+        self.assertIn('CLEAN_RECYCLED_INODE', self.cli('context', 'CLEAN_RECYCLED_INODE').stdout)
+
+    def test_legacy_alias_identity_without_digest_does_not_hide_source(self):
+        source = self.write('notes/legacy-alias.md', 'Nebula calibration CLEAN_LEGACY_ALIAS')
+        with self.engine.store._connect() as db:
+            db.execute('INSERT INTO receipt_view_aliases(source,identity) VALUES (?,?)',
+                       ('notes/legacy-alias.md', subject._json(self.engine._source_identity(source))))
+        self.engine.sync()
+        self.assertIn('notes/legacy-alias.md', [r['source'] for r in self.records()])
+
+    def test_archive_barriers_with_alternate_vault_spelling(self):
+        alias = self.root / 'vault-spelling'
+        try:
+            alias.symlink_to(self.vault, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest('Directory symlinks unavailable: ' + str(exc))
+        view = self.view
+        self.view = alias / view.relative_to(self.vault)
+        try:
+            self.test_archive_directory_barriers_precede_replacement_and_retirement()
+        finally:
+            self.view = view
 
     def test_alias_provenance_fsync_failure_keeps_original_view(self):
         if not Path('/proc/self/fd').is_dir():

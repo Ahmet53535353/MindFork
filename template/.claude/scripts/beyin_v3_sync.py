@@ -1005,10 +1005,16 @@ class SyncEngine:
             alias_identities = set()
             for source, encoded in previous_aliases.items():
                 try:
-                    identity = json.loads(encoded)
-                    alias_identities.add(tuple(identity) if isinstance(identity, list) else identity)
+                    evidence = json.loads(encoded)
+                    if not isinstance(evidence, dict):
+                        # Legacy inode-only rows are not proof after inode reuse;
+                        # live canonical paths and validated archives still apply.
+                        continue
+                    identity = evidence.get('identity')
                     _, resolved = self._scan_path(source)
-                    if _json(self._source_identity(resolved)) == encoded:
+                    if (_json(self._source_identity(resolved)) == _json(identity) and
+                            _hash(resolved.read_bytes()) == evidence.get('sha256')):
+                        alias_identities.add(tuple(identity) if isinstance(identity, list) else identity)
                         view_paths.add(source)
                 except (ValueError, OSError, TypeError):
                     continue
@@ -1062,7 +1068,8 @@ class SyncEngine:
                 try:
                     _, resolved = self._scan_path(source)
                     db.execute('INSERT INTO receipt_view_aliases VALUES (?,?)',
-                               (source, _json(self._source_identity(resolved))))
+                               (source, _json({'identity': self._source_identity(resolved),
+                                               'sha256': _hash(resolved.read_bytes())})))
                 except (ValueError, OSError):
                     continue
             # Include the deletion event just written, and already-deleted snapshots
