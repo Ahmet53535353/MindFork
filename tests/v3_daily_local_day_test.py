@@ -122,7 +122,8 @@ class DailyLocalDayProjectionTest(unittest.TestCase):
         with self.zone(PLUS3):
             report = self.engine.sync()
         self.assertIn({'source': 'daily/v3/2026-09-28.md',
-                       'reason': 'manual receipt view edit preserved; view no longer generated'}, report['conflicts'])
+                       'reason': 'manual receipt view edit preserved; view no longer generated', 'kind': 'receipt_view'}, report['warnings'])
+        self.assertEqual(report['conflicts'], [])
         self.assertEqual(stale.read_text(encoding='utf-8'), edited)
         self.assertTrue((self.daily / '2026-09-29.md').is_file())
         # Moving the note out of the generated folder resolves it; nothing else is touched.

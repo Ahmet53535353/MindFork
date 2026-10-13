@@ -748,9 +748,16 @@ class MemoryStore:
         with self._connect() as db:
             current = db.execute("SELECT payload FROM records WHERE id=?", (record_id,)).fetchone()
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
+            quarantined = {}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='receipt_view_history'").fetchone():
+                quarantined = dict(db.execute("SELECT source,through_sequence FROM receipt_view_history"))
         if not rows or (not current and rows[-1][1] != "delete"):
             return []
         boundary = json.loads(current[0] if current else rows[-1][4])
+        # A formerly indexed receipt view cannot authorize its own leaked audit
+        # trail. Later clean notes at a retired path have sequences past the cutoff.
+        if rows[-1][0] <= quarantined.get(boundary.get("source"), 0):
+            return []
         if (boundary.get("visibility") not in allowed or boundary.get("trust") == "untrusted" or
                 boundary.get("trusted") is False or boundary.get("status") == "untrusted" or
                 boundary.get("kind") == "untrusted"):
@@ -765,6 +772,7 @@ class MemoryStore:
                 return []
         return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
                 for row in rows if (record := json.loads(row[4])).get("visibility") in allowed and
+                row[0] > quarantined.get(record.get("source"), 0) and
                 record.get("trust") != "untrusted" and record.get("trusted") is not False and
                 record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 

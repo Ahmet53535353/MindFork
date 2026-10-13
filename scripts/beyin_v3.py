@@ -1306,6 +1306,12 @@ def main(argv=None, return_result=False):
             if refreshed.get('status') == 'conflict':
                 raise RuntimeError('History blocked: source sync conflict. Run sync with the same vault/state to inspect and reconcile source issues, then retry history.')
             result = sync.store.history(args.record_id)
+            if refreshed.get('status') == 'degraded':
+                # The public stdout contract remains a JSON list.
+                warnings = refreshed.get('warnings', [])
+                print(json.dumps({'source_sync': {'status': 'degraded', 'warnings': warnings[:20],
+                                                  'warning_count': len(warnings), 'truncated': len(warnings) > 20}},
+                                 ensure_ascii=True), file=sys.stderr)
         else:
             payload = read_json(args.file)
             result = sync.update_task(payload["id"], payload["expected_revision"], payload["changes"])

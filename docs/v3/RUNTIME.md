@@ -80,12 +80,30 @@ veya symlink yapılandırma üzerine yazılmaz; önce dosyayı onar.
 
 `daily/v3/YYYY-MM-DD.md` ve `knowledge/v3/outcomes.md` değişmez receipt kaynaklarından
 üretilir. Görünüm elle değişmişse veya yerel takip geçmişi yoksa mevcut baytlar korunur
-ve çakışma görünür kalır. Sağlam kaynak bağlamı, lifecycle kayıtları ve yeni receipt
-yazımı devam eder; gerçek kaynak çakışmaları yine engellenir. `receipt`, `context`
-ve `recap` JSON çıktıları görünüm sorunlarını `view_conflicts` altında bildirir.
+ve `kind: receipt_view` uyarısı görünür kalır (`sync.status: degraded`). Sağlam kaynak
+bağlamı, lifecycle kayıtları ve yeni receipt yazımı devam eder; gerçek kaynak
+çakışmaları bağlamı ve geçmişi engellemeye devam eder. `receipt`, `task-update`,
+`context` ve `recap` JSON çıktıları ilgili tanıyı `source_sync.warnings` altında
+bildirir. `history` JSON liste biçimini korur ve uyarıyı stderr'e yazar.
+
+Takip edilen veya mevcut receipt'lerin üreteceği görünüm, başlığı silinse bile kaynak
+not olarak dizine eklenmez. Aynı dosyanın sabit bağlantıları da dışlanır. Önceden
+yanlışlıkla dizine alınmış görünüm kayıtları ve bu kayıtlara ait geçmiş olayları
+otomatik bağlamdan saklanır; denetim olaylarının baytları değiştirilmez. Görünümün
+yerinde sonradan oluşan gerçek bir not yeniden dizine alınabilir. Yerel state tamamen
+kaybolsa bile kurtarma arşivinin yanında kaydedilmiş köken bilgisi ve arşiv özeti,
+halen mevcut aynı sabit bağlantıyı tanımak için kullanılır. Bu yan kayıt silinirse,
+bozulursa veya bağlantı hem yer hem içerik değiştirirse eski köken yeniden
+kanıtlanamaz; bu dosyaları elle inceleyin.
 
 Açık kurtarma komutu: `python3 beyin.py sync --recover-views` (Windows: `py -3 beyin.py sync --recover-views`).
 Çakışan baytlar görünümün yanındaki `.archive/` içinde her denemeye ayrı bir dosya
 olarak kalıcı yazıldıktan sonra görünüm yeniden üretilir. Kurtarma başarısızsa kaynak
 ve takip kaydı korunur; symlink arşiv hedefleri kabul edilmez. Komut receipt kaynaklarını
 ve runtime veritabanını silmez. Arşivdeki kullanıcı eklemelerini uygun bilgi notlarına taşı.
+Sabit bağlantı varsa arşivin yanında küçük bir `.provenance.json` kaydı da saklanır;
+bu kaydı arşivle birlikte koruyun.
+POSIX'te özgün görünüm değiştirilmeden önce arşiv dosyası, arşiv dizini ve üst dizin
+`fsync` bariyerlerinden geçer; bariyer hatası kurtarmayı durdurur. Bu sıra güç kesintisi
+veya uzak dosya sistemi için mutlak kalıcılık garantisi değildir. Windows'ta dizin
+`fsync` desteği bulunmadığından aynı kalıcılık iddiası yapılmaz.
