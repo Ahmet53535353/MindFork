@@ -561,11 +561,11 @@ def main():
             if event == 'SessionStart' or relevant(query):
                 # The opening may carry its own machine-local budget (#140); never a vault preference.
                 limit = client_budget(args.harness, opening_budget(state, settings['context_chars']))
-                text = companion_context(store, limit, session, args.harness, query, receipt, warning)
+                text = companion_context(store, limit, session, args.harness, query, receipt, warning, project=project)
                 smaller = client_rebudget(args.harness, limit, notice + text)
                 if smaller is not None:
                     limit = smaller
-                    text = companion_context(store, limit, session, args.harness, query, receipt, warning)
+                    text = companion_context(store, limit, session, args.harness, query, receipt, warning, project=project)
             else:
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
