@@ -18,9 +18,9 @@ import zipfile
 
 OFFICIAL = 'https://api.github.com/repos/avenoxai/avenoxbeyin/releases/latest'
 MAX_PACKAGE = 32 * 1024 * 1024
-# The installer mirrors each starter skill into both roots, so a package may carry an
-# exemption for either copy. Mirrors install_v3.MANAGED_SKILL_PATHS.
-MANAGED_SKILL_PATHS = frozenset(root + '/skills/' + name + '/SKILL.md' for root in ('.agents', '.claude')
+# The installer mirrors each starter skill into all client roots. Mirrors
+# install_v3.MANAGED_SKILL_PATHS.
+MANAGED_SKILL_PATHS = frozenset(root + '/skills/' + name + '/SKILL.md' for root in ('.agents', '.claude', '.kiro')
                                 for name in ('beyin', 'beyin-doktor', 'beyin-guncelle'))
 
 
@@ -430,11 +430,13 @@ def update(vault, state, package=None, check=False):
                                          legacy_hashes=manifest.get('legacy_hashes', {}),
                                          legacy_skill_hashes=manifest.get('legacy_skill_hashes', {}))
                 trust_review = False
-                for name in ('.claude/settings.local.json', '.codex/hooks.json', '.agents/hooks.json'):
+                for name in ('.claude/settings.local.json', '.codex/hooks.json', '.agents/hooks.json',
+                             '.kiro/hooks/beyin-v3.json'):
                     if name in plan['planned']:
                         path = vault / name
                         before = json.loads(path.read_bytes()) if path.exists() else {}
-                        after = json.loads(plan['planned'][name])
+                        planned = plan['planned'][name]
+                        after = json.loads(planned) if planned is not None else {}
                         key = 'beyin-v3' if name == '.agents/hooks.json' else 'hooks'
                         trust_review = trust_review or before.get(key) != after.get(key)
                 operations = []
