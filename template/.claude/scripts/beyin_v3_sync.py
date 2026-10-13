@@ -188,7 +188,7 @@ def _mapping_value(sub_key, value):
 def parse(text):
     """JSON frontmatter or deliberately bounded flat scalar/list YAML with single-level mapping."""
     lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != '---':
+    if not lines or lines[0].lstrip('\ufeff').strip() != '---':
         return {}, text
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == '---'), None)
     if end is None:
