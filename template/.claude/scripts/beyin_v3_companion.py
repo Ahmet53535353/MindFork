@@ -6,7 +6,7 @@ import sys
 import unicodedata
 
 NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
-FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
+FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .15, 'Threads.md': .12, 'Core.md': .08}
 # Hygiene limits in characters for the two handoff files that are meant to be rewritten,
 # not appended to (#96). Rules, identity and the Journal accumulate by design and are only
 # measured. 0 turns a limit off; beyin.py preferences changes them.

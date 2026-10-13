@@ -268,6 +268,43 @@ class CompanionBudgetTest(unittest.TestCase):
                 map_body = text.split('[Knowledge map: knowledge/index.md]\n')[1].split('\n[')[0]
                 self.assertLessEqual(len(map_body), 600)
 
+    def test_balanced_floors_preserve_threads_core_and_never_starve_soul_or_journal(self):
+        # Issue #304 & #316 review finding: When all companion notes are large,
+        # unfloored notes (Soul.md, Journal.md) must NEVER be starved to 0 characters.
+        # Simultaneously, Threads.md (ongoing stories) and Core.md (identity) must receive
+        # their dedicated floor share rather than being squeezed out by Kurallar/Last-Session.
+        tmp = tempfile.TemporaryDirectory(prefix='companion-balanced-')
+        self.addCleanup(tmp.cleanup)
+        vault = Path(tmp.name) / 'vault'
+        (vault / COMPANION).mkdir(parents=True)
+        store = evaluator.load_runtime().MemoryStore(Path(tmp.name) / 'runtime', vault)
+        self.addCleanup(lambda: evaluator.close_store(store))
+
+        large_bodies = {
+            'Core.md': '# Kimlik\n' + ('IDENTITY_CANARY: Kullanicinin dusunme ortagi ve uzun kimlik prensipleri. ' * 30),
+            'Soul.md': '# Uslup\n' + ('STYLE_CANARY: Sicak ve dogrudan bir iletisim tonu kullan. ' * 20),
+            'Kurallar.md': '# Kurallar\n' + ''.join(f'- kural {i}: kritik calisma kurali.\n' for i in range(100)),
+            'Last-Session.md': '# Son oturum\n' + ('HANDOFF_CANARY: Ayrintili oturum devir karti ve yapilan isler. ' * 30),
+            'Threads.md': '# Konular\n## Active Threads\n' + ('THREAD_CANARY: Coklu oturum suren onemli proje basligi. ' * 30),
+            'Journal.md': '# Journal\n## 2026-10-12\n' + ('JOURNAL_CANARY: Ogrenilen dersler ve mimari notlar. ' * 20),
+        }
+        for name, body in large_bodies.items():
+            source = f'{COMPANION}/{name}'
+            (vault / source).write_text(body, encoding='utf-8')
+            store.ingest({'id': source, 'kind': 'note', 'status': 'active', 'text': body,
+                          'source': source, 'updated_at': '2026-09-18T10:00:00Z'})
+
+        for budget in (2000, 3000, 5000, 8000):
+            with self.subTest(budget=budget):
+                text = companion.context(store, budget, 'synthetic-balanced', 'codex')
+                self.assertLessEqual(len(text), budget)
+                # Threads and Core are preserved
+                self.assertIn('THREAD_CANARY', text)
+                self.assertIn('IDENTITY_CANARY', text)
+                # Crucial #316 regression check: Soul and Journal are NEVER starved to 0
+                self.assertIn('STYLE_CANARY', text)
+                self.assertIn('JOURNAL_CANARY', text)
+
 
 if __name__ == '__main__':
     unittest.main()
