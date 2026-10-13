@@ -23,11 +23,11 @@ def _find_inbox_dir(vault: Path) -> Path:
     """Dynamically resolve preferred inbox directory inside vault."""
     vault = Path(vault).resolve()
     for candidate in INBOX_CANDIDATES:
-        cand_path = vault / candidate
+        cand_path = (vault / candidate).resolve()
         if cand_path.is_dir() and not cand_path.is_symlink():
-            if cand_path.resolve().is_relative_to(vault):
+            if cand_path.is_relative_to(vault):
                 return cand_path
-    target = vault / "000-Inbox"
+    target = (vault / "000-Inbox").resolve()
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -76,16 +76,16 @@ def save_capture(vault: Path, data: dict | str, now: datetime | None = None) -> 
 
     slug = _slugify(title)
     filename = f"{stamp}-{slug}.md"
-    target = inbox_dir / filename
+    target = (inbox_dir / filename).resolve()
 
     # Avoid filename collision
     counter = 1
     while target.exists():
-        target = inbox_dir / f"{stamp}-{slug}-{counter}.md"
+        target = (inbox_dir / f"{stamp}-{slug}-{counter}.md").resolve()
         counter += 1
 
     # Security check: ensure path is strictly inside vault
-    if not target.resolve().is_relative_to(vault):
+    if not target.is_relative_to(vault):
         raise ValueError("Invalid target path traversal")
 
     # Build Markdown document with untrusted: true marker for V3 trust model
@@ -132,6 +132,8 @@ class IngestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        if getattr(self, "close_connection", False):
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
@@ -181,17 +183,28 @@ class IngestHandler(BaseHTTPRequestHandler):
         try:
             cl_header = self.headers.get("Content-Length")
             if cl_header is None:
+                self.close_connection = True
                 self._send_json(411, {"error": "length_required", "message": "Content-Length header required"})
                 return
             length = int(cl_header)
             if length < 0:
+                self.close_connection = True
                 self._send_json(400, {"error": "bad_request", "message": "Negative Content-Length"})
                 return
             if length > MAX_PAYLOAD_BYTES:
+                self.close_connection = True
+                # Drain incoming payload up to reasonable bound so socket doesn't reset before response reaches client
+                drain_len = min(length, MAX_PAYLOAD_BYTES + 256 * 1024)
+                while drain_len > 0:
+                    chunk = self.rfile.read(min(drain_len, 65536))
+                    if not chunk:
+                        break
+                    drain_len -= len(chunk)
                 self._send_json(413, {"error": "payload_too_large", "message": "Payload exceeds 1MB limit"})
                 return
             body = self.rfile.read(length).decode("utf-8", errors="replace")
         except (ValueError, OSError) as exc:
+            self.close_connection = True
             self._send_json(400, {"error": "bad_request", "message": str(exc)})
             return
 
@@ -209,7 +222,7 @@ class IngestHandler(BaseHTTPRequestHandler):
 
         try:
             target_path, nbytes = save_capture(self.vault, data)
-            rel = target_path.relative_to(self.vault).as_posix()
+            rel = target_path.resolve().relative_to(self.vault.resolve()).as_posix()
             self._send_json(201, {
                 "status": "accepted",
                 "file": rel,
