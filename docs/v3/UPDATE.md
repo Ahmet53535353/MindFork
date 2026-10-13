@@ -220,7 +220,8 @@ bir düzeltmenin kurulu olduğunu varsayma. Mevcut V3.2.0'a hemen geçmek için:
    önce değişikliği incele. `.beyin-version` veya kurulu Python dosyalarını
    elle değiştirme.
 5. Vault içinde `python3 beyin.py doctor` ile sonucu kontrol et. Hook
-   tanımları değiştiyse Codex `/hooks` incelemesini tamamla ve yeni oturum aç.
+   tanımları değiştiyse Codex `/hooks`, Kiro Agent Hooks paneli veya CLI `/hooks`
+   incelemesini tamamla ve yeni oturum aç.
    Sonraki güncellemeler yine normal `update` komutunu kullanır; gerekirse
    `rollback` önceki kurulumu geri getirir.
 
