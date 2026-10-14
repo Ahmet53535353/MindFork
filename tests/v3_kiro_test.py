@@ -21,7 +21,8 @@ class KiroIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="v3-kiro-")
         self.addCleanup(self.temp.cleanup)
-        root = Path(self.temp.name)
+        # Windows TEMP may use an 8.3 alias; the installer persists resolved paths.
+        root = Path(self.temp.name).resolve()
         self.vault = root / "Synthetic Kiro Vault"
         self.vault.mkdir()
         self.state = root / "state"
