@@ -172,6 +172,8 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(result['failed'], 0)
         self.assertEqual(result['pending'], 0)
         health = json.loads((self.state / 'hook-health.json').read_text(encoding='utf-8'))
+        self.assertIsInstance(health['worker_pid'], int)
+        self.assertGreater(health['worker_pid'], 0)
         self.assertEqual(health['sync']['status'], 'degraded')
         self.assertEqual(
             Path(health['sync']['warnings'][0]['source']).parts,

@@ -353,7 +353,7 @@ def drain_queue(vault, state):
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         return {"processed": 0, "failed": len(pending), "pending": len(pending)}
-    atomic(state / "hook-health.json", {"at": time.time(), "sync": result})
+    atomic(state / "hook-health.json", {"at": time.time(), "worker_pid": os.getpid(), "sync": result})
     # A degraded scan is complete but excluded one or more invalid sources. The
     # fresh healthy subset may be injected with an explicit warning. Source
     # conflicts still block acknowledgement because ownership is ambiguous.

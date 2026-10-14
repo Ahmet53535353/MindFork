@@ -1,4 +1,6 @@
 """Fast, offline measurement-contract smoke test; deliberately no timing gates."""
+import importlib.util
+from unittest.mock import Mock, patch
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +24,54 @@ class PerfHarnessTest(unittest.TestCase):
                                 text=True, encoding="utf-8", timeout=180)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return result.stdout
+
+    def test_windows_worker_wait_closes_handle_after_exit(self):
+        spec = importlib.util.spec_from_file_location('perf_worker_wait', HARNESS)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 123
+        kernel.WaitForSingleObject.return_value = 0
+        module.wait_windows_worker(42, kernel=kernel)
+        kernel.OpenProcess.assert_called_once_with(0x00100000, False, 42)
+        kernel.WaitForSingleObject.assert_called_once_with(123, 30000)
+        kernel.CloseHandle.assert_called_once_with(123)
+
+    def test_windows_worker_timeout_is_not_suppressed(self):
+        spec = importlib.util.spec_from_file_location('perf_worker_timeout', HARNESS)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 123
+        kernel.WaitForSingleObject.return_value = 258
+        with self.assertRaises(TimeoutError):
+            module.wait_windows_worker(42, kernel=kernel)
+        kernel.CloseHandle.assert_called_once_with(123)
+
+    def test_windows_worker_already_exited_is_safe(self):
+        import ctypes
+        spec = importlib.util.spec_from_file_location('perf_worker_exited', HARNESS)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 0
+        with patch.object(ctypes, 'get_last_error', return_value=87, create=True):
+            module.wait_windows_worker(42, kernel=kernel)
+        kernel.WaitForSingleObject.assert_not_called()
+        kernel.CloseHandle.assert_not_called()
+
+    def test_windows_worker_access_denied_is_not_suppressed(self):
+        import ctypes
+        spec = importlib.util.spec_from_file_location('perf_worker_denied', HARNESS)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        kernel = Mock()
+        kernel.OpenProcess.return_value = 0
+        with patch.object(ctypes, 'get_last_error', return_value=5, create=True):
+            with self.assertRaises(OSError) as error:
+                module.wait_windows_worker(42, kernel=kernel)
+        self.assertEqual(error.exception.errno, 5)
+        kernel.CloseHandle.assert_not_called()
 
     def test_generate_run_and_report(self):
         with tempfile.TemporaryDirectory(prefix='v3-perf-smoke-') as temporary:
