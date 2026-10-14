@@ -492,6 +492,24 @@ def _window_dir(vault, day):
     return Path(vault) / ARCHIVE_ROOT / day
 
 
+def _exclude_archive(state, vault):
+    """Keep the archive out of the source index by name, the way the user would.
+
+    Hardcoding "archive" in beyin_v3_sync.EXCLUDED_DIRS would prune it in every vault,
+    including one whose own "archive" folder is ordinary notes, and upstream's contract
+    is that only node_modules/receipts/__pycache__ are skipped by name. The engine
+    registering the directory it just created is the user's own decision, scoped to the
+    vault where the recovery kit actually lives.
+    """
+    if state is None:
+        return
+    try:
+        from beyin_v3_index import save
+        save(Path(state), Path(vault), add=(ARCHIVE_ROOT.split('/')[0],))
+    except Exception:
+        pass  # an unwritable or invalid index.json must not fail a consolidation window
+
+
 def _read_frontmatter(text):
     """((open, raw, close), body, meta) for the one-line JSON form and for plain YAML keys.
 
@@ -769,6 +787,7 @@ def window(vault, state, store, now=None, limits=None, extra=(), force=False):
                          dismissed=dismissed_state)
         refreshable = [entry for entry in due['refresh'] if not entry.get('generated')]
         mergeable = [source for pair in due['merge'] for source in pair['sources']]
+        _exclude_archive(state, vault)
         manifest = snapshot(vault, [entry['path'] for entry in refreshable] + mergeable, now=moment)
         applied, prose, skipped = apply_refresh(vault, refreshable, now=moment)
         day = manifest['window']

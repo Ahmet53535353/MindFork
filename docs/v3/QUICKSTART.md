@@ -84,8 +84,9 @@ with tempfile.TemporaryDirectory(prefix="beyin-v3-smoke-") as temporary:
 ## JSON input and retrieval
 
 `ingest`, `receipt`, and `task-update` accept `--file input.json`; omitting the
-option reads JSON from stdin. `ingest` accepts one record or a list; a list is
-processed sequentially and is not an all-or-nothing transaction. Sources must
+option reads JSON from stdin when no receipt field flags are supplied. `ingest`
+accepts one record or a list; a list is processed sequentially and is not an
+all-or-nothing transaction. Sources must
 already exist as relative paths within the vault. A path establishes provenance,
 not independent verification that the record's assertion is true.
 
@@ -94,10 +95,12 @@ python3 scripts/beyin_v3.py --vault /absolute/vault ingest --file record.json
 python3 scripts/beyin_v3.py --vault /absolute/vault context "launch owner" --project demo --audience public --harness claude
 python3 scripts/beyin_v3.py --vault /absolute/vault context "launch owner" --project demo --no-sync
 python3 scripts/beyin_v3.py --vault /absolute/vault context --file query.json --harness codex
+python3 scripts/beyin_v3.py --vault /absolute/vault receipt --harness codex --event-id EVENT_ID --summary "Work result" --ref notes/source.md
 python3 scripts/beyin_v3.py --vault /absolute/vault receipt --file receipt.json --harness codex
 python3 scripts/beyin_v3.py --vault /absolute/vault task-update --file patch.json
 python3 scripts/beyin_v3.py --vault /absolute/vault history demo-task
 python3 scripts/beyin_v3.py --vault /absolute/vault recap --days 7 --limit 20
+python3 scripts/beyin_v3.py --vault /absolute/vault recap --since 2026-09-24 --until 2026-09-24
 ```
 
 Retrieval JSON accepts `query`, `project`, `audience`, `statuses`, `limit`, and
@@ -105,6 +108,10 @@ Retrieval JSON accepts `query`, `project`, `audience`, `statuses`, `limit`, and
 options. Command-line `--status` can be repeated. `--limit` defaults to 5 and
 `--budget-chars` to 8000. Receipt JSON requires `event_id`, `summary`, and `refs`;
 choose its harness using `--harness`. Reuse an event ID only for the same outcome.
+Prefer receipt flags to avoid preparing JSON: `--event-id`, exactly one of
+`--summary` or `--summary-file PATH` (UTF-8), and at least one repeatable `--ref`.
+`--session` is optional. Summary text and line endings are preserved; literal
+`\n` in `--summary` is not expanded. `--file` cannot be combined with these flags.
 Task patch JSON requires `id`, `expected_revision`, and `changes`. A revision
 conflict requires reading current state and reconciling the intended change.
 `history RECORD_ID` synchronizes first, like `context`, and returns ordered revision
@@ -124,6 +131,22 @@ command synchronizes local sources first (refreshing the generated `daily/v3/`
 views); it creates no receipt or note and calls no model. The installed `beyin.py
 recap` prints a compact terminal rendering on a terminal, or with `--human`; stored
 control characters are shown as `?`.
+
+`recap --since DATE` and `--until DATE` replace the `--days` window with an explicit
+range; `--days` cannot be combined with either. `DATE` is `YYYY-MM-DD` or a full ISO
+8601 timestamp ending in `Z` or a UTC offset (`2026-09-24T18:30:00+03:00`); a time
+without a zone is rejected rather than guessed. A bare date is a calendar day on this
+machine's clock, the day that names `daily/v3/YYYY-MM-DD.md`: a receipt belongs to the
+date its instant shows on the local clock, and that date is compared with the bound.
+No midnight is computed, so a day with a clock change needs no special handling.
+`--until 2026-09-24` runs through the end of that day, so `--since 2026-09-24 --until
+2026-09-24` returns exactly that day. A timestamp is an exact, inclusive instant.
+With only `--until` there is no lower bound and `from` is `null`; with only `--since`
+the range ends with today. In this mode `from` and `through` remain dates (the local
+day of each bound), `timezone` is `local` instead of `UTC`, and every entry carries
+`day`, its local calendar day, while `created_at` stays in UTC. A value in another
+form, `--since` after `--until`, and `--days` together with either flag are usage
+errors: exit status 2, the message on stderr, nothing on stdout.
 
 By default, `context` refreshes the local index before retrieval. `--no-sync`
 instead opens an already initialized SQLite index in read-only mode and does not

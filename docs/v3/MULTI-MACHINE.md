@@ -41,12 +41,29 @@ Beyni Guncelle.cmd
 .codex/hooks.json
 .opencode/plugins/beyin-v3.js
 .omp/hooks/pre/beyin-v3.ts
+# companion-compact süreçler arası kilidi; kalıcıdır ama kullanıcı verisi değildir
+**/.beyin-compact.lock
 # Yerel veritabanından üretilen görünümler: her makine kendisininkini üretir
 daily/v3/
 knowledge/v3/
 ```
 
 Kontrol: kurulumdan ya da güncellemeden hemen sonra `git status --short` boş olmalıdır.
+
+`.beyin-runtime.json` yine de başka bir işletim sisteminden geldiyse (Windows'ta `C:\...`,
+macOS ya da Linux'ta `/...` yolu) bu makinede mutlak bir yol değildir. `beyin.py` o zaman bu
+makinenin varsayılan state dizinini kullanır ve `doctor` bunu `pinned_state_not_absolute`
+olarak gösterir. Kurucu da böyle bir yolu değişmiş dosya saymaz, bu makinenin yoluyla yeniden
+yazar ([#249](https://github.com/avenoxai/avenoxbeyin/issues/249)). 3.8.1 ve öncesinin
+`beyin.py`'si bu yolu okuyamadığı için `beyin.py update` çalışmaz; bir kez yeni paketin
+kurucusunu çalıştır (`python3 scripts/install_v3.py --vault "<vault>"`; bu makinede özel
+state kullandıysan `--state` ile onu ver), sonra dosyayı `.gitignore`'a ekle.
+
+`companion-compact` kilit dosyasını companion klasöründe kalıcı bırakır. Dosyanın
+silinmemesi, POSIX üzerinde kilit tutulurken aynı yolda yeni bir inode açılmasını önler.
+Kilit yalnız aynı paylaşılan dosya sistemini gören süreçleri koordine eder; senkronizasyon
+araçlarıyla çoğaltılmış ayrı çalışma kopyaları ve kilit semantiği sunmayan NFS/SMB
+kurulumları bu garantinin dışındadır.
 
 - **3.6.0 ve öncesi:** O sürümlerde blok bu makinenin mutlak komut yolunu taşıyordu. İki makine
   de 3.7.0'a geçene kadar `AGENTS.md`'yi (bloğu kendisi taşıyorsa `CLAUDE.md`'yi de) `.gitignore`'da
@@ -97,9 +114,10 @@ göre sıralar, en yenisini korur.
   özel runtime klasöründe durur; öbür makinedeki oturumları görmez, onlar için yukarıdaki git
   adımları geçerlidir.
 - **Çakışma çözülmeden oturum açma:** `pull --rebase` çakışmada durduğunda dosyada
-  `<<<<<<<`, `=======`, `>>>>>>>` işaretleri kalır. Bu halde açılan oturumda `sync` dosyayı
-  olduğu gibi indeksler ve işaretler sonraki bağlama girer; ajan onları içerik sanabilir.
-  `sync` ve `doctor` bunu bildirmez. Önce çakışmayı çöz (`git status` temiz olmalı), sonra
+  `<<<<<<<`, `=======`, `>>>>>>>` işaretleri kalır. `sync` bu üç işareti sırayla taşıyan
+  dosyayı (receipt dahil) indekslemez ve `unresolved git conflict markers` uyarısıyla `degraded`
+  döner; dosya çözülene kadar bağlamdan çıkar ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
+  Kod bloğundaki işaretler de sayılır: notta alıntılanmış bir çakışma örneği de uyarı verir. Önce çakışmayı çöz (`git status` temiz olmalı), sonra
   oturum aç.
 - **Receipt `event_id`'sini makineler arasında tekil tut:** `event_id`'yi ajan seçer ve dosya
   adı onun özetidir. İki makine aynı gün aynı konuya aynı adı verirse (`ortak-konu-2026-09-27`)
@@ -108,6 +126,28 @@ göre sıralar, en yenisini korur.
   kalır; `sync` uyarı vermez ve iki makinenin görünümleri sessizce ayrışır. Bunu önlemek için
   `event_id`'nin sonuna kart başlığındaki gibi `Receipt session=` değerinin ilk 8 karakterini
   ekle: `ortak-konu-2026-09-27-3f9a1c2b`.
+
+## Vault'u başka klasöre ya da hesaba taşımak
+
+Hook dosyaları kurulumun mutlak yollarını taşır (Python, `beyin_v3_hook.py`, `--vault`,
+`--state`). Kurulu bir vault başka bir klasöre ya da başka bir Windows hesabına taşınınca
+(`C:\Users\<eski>\...`) her yaşam döngüsü hook'u genel bir hatayla düşer. `doctor` bunu
+`hook_paths: stale` ve `needs_attention` olarak gösterir; her satır dosyayı, olayı ve eski
+yolu (`hook_script_missing`, `other_vault`, `python_missing`) verir ([#204](https://github.com/avenoxai/avenoxbeyin/issues/204)).
+
+Çözüm, kurucuyu bu makinede yeni vault yoluyla yeniden çalıştırmaktır. Eski state klasörünü
+(ya da kopyasını) `--state` ile ver; kurulum kaydı oradadır ve kurucu yolları taşıyan bütün
+dosyaları yeniden üretir:
+
+```text
+py -3 scripts/install_v3.py --vault "C:\Users\<yeni>\Beynim" --state "<eski state klasörünün kopyası>"
+```
+
+Eski state yoksa kurucu kayıtsız bulduğu kurulum dosyalarını (`.beyin-runtime.json` gibi)
+`Unmanaged file conflict` ile korur ve durur. Hook dosyaları başka makineden git'le geldiyse
+içlerindeki eski Beyin girdileri, Windows'un PowerShell `-EncodedCommand` biçiminde olsalar da
+kurulumda Beyin'in kendi girdisi olarak tanınır ve yenileriyle değiştirilir; yanlarında
+çalışmayan bir kopya kalmaz.
 
 ## Nasıl doğrulandı
 
@@ -131,3 +171,27 @@ depo ve iki vault; Beyin her birine ayrı `--state` ile kuruldu.
 - İki vault aynı `event_id` ile farklı özetli receipt yazdı: ikisi de aynı `receipts/<özet>.md`,
   `pull --rebase` add/add çakışmasıyla durdu. A'nın dosyası seçilip devam edilince B'de `sync`
   `conflicts: []` döndü; B'nin `recap` ve `daily/v3` çıktısı B'nin özetini göstermeye devam etti.
+
+## Satır sonu: `core.autocrlf=true` ve receipt'ler
+
+Bu kontrol [#205](https://github.com/avenoxai/avenoxbeyin/issues/205) için eklendi. Git for Windows
+varsayılanı `core.autocrlf=true`'dur ve `receipts/** -text` satırı yoksa bu makine öbür makineden gelen
+receipt'i CRLF olarak çıkarır. Sonuç sessizdir: `sync` ve `doctor` hata vermez, ama aynı receipt'in
+bayt özeti iki makinede farklı olur ve receipt öbür makineden yeniden gönderilince
+`ReceiptConflict: event id collision` hatası gelir. Yukarıdaki [`.gitattributes`](#önerilen-gitattributes)
+satırı bunu önler; `eol=lf` de aynı işi görür.
+
+`doctor` artık vault bir git deposuysa ve `core.autocrlf=true` iken `receipts/` için `-text` ya da
+`eol=lf` yoksa `receipt_line_endings` alanında `warning` bildirir (insan çıktısında bir "Receipt satir
+sonu (bilgi)" satırı). Bu yalnız bilgidir, `doctor` durumunu değiştirmez ve hiçbir şeyi düzeltmez.
+
+Uyarıyı gördüysen:
+
+1. `.gitattributes` dosyasına `receipts/** -text` ekle ve commit'le.
+2. Bu makinede receipt dosyalarını LF olarak yeniden çıkar (çalışma ağacın temizken):
+   `git rm -r receipts` ardından `git checkout HEAD -- receipts`.
+3. Dosyalar düzelse de bu makinenin yerel indeksi CRLF'li özeti tutmaya devam eder ve aynı receipt
+   yine `event id collision` verir. State klasöründeki `memory.sqlite3` dosyasını yedeğe taşı ve
+   `python3 beyin.py sync` çalıştır; indeks Markdown'dan yeniden kurulur.
+
+Kontrol: `git check-attr text -- receipts/x.md` çıktısı `text: unset` olmalıdır.

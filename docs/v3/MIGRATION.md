@@ -14,9 +14,53 @@ user sources and the original V2 state; the updater owns system-file rollback.
 
 The guard takes nonblocking locks on existing V2 `.claude/scripts/.state/*.lock`
 files and rejects known `inflight`, `running` or `pending` writer states. If a
-worker is active, let it finish and rerun. An orphaned inflight sentinel needs
-explicit reconciliation; the migration never deletes it or declares it safe
-from its age alone. Source or legacy-state changes during cutover reject success.
+worker is active (`legacy writer lock is active`), let it finish and rerun.
+
+One such state is treated as proven dead. Every V2 release that writes
+`status: inflight` to `flush-<key>.json` takes `flush-<key>.lock` first and holds
+it until its terminal status, so on this machine a sentinel whose own lock the
+guard holds was left by a writer that died, for example a logout or shutdown in
+the middle of a summary. That lock says nothing about a flush still running on
+another machine that syncs the vault, and may say nothing across lock interfaces
+(a flush under WSL next to a Windows Python), so the sentinel's own start time
+(`ts`) must also be at least 60 minutes old; a stock flush is done about ten
+minutes after it. Such a sentinel does not block: the file is preserved as it is
+and its path is listed as `orphaned_legacy_state` in the installer result and, at
+the first cutover, in `v2-migration.json`. The summary it was writing most likely
+never reached `daily/`. The same holds on every later `update` for a flush kept
+with `--keep-customized-legacy`; the `update` result lists, and its message
+counts, the sentinels that the cutover receipt does not already name.
+
+The V2 prompt counter locks differently: `prompt_count.<key>.lock` is a directory
+it creates, holds for some milliseconds and removes. A hook killed in between
+leaves the directory behind; no V2 hook ever steals it, and V2's own
+session-start sweep removes it only once it is empty and eight days old. The
+guard reads that same rule: such a directory does not block, is left where it
+is, and is listed as `stale_legacy_locks` in the same places as
+`orphaned_legacy_state`.
+
+Everything else still blocks:
+
+- A flush sentinel whose lock is free but whose `ts` is missing or less than 60
+  minutes old: rerun once it is older, or reconcile it.
+- A `prompt_count.<key>.lock` directory less than eight days old: a live prompt
+  counter is gone on the next run, so rerun. If it is still there and no V2
+  session is running, it is a leftover: remove that empty directory yourself
+  and rerun.
+- A `*.lock` entry that is neither a regular file nor such a directory (another
+  directory, a non-empty one, a symlink, a FIFO), or a lock, a writer record or
+  the state directory itself that this user may not read: the error names the
+  path. Fix its permissions, or move a foreign entry out of
+  `.claude/scripts/.state`, and rerun.
+- A flush sentinel without a `flush-<key>.lock` of the same name, a `pending` or
+  `running` state, or a record of another writer (`compile-state.json`,
+  `antigravity-<key>.json`): a free lock proves nothing about these, and the
+  migration never deletes one or declares it safe from its age alone. Reconcile it.
+
+To reconcile, make sure no V2 writer is running on any machine that uses the
+vault, set that record's status to a terminal value such as `fail`, and rerun;
+the session it belonged to may have no summary in `daily/`. Source or
+legacy-state changes during cutover reject success.
 These are local cooperating-worker protections, not a distributed filesystem lock.
 
 The installer also replaces hash-recognized stock legacy runners with reversible
@@ -157,8 +201,12 @@ internal/public context. Migration is not permission to expose Companion data.
 After Stop/SessionEnd, `doctor` reports potential receipt gaps when a checkpoint
 has no matching session receipt. This is a signal: a turn may be trivial or the
 user may have deliberately omitted memory. No transcript is promoted and no
-summary is generated to fill the gap. Matching uses the latest observed UserPromptSubmit or SessionStart boundary;
-a receipt from a previous turn cannot cover a later turn. Antigravity only
+summary is generated to fill the gap. Matching uses the start of the latest turn
+that edited a file (a PostToolUse event from the installed edit matchers); a later
+question or "thanks" turn without edits does not reopen the session, but a receipt
+from an earlier turn cannot cover a later turn that edited again. Without an
+observed edit the latest UserPromptSubmit or SessionStart boundary applies.
+Edits made through a shell command are not observed as edits. Antigravity only
 provides the initial invocation boundary in this adapter, so its result is
 explicitly session-limited rather than proof of per-turn completeness. Missing
 prompt events are reported as a terminal-only limitation. Explicit `no_memory`
@@ -179,8 +227,10 @@ covers a session.
 ## Validation boundary
 
 Synthetic tests cover byte preservation, idempotent watermarking, inflight
-rejection, concurrent source-edit detection, private Companion filtering,
-new-only outcome projections, manual-view conflicts, note-create refusal to
-overwrite, and receipt-gap closure. Actual V2 workers, external schedules and
-client trust still require environment-specific validation. A green migration
-unit test is not evidence that every external worker has stopped.
+rejection, lock-proven orphaned sentinels (one test drives the stock V2 flush
+itself on POSIX), stale and fresh prompt-counter lock directories, unreadable
+lock and state entries, concurrent source-edit detection, private Companion
+filtering, new-only outcome projections, manual-view conflicts, note-create
+refusal to overwrite, and receipt-gap closure. Actual V2 workers, external
+schedules and client trust still require environment-specific validation. A
+green migration unit test is not evidence that every external worker has stopped.

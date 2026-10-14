@@ -30,8 +30,8 @@ import tempfile
 import time
 import unicodedata
 
-from beyin_v3 import (HARNESSES, STOPWORDS, _json, _tokens, pack_context,
-                      record_matches_types, resolve_type_filter)
+from beyin_v3 import (HARNESSES, STOPWORDS, _allowed_statuses, _json, _status_allowed, _tokens,
+                      pack_context, record_matches_types, resolve_type_filter)
 
 # #83 chose 0.15 on one 263-note Turkish vault without a coverage cap. With the cap, on a
 # second 1,285-note vault 0.20 is the lowest floor that keeps everyday and agent-command
@@ -372,14 +372,16 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED, allowed=No
     return ranked[:limit]
 
 
-def pool(store, eligible, statuses=None, exclude=DEFAULT_EXCLUDE):
+def pool(store, eligible, statuses=None, exclude=DEFAULT_EXCLUDE, superseded=None):
     """The strict candidate set of MemoryStore._retrieve, minus configured record paths."""
-    superseded = {rid for record in eligible for rid in record.get("supersedes", [])}
+    if superseded is None:
+        superseded = store._superseded_ids()
     prefixes = tuple(_path_key(prefix) for prefix in exclude)
+    allowed_statuses = _allowed_statuses(statuses)
     result = []
     for record in eligible:
         source = str(record.get("source", ""))
-        if (record["id"] in superseded or (statuses is not None and record.get("status") not in statuses) or
+        if (record["id"] in superseded or not _status_allowed(record, allowed_statuses) or
                 source.startswith(store.STRICT_EXCLUDE) or _path_key(source).startswith(prefixes)):
             continue
         result.append(record)
@@ -401,8 +403,12 @@ def context_for(store, harness, query, project=None, audience="internal", status
     if isinstance(statuses, str):
         statuses = [statuses]
     config = settings(store.state_dir)
-    eligible, stale_count = store._eligible(audience, project)
-    candidates = pool(store, eligible, statuses, config["exclude"])
+    records = store._records()
+    eligible, stale_count = store._eligible(audience, project, records=records)
+    candidates = pool(store, eligible, statuses, config["exclude"], superseded=store._superseded_ids(records))
+    # Memory type gates (#9): an explicit list is strict, an omitted filter applies the soft
+    # gate inferred from the query wording. Both filter at search time only, so the index,
+    # its frequency statistics and the floor calibration never change.
     allowed = None
     if types_set is not None or type_gate is not None:
         allowed = {record["id"] for record in candidates

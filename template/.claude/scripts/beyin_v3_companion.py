@@ -458,6 +458,28 @@ def without_reasons(text):
     return stripped.rstrip('\n') + f'\n[{count} rule reasons (**neden:**) omitted to fit the opening; read source]\n'
 
 
+RULE = re.compile(r'^(?:[-*+]|\d+[.)])[ \t]')
+FENCE = re.compile(r'[ \t]{0,3}(`{3,}|~{3,})')
+SECTION = re.compile(r'(?m)^## ')
+
+
+def rule_starts(text):
+    """Offsets of the top-level list items, the same markers REASON knows. Lines inside a
+    fenced code block (an example command, a sample list) are not rules."""
+    starts, fence, offset = [], None, 0
+    for line in text.split('\n'):
+        match = FENCE.match(line)
+        if fence:
+            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence):
+                fence = None
+        elif match:
+            fence = match[1]
+        elif RULE.match(line):
+            starts.append(offset)
+        offset += len(line) + 1
+    return starts
+
+
 def _section_count(text):
     """How many `##` sections a rule set declares, or 0 when the text has no such structure.
 
@@ -465,42 +487,36 @@ def _section_count(text):
     no sections, and reporting "0 of 0 omitted" there would be a number that reads as a claim
     about content that was never sectioned in the first place.
     """
-    return len(re.findall(r'(?m)^## ', text))
+    return len(SECTION.findall(text))
 
 
 def ends(text, budget):
-    """Opening plus closing lines of a rule set, with the omitted amount named.
+    """Opening plus closing lines of a rule set, with the omitted rules named.
 
-    The first marker is sized with the whole length, so the final one, counting only
-    what was really dropped, can never be longer and the result stays inside budget.
+    The marker is reserved at the widest form the render can take, whichever unit that turns
+    out to be, so naming what was dropped can never push the result over budget (#196).
+
+    Three units, in descending order of size. A `##` section is the dated correction the
+    agent is told to obey, so its count is named first; a companion rule file that is all
+    sections and no list items -- measured on this vault, Kurallar.md has 6 sections and 0
+    list items -- would otherwise degrade to a bare character count. A list item is named
+    where the text has no sections at all, which is the shape upstream's rule fixtures use.
+    Text with neither keeps the character count, which is all it honestly has.
     """
     if len(text) <= budget:
         return text
+    rules = rule_starts(text)
+    total = len(rules)
     sections = _section_count(text)
-
-    def gap(omitted, omitted_sections=0):
-        # A rule set is a list of dated corrections to obey, so a character count alone leaves
-        # the agent unable to tell that a rule is missing at all. Name the count when there are
-        # sections to count; the character number stays either way.
-        if omitted_sections:
-            return (f'\n[truncated: {omitted} characters, {omitted_sections} of {sections} '
-                    f'sections omitted here; read source]\n')
-        return f'\n[truncated: {omitted} characters omitted here; read source]\n'
-
-    def count(head, closing):
-        return max(sections - _section_count(head + closing), 0)
-
-    # The marker is sized with the whole length, so the final one, counting only what was
-    # really dropped, can never be longer and the result stays inside budget.
-    if len(text) <= budget:
-        return text
-    # Reserve for the marker that will actually be written. A text with `##` sections may get the
-    # counted form, which is up to 66 characters longer than the plain one; sizing `keep` against
-    # the plain form and then emitting the counted one either overshot the budget (425 for 400) or,
-    # dropped the count at the end and threw that 66 characters away. Reserve the longest form the
-    # render can use and the fill lands where it was aimed.
-    reserve = len(gap(len(text), sections if sections else 0)) if sections else len(gap(len(text)))
-    keep = budget - reserve
+    gap = f'\n[truncated: {len(text)} characters omitted here; read source]\n'
+    if total:
+        widest = f'\n[truncated: rules {total}-{total} ({total} of {total}) omitted here; read source]\n'
+        gap = max(gap, widest, key=len)
+    if sections:
+        widest = (f'\n[truncated: {len(text)} characters, {sections} of {sections} '
+                  f'sections omitted here; read source]\n')
+        gap = max(gap, widest, key=len)
+    keep = budget - len(gap)
     if keep < 80:
         return None
     # Cut on line boundaries so neither end is a half rule; the closing part also takes
@@ -521,14 +537,21 @@ def ends(text, budget):
         end = text.find('\n', len(head), start) + 1
         if end and len(closing) + end <= keep and end < start:
             head, grown = text[:end], True
-    # The section-count marker is longer than the one `keep` was sized against, so the filled
-    # render can land over the budget: measured 425 characters for a 400 budget. Take the count
-    # when it fits and drop to the character-only marker when it does not, because the ceiling is
-    # a ceiling and a marker that names no count still says how much was left out.
-    counted = head + gap(start - len(head), count(head, closing)) + closing
-    if len(counted) <= budget:
-        return counted
-    return head + gap(len(text) - len(head) - len(closing)) + closing
+    # Name what was really dropped, in the largest unit that has some of it in the gap. A `##`
+    # heading is the dated correction itself; a list item under it is supporting prose, so a
+    # section count accounts for strictly more of the rule set than an item count does. The
+    # item count is used where the text has no sections at all, which is the shape upstream's
+    # own rule fixtures are written in.
+    dropped = start - len(head)
+    kept_sections = _section_count(head + closing)
+    if sections - kept_sections > 0:
+        what = f'{dropped} characters, {sections - kept_sections} of {sections} sections'
+    else:
+        first = sum(rule < len(head) for rule in rules) + 1
+        omitted = sum(len(head) <= rule < start for rule in rules)
+        what = (f'rules {first}-{first + omitted - 1} ({omitted} of {total})' if omitted > 0
+                else f'{dropped} characters')
+    return head + f'\n[truncated: {what} omitted here; read source]\n' + closing
 
 
 def clip(text, budget, tail=False, both=False):

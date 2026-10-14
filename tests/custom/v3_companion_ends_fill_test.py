@@ -44,6 +44,8 @@ class EndsFillTest(unittest.TestCase):
         this fixture the largest slack is 66 characters, which is the 76-character rule line less
         what the marker took -- line granularity, not thrown budget.
         """
+        # Total rules in fixture: FIRST_RULE_CANARY (1) + 218 kural lines + CORRECTION_CANARY (1) = 220
+        total_rules = 220
         worst = 0
         for budget in range(150, 1200):
             kept = companion.ends(RULES, budget)
@@ -51,7 +53,8 @@ class EndsFillTest(unittest.TestCase):
                 continue
             head = kept.split('\n[truncated:', 1)[0]
             opening = head + '\n'
-            widest = len(f'\n[truncated: {len(RULES)} characters omitted here; read source]\n')
+            # Widest marker is the rule-range form with all rules omitted
+            widest = len(f'\n[truncated: rules {total_rules}-{total_rules} ({total_rules} of {total_rules}) omitted here; read source]\n')
             slack = budget - widest - len(kept)
             following = RULES[len(opening):RULES.find('\n', len(opening)) + 1]
             with self.subTest(budget=budget):
@@ -69,22 +72,36 @@ class EndsFillTest(unittest.TestCase):
                 self.assertIsNotNone(kept)
                 self.assertIn('FIRST_RULE_CANARY', kept)
                 self.assertIn('CORRECTION_CANARY', kept)
-                self.assertRegex(kept, r'\[truncated: \d+ characters omitted here; read source\]')
+                self.assertRegex(kept, r'\[truncated: rules \d+-\d+ \(\d+ of \d+\) omitted here; read source\]')
 
     def test_both_ends_clip_never_overlaps_head_and_closing(self):
         # A small allocation over the floor must not double-count middle text.
+        # Upstream's marker names the omitted rule range rather than a character count
+        # (#196), so the same invariant is stated in the marker's own units: the rules it
+        # names as dropped are exactly the rules that begin in the gap between the two ends.
+        import re
+        offsets = [m.start() for m in re.finditer(r'^- ', RULES, re.M)]
         for budget in range(90, 1200):
             kept = companion.ends(RULES, budget)
             if kept is None:
                 continue
-            import re
-            match = re.search(r'\n\[truncated: (\d+) characters omitted here; read source\]\n', kept)
+            match = re.search(r'\n\[truncated: (rules \d+-\d+ \(\d+ of \d+\)|\d+ characters) omitted here; read source\]\n', kept)
             self.assertIsNotNone(match)
-            omitted = int(match[1])
-            self.assertGreaterEqual(omitted, 0)
-            rebuilt_head = kept[:match.start()]
-            rebuilt_closing = kept[match.end():]
-            self.assertEqual(len(RULES) - len(rebuilt_head) - len(rebuilt_closing), omitted)
+            named = match[1]
+            head, closing = kept[:match.start()], kept[match.end():]
+            start = len(RULES) - len(closing)
+            with self.subTest(budget=budget):
+                self.assertTrue(RULES.startswith(head) and RULES.endswith(closing))
+                self.assertGreater(start - len(head), 0, 'iki uç üst üste biniyor')
+                if named.endswith(' characters'):
+                    self.assertEqual(len(RULES) - len(head) - len(closing), int(named.split()[0]))
+                    continue
+                # No rule begins in the gap, so upstream names characters instead of a range.
+                self.assertTrue(offsets or True)
+                first, last, omitted, counted = (int(g) for g in re.search(
+                    r'rules (\d+)-(\d+) \((\d+) of (\d+)\)', named).groups())
+                gap = [i + 1 for i, offset in enumerate(offsets) if len(head) <= offset < start]
+                self.assertEqual([first, last, omitted, counted], [gap[0], gap[-1], len(gap), len(offsets)])
 
 
 if __name__ == '__main__':

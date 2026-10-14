@@ -4,7 +4,7 @@ Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci be
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
-> **V3.7.1:** Güncellemeden sonra `doctor` ve oturum başı bildirimi artık kurulu sürümü yanlışlıkla "resmi sürümden ileride" göstermiyor; vault'u git ile birden çok makinede eşitleyenlerde öbür makineden güncel gelen dosyalar güncellemeyi durdurmuyor. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; V3.1.0 ve sonrasında yeni sürümleri oturum başında görürsün. [Sürüm notları](docs/v3/releases/3.7.1.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
+> **V3.10.0:** Yakala Linux'a geldi (KDE Plasma, GNOME), Windows'ta kısayol arka plan dinleyicisiyle hemen çalışıyor ve ekran görüntüsünü yakalıyor; dublajlı videolarda konuşulan dilin transkripti alınıyor. Sıcak senkron 1.500 notta yarıdan fazla kısaldı, `recap --since/--until` ve indeks dışı klasör listesi eklendi. Mevcut kurulumda vault içinde `python3 beyin.py update` çalıştır; yakala'yı 3.9.0 ile kurduysan ardından bir kez `python3 beyin.py yakala kur`. [Sürüm notları](docs/v3/releases/3.10.0.md) · [Yakala](docs/v3/YAKALA.md) · [Güncelleme rehberi](docs/v3/UPDATE.md).
 
 ## En kolay kurulum: bir klasör, bir mesaj
 
@@ -80,6 +80,14 @@ model çağırmaz. Bunlar ajanın yazdığı sonuç iddialarıdır, bağımsız 
 değildir. Özel notlara giden bağlantılar gizlenir, silinmiş kaynaklar listelenmez.
 `--days` (1-366) ve `--limit` (1-100) ile aralığı ve uzunluğu değiştirebilirsin.
 
+Belirli bir tarih aralığı için `--days` yerine `--since` ve `--until` kullan:
+`python3 beyin.py recap --since 2026-09-24 --until 2026-09-24` yalnız o günü getirir.
+Yalnız tarih yazarsan (`YYYY-AA-GG`) bilgisayarının yerel günü sayılır; bu, `daily/v3/`
+dosya adlarındaki günle aynıdır ve `--until` o günün sonuna kadar kapsar. Saat de
+vereceksen sonuna `Z` ya da saat farkı ekle (`2026-09-24T18:30:00+03:00`). Yalnız
+`--until` verirsen alt sınır yoktur; yalnız `--since` verirsen aralık bugüne kadar sürer.
+`--days` bu iki seçenekle birlikte kullanılamaz.
+
 Bir şey ters giderse ajana **“beyin-doktor ile kontrol et”** de. Terminalden, vault klasöründe:
 
 ```sh
@@ -87,6 +95,10 @@ python3 beyin.py doctor
 ```
 
 Windows'ta aynı komutun başında `py -3` kullan. Kurulumda özel runtime yolu seçtiysen kurulu `beyin.py` bunu zaten bilir.
+
+## İsteğe bağlı: tek tuşla beyne at
+
+Video, tweet, makale, mail ya da dosyayı gördüğün yerde yakala; ajanın metni çıkarıp dersleri `knowledge/` notlarına bağlasın. Kurulum bir kez: `python3 beyin.py yakala kur` (Windows'ta `py -3`). Sonra her uygulamada Mac'te `Control+Option+B`, Windows'ta `Ctrl+Alt+B`; Linux'ta KDE Plasma'da `Ctrl+Alt+B` (GNOME'da da kurulur ama gerçek masaüstünde henüz denenmedi), diğer masaüstlerinde `kur`'un verdiği komutu kendin bir tuşa bağlarsın; tarayıcıda Obsidian Web Clipper'ın "Beyne at" şablonu. Tuşu değiştirmek için `beyin.py yakala kisayol 'cmd+"'`. Ajanına "yakalananları işle" demen yeter. YouTube'da önce altyazı, yoksa yalnız ses yerelde yazıya dökülür. Ayrıntı: [docs/v3/YAKALA.md](docs/v3/YAKALA.md).
 
 ## Tüketim ve kontrol sıklığı
 

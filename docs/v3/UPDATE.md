@@ -66,7 +66,7 @@ python3 beyin.py rollback
 
 `recover`, yarım kalan işlemin journal'ını okuyup planlanan işlemi tamamlar. Bir hata mesajı işlemin iptal edildiği anlamına gelmez; bazı sistem dosyaları yazılmış, başarılı sürüm damgası henüz yazılmamış olabilir.
 
-`rollback`, son sistem işleminin yedeğini geri getirir. [Opsiyonel global köprüyü](GLOBAL-BRIDGE.md) kendin eklediysen, köprüyü içermeyen eski bir sürüme (V3.1.0 ve öncesi) `rollback` veya `uninstall` yapmadan önce global ayardaki köprü handler'larını kaldır; olmayan bir scripti global hook'ta bırakmak istemci hatası üretir. İlk V2 geçişinde önceki sürüm ve tanınan eski runner'lar da geri yüklenir. Temiz V3 kurulumunu geri almak `uninstalled` olarak raporlanır; olmayan bir eski sürüm uydurulmaz. Sonradan eklediğin kullanıcı notları silinmez. Bu komut bütün vault geçmişini geri alan bir işlem değildir.
+`rollback`, son sistem işleminin yedeğini geri getirir. [Opsiyonel global köprüyü](GLOBAL-BRIDGE.md) kendin eklediysen, köprüyü içermeyen eski bir sürüme (V3.1.0 ve öncesi) `rollback` veya `uninstall` yapmadan önce global ayardaki köprü handler'larını kaldır; olmayan bir scripti global hook'ta bırakmak istemci hatası üretir. Antigravity köprüsünü eklediysen aynısı 3.9.0 ve öncesine dönerken geçerlidir: o sürümlerin köprüsü `--harness antigravity` tanımaz, önce `~/.gemini/config/hooks.json` içindeki `beyin-v3-bridge` anahtarını kaldır. İlk V2 geçişinde önceki sürüm ve tanınan eski runner'lar da geri yüklenir. Temiz V3 kurulumunu geri almak `uninstalled` olarak raporlanır; olmayan bir eski sürüm uydurulmaz. Sonradan eklediğin kullanıcı notları silinmez. Bu komut bütün vault geçmişini geri alan bir işlem değildir.
 
 Yönetilen dosyada araya giren kullanıcı değişikliği varsa işlem bunu ezmek yerine conflict ile durur. Desteklenen JSON ayarlarında ilgisiz değişiklikler korunur; çakışan yönetilen bölüm için inceleme gerekir. Kilitli/aktif bir writer varsa tamamlanmasını bekleyip tekrar dene. Kaybolmuş bir işin kilit/sentinel dosyasını gelişigüzel silme.
 
@@ -254,7 +254,7 @@ Kullanıcı gereksinim duymadığı bileşenleri (`skills/<ad>`, `adapters/<ad>`
 Repo kökünde:
 
 ```sh
-python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.7.1.zip" --version 3.7.1
+python3 scripts/build_v3_release.py --output "/tmp/beyin-v3-3.10.0.zip" --version 3.10.0
 ```
 
 Bu komut yalnız yerel ZIP oluşturur, GitHub'a yayınlamaz. Paket `manifest.json`, izin verilen installer/giriş dosyaları, runtime modülleri ve üç skill'i içerir. Manifest sürüm, schema/runtime schema, minimum Python, dosya hashleri ve tanınan legacy hashlerini taşır. Release yayınlama ve final platform CI ayrı işlemlerdir.

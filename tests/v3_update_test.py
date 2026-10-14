@@ -100,6 +100,179 @@ class OfflineUpdateTest(unittest.TestCase):
         self.assertEqual(core.read_bytes(), original)
         self.assertEqual(self.note.read_text(), 'User edit after system update.\n')
 
+    def orphaned_flush(self, name, age=7200):
+        """The record a stock V2 flush leaves when it dies mid-summary, beside its free lock."""
+        legacy = self.vault / '.claude/scripts/.state'
+        legacy.mkdir(parents=True, exist_ok=True)
+        sentinel = legacy / (name + '.json')
+        sentinel.write_bytes(json.dumps({'session_id': name, 'ts': int(time.time()) - age, 'status': 'inflight'}).encode('utf-8'))
+        (legacy / (name + '.lock')).write_bytes(b'')
+        return sentinel
+
+    def test_update_reports_a_flush_sentinel_orphaned_after_the_cutover(self):
+        # A kept V2 flush that dies mid-summary leaves "inflight" behind. update takes no flags,
+        # so a guard that ignored the proof of its own lock stopped every later update here.
+        sentinel = self.orphaned_flush('flush-example')
+        left = sentinel.read_bytes()
+        report = self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(report['status'], 'updated')
+        self.assertEqual(report['orphaned_legacy_state'], ['.claude/scripts/.state/flush-example.json'])
+        self.assertEqual(self.version(), '3.0.1')
+        self.assertEqual(sentinel.read_bytes(), left)
+
+    def test_update_waits_for_a_recent_flush_sentinel(self):
+        sentinel = self.orphaned_flush('flush-example', age=30)
+        left = sentinel.read_bytes()
+        before = snapshot(self.vault)
+        with self.assertRaisesRegex(RuntimeError, r'flush-example\.json; its lock is free here.*60 minutes old'):
+            self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(self.version(), '3.0.0')
+        self.assertEqual(sentinel.read_bytes(), left)
+        self.assertEqual(snapshot(self.vault), before)
+        self.assertFalse((self.state / 'update-journal.json').exists())
+
+    def test_update_does_not_repeat_sentinels_the_cutover_receipt_lists(self):
+        # After a cutover that retired flush nothing ever rewrites its dead sentinels: a note
+        # about them on every later update would never stop. Only a later one is news.
+        self.vault = self.base / 'Synthetic Vault Devir'
+        self.vault.mkdir()
+        self.state = self.base / 'runtime-devir'
+        self.orphaned_flush('flush-before')
+        installed = install(self.vault, self.state, self.env)
+        self.assertEqual(installed.returncode, 0, installed.stderr.decode('utf-8', errors='replace'))
+        recorded = ['.claude/scripts/.state/flush-before.json']
+        self.assertEqual(json.loads(installed.stdout)['orphaned_legacy_state'], recorded)
+        receipt = (self.state / 'v2-migration.json').read_bytes()
+        self.assertEqual(json.loads(receipt)['orphaned_legacy_state'], recorded)
+        self.orphaned_flush('flush-later')
+        report = self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(report['status'], 'updated')
+        self.assertEqual(report['orphaned_legacy_state'], ['.claude/scripts/.state/flush-later.json'])
+        self.assertEqual((self.state / 'v2-migration.json').read_bytes(), receipt)
+        self.assertEqual(self.module.rollback(self.vault, self.state)['status'], 'rolled_back')
+        (self.vault / '.claude/scripts/.state/flush-later.json').unlink()
+        again = self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(again['status'], 'updated')
+        self.assertNotIn('orphaned_legacy_state', again)
+
+    def lock_directory(self, key, days):
+        """What a V2 prompt-counter hook killed between its mkdir and its rmdir leaves behind."""
+        path = self.vault / '.claude/scripts/.state' / ('prompt_count.' + key * 64 + '.lock')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.mkdir()
+        stamp = time.time() - days * 86400
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_update_reports_a_stale_lock_directory_the_receipt_does_not_list(self):
+        self.vault = self.base / 'Synthetic Vault Kilit'
+        self.vault.mkdir()
+        self.state = self.base / 'runtime-kilit'
+        before = self.lock_directory('a', days=9)
+        installed = install(self.vault, self.state, self.env)
+        self.assertEqual(installed.returncode, 0, installed.stderr.decode('utf-8', errors='replace'))
+        self.assertEqual(json.loads(installed.stdout)['stale_legacy_locks'], [before.relative_to(self.vault).as_posix()])
+        later = self.lock_directory('b', days=9)
+        report = self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(report['status'], 'updated')
+        self.assertEqual(report['stale_legacy_locks'], [later.relative_to(self.vault).as_posix()])
+        self.assertTrue(before.is_dir() and later.is_dir())
+
+    def test_update_stops_on_a_young_lock_directory_with_a_clear_error(self):
+        lock = self.lock_directory('a', days=0)
+        before = snapshot(self.vault)
+        with self.assertRaisesRegex(RuntimeError, r'legacy writer lock directory in \.claude/scripts/\.state/prompt_count\.a{64}\.lock'
+                                                  r' is less than 8 days old.*remove that empty directory and rerun'):
+            self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(self.version(), '3.0.0')
+        self.assertTrue(lock.is_dir())
+        self.assertEqual(snapshot(self.vault), before)
+        self.assertFalse((self.state / 'update-journal.json').exists())
+
+    def test_recover_meets_the_same_lock_directory_rule(self):
+        def crash(phase, index=None):
+            if phase == 'after_replace' and index == 0:
+                raise OSError('Synthetic interruption after first managed replacement')
+        with patch.object(self.module, 'transaction_hook', side_effect=crash):
+            with self.assertRaises(OSError):
+                self.module.update(self.vault, self.state, self.package)
+        lock = self.lock_directory('a', days=0)
+        with self.assertRaisesRegex(RuntimeError, r'legacy writer lock directory in .*is less than 8 days old'):
+            self.module.recover(self.vault, self.state)
+        self.assertEqual(self.version(), '3.0.0')
+        self.assertTrue((self.state / 'update-journal.json').exists())
+        lock.rmdir()
+        self.assertEqual(self.module.recover(self.vault, self.state)['status'], 'recovered')
+        self.assertEqual(self.version(), '3.0.1')
+
+    def test_update_message_counts_orphaned_flush_sentinels(self):
+        spec = importlib.util.spec_from_file_location('update_test_entry_cli', ROOT / 'scripts/beyin_entry.py')
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        report = {'status': 'updated', 'from_version': '3.0.0', 'version': '3.0.1'}
+        self.assertNotIn('flush', entry.human_result(report, 'update'))
+        message = entry.human_result(dict(report, orphaned_legacy_state=['a.json', 'b.json']), 'update')
+        self.assertIn('Yarida kesilmis 2 V2 flush kaydi var (durumu inflight', message)
+        self.assertIn('daily/ altina yazilmamis olabilir', message)
+        self.assertTrue(message.isascii())
+        self.assertNotIn('kilit klasoru', message)
+        message = entry.human_result(dict(report, stale_legacy_locks=['a.lock']), 'update')
+        self.assertIn('Sahipsiz kalmis 1 V2 kilit klasoru var (prompt_count.*.lock, sekiz gunden eski)', message)
+        self.assertNotIn('flush', message)
+        self.assertTrue(message.isascii())
+
+    def test_update_lock_does_not_create_empty_sqlite_file(self):
+        import sqlite3
+        memory_db = self.state / 'memory.sqlite3'
+        self.assertFalse(memory_db.exists())
+        with self.module.locked(self.vault, self.state):
+            pass
+        self.assertFalse(memory_db.exists())
+
+    def test_update_lock_holds_runtime_writer_lock_for_uri_special_state_paths(self):
+        import sqlite3
+        import os
+        # '?' cannot appear in a Windows path; '#' and '%' still exercise the URI escaping there.
+        names = ('state #1', '100%25 state') + (() if os.name == 'nt' else ('q?x state',))
+        for name in names:
+            state = self.base / name
+            state.mkdir()
+            database = state / 'memory.sqlite3'
+            sqlite3.connect(database).close()
+            with self.module.locked(self.vault, state):
+                other = sqlite3.connect(database, timeout=0.1)
+                try:
+                    with self.assertRaises(sqlite3.OperationalError, msg=name):
+                        other.execute('BEGIN IMMEDIATE')
+                finally:
+                    other.close()
+
+    def test_rollback_preserves_original_file_mtime(self):
+        import os
+        core = self.vault / '.claude/scripts/beyin_v3.py'
+        old_time = 1500000000.0
+        os.utime(core, (old_time, old_time))
+        self.module.update(self.vault, self.state, self.package)
+        self.assertEqual(self.version(), '3.0.1')
+        self.module.rollback(self.vault, self.state)
+        self.assertEqual(self.version(), '3.0.0')
+        self.assertEqual(core.stat().st_mtime, old_time)
+
+    def test_rollback_keeps_new_mtime_of_merged_settings(self):
+        import os, time
+        config = self.vault / '.claude/settings.local.json'
+        old_time = 1500000000.0
+        os.utime(config, (old_time, old_time))
+        self.module.update(self.vault, self.state, self.package)
+        after = json.loads(config.read_text(encoding='utf-8'))
+        after['post_update_user_preference'] = 'kept'
+        config.write_text(json.dumps(after), encoding='utf-8')
+        before_rollback = time.time() - 5
+        self.module.rollback(self.vault, self.state)
+        # The merged file holds an edit made after the update; an old mtime would hide it.
+        self.assertEqual(json.loads(config.read_text(encoding='utf-8'))['post_update_user_preference'], 'kept')
+        self.assertGreater(config.stat().st_mtime, before_rollback)
+
     def test_interrupted_apply_keeps_old_version_and_recovers_once(self):
         def crash(phase, index=None):
             if phase == 'after_replace' and index == 0:
@@ -158,6 +331,15 @@ class OfflineUpdateTest(unittest.TestCase):
         before = snapshot(self.vault)
         with self.assertRaises(ValueError):
             self.module.update(self.vault, self.state, bad)
+        self.assertEqual(snapshot(self.vault), before)
+
+        def corrupt_missing(files):
+            metadata = json.loads(files['manifest.json'])
+            metadata['files']['scripts/beyin_entry.py'] = None
+            files['manifest.json'] = json.dumps(metadata).encode()
+        bad2 = rewrite_zip(self.package, self.base / 'corrupt2.zip', corrupt_missing)
+        with self.assertRaisesRegex(ValueError, 'package checksum mismatch'):
+            self.module.update(self.vault, self.state, bad2)
         self.assertEqual(snapshot(self.vault), before)
         self.assertEqual(self.version(), '3.0.0')
 
@@ -401,6 +583,51 @@ class OfflineUpdateTest(unittest.TestCase):
         cache.write_text(json.dumps({'schema': 1, 'checked_at': checked, 'attempted_at': checked,
                                      'next_check_at': checked + 86400, 'etag': '"old"', 'release': release, 'failures': 0}))
         self.assertEqual(doctor()['status'], 'ahead')
+
+    def test_windows_permission_error_restores_write_mode_during_apply(self):
+        file_path = self.vault / 'readonly_file.txt'
+        file_path.write_text('new content', encoding='utf-8')
+        os.chmod(file_path, stat.S_IREAD)
+        journal = {
+            'schema': 1,
+            'vault': str(self.vault),
+            'direction': 'rollback',
+            'operations': [
+                {
+                    'scope': 'vault',
+                    'name': 'readonly_file.txt',
+                    'old': self.module.encode(b'new content'),
+                    'new': self.module.encode(b'restored content')
+                }
+            ]
+        }
+        # POSIX replaces a read-only file; Windows refuses (WinError 5). Emulate that refusal so
+        # the test fails without the fix on every platform, not only on the Windows runner.
+        original_replace = os.replace
+        def windows_replace(source, destination):
+            if os.path.exists(destination) and not os.access(destination, os.W_OK):
+                raise PermissionError(13, 'Access is denied', str(destination))
+            return original_replace(source, destination)
+        with patch.object(self.module.os, 'replace', side_effect=windows_replace):
+            self.module._apply(self.vault, self.state, journal)
+        self.assertEqual(file_path.read_text(encoding='utf-8'), 'restored content')
+        self.assertFalse(os.access(file_path, os.W_OK), 'the read-only flag is the user\'s lock')
+
+    def test_update_and_rollback_keep_a_read_only_managed_file_locked(self):
+        version = self.vault / '.beyin-version'
+        os.chmod(version, stat.S_IREAD)
+        original_replace = os.replace
+        def windows_replace(source, destination):
+            if os.path.exists(destination) and not os.access(destination, os.W_OK):
+                raise PermissionError(13, 'Access is denied', str(destination))
+            return original_replace(source, destination)
+        with patch.object(self.module.os, 'replace', side_effect=windows_replace):
+            self.assertEqual(self.module.update(self.vault, self.state, self.package)['status'], 'updated')
+            self.assertEqual(self.version(), '3.0.1')
+            self.assertFalse(os.access(version, os.W_OK))
+            self.module.rollback(self.vault, self.state)
+        self.assertEqual(self.version(), '3.0.0')
+        self.assertFalse(os.access(version, os.W_OK))
 
 
 if __name__ == '__main__':

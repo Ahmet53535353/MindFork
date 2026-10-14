@@ -12,6 +12,11 @@
 .claude/hooks/.state/
 .claude/scripts/.state/*
 !.claude/scripts/.state/.gitkeep
+**/.beyin-compact.lock
+
+# Yakala: raw transcripts/page text and captured files stay local
+📥 000-Inbox/Yakala/.ham/
+📥 000-Inbox/Yakala/dosyalar/
 
 # OS / editor noise
 .DS_Store

@@ -2,6 +2,7 @@
 
 # Sources the engine rewrites; never a distillation target and never a refresh candidate.
 PROJECTION_GUARD = ('knowledge/index.md', 'knowledge/log.md')
+
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -13,10 +14,55 @@ import sqlite3
 import time
 
 
+# metadata row: the folded directory names the last sync kept out of the index, as a JSON list.
+EXCLUDED_DIRS_ROW = 'index_excluded_dirs'
+
+
+def _record_excluded_dirs(engine, db):
+    """Store what this sync's scan excluded, inside the sync's own transaction.
+
+    The receipt readers below have the database, not the state directory, and a hook reads it
+    without syncing first. They must know which paths lost their record to the user's list,
+    and index.json cannot tell them: it may have changed since the index was built. This row
+    is committed together with the record deletions (or re-indexing) the list caused, so it
+    always describes the records the same reader sees. A release without the row ignores it.
+    """
+    keys = getattr(engine, 'excluded_dir_keys', None)
+    if keys is None:
+        return  # no scan ran on this engine; the stored row still describes the index
+    stored = db.execute('SELECT value FROM metadata WHERE key=?', (EXCLUDED_DIRS_ROW,)).fetchone()
+    value = json.dumps(sorted(keys), ensure_ascii=False) if keys else None
+    if value is None:
+        if stored:
+            db.execute('DELETE FROM metadata WHERE key=?', (EXCLUDED_DIRS_ROW,))
+    elif not stored or stored[0] != value:
+        db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', (EXCLUDED_DIRS_ROW, value))
+
+
+def _excluded_dir_keys(db):
+    try:
+        stored = db.execute('SELECT value FROM metadata WHERE key=?', (EXCLUDED_DIRS_ROW,)).fetchone()
+        value = json.loads(stored[0]) if stored else []
+    except (sqlite3.OperationalError, ValueError):  # a bare receipts-only database has no metadata
+        return frozenset()
+    return frozenset(key for key in value if isinstance(key, str)) if isinstance(value, list) else frozenset()
+
+
 def _hidden_ref_sources(db, refs):
-    """Indexed sources that default internal context never shows (the _eligible visibility/trust gate)."""
+    """Sources that default internal context never shows: indexed records behind the _eligible
+    visibility/trust gate, and every path under a directory the last sync kept out of the index.
+
+    A path under an excluded directory has no record, so nothing says whether it is private.
+    Excluding a directory must not turn a withheld ref into a shown one, so such a path is
+    withheld like a private one, whatever the file says.
+    """
     refs = sorted(set(refs))
     hidden = set()
+    excluded = _excluded_dir_keys(db)
+    if excluded:
+        from beyin_v3_index import dir_key
+        hidden.update(ref for ref in refs
+                      if any(dir_key(part) in excluded for part in ref.replace('\\', '/').split('/')[:-1]))
     for start in range(0, len(refs), 500):
         chunk = refs[start:start + 500]
         try:
@@ -72,16 +118,44 @@ def latest_receipts(db, vault, sessions=None):
             yield source, event
 
 
-def recent_receipts(db, days=7, limit=20, today=None, vault=None):
+def _bound_day(bound, zone):
+    """Local calendar day of a recap bound; a date bound already is that day."""
+    return bound.astimezone(zone).date() if isinstance(bound, datetime) else bound
+
+
+def _within(bound, stamp, day, lower):
+    """One recap bound: an instant is compared with the receipt's instant, a date with its local day."""
+    if bound is None:
+        return True
+    value = stamp if isinstance(bound, datetime) else day
+    return bound <= value if lower else value <= bound
+
+
+def recent_receipts(db, days=7, limit=20, today=None, vault=None, since=None, until=None):
     """A bounded, source-linked activity view; summaries remain agent claims.
 
     With a vault, receipts whose own source file is gone are omitted, and refs that no longer
     exist or that point at private/untrusted records are withheld and only counted.
+
+    Without since/until the window is the last `days` UTC calendar days ending today. Either
+    bound replaces that window with an explicit range (#229). A date bound is a local calendar
+    day, the day receipt_day gives and daily/v3 is named by: since keeps receipts whose local
+    day is that day or later, until keeps them through the end of that day, so the same date in
+    both returns that one day. A datetime bound is an exact instant, inclusive. Days are compared
+    as dates and no midnight instant is computed, so a day with a clock change needs no special
+    case. Without since there is no lower bound and 'from' is None; without until the range ends
+    with today's local day. 'from' and 'through' stay dates: the local day of each bound.
     """
     if not 1 <= days <= 366 or not 1 <= limit <= 100:
         raise ValueError('recap days must be 1..366 and limit must be 1..100')
-    today = today or datetime.now(timezone.utc).date()
-    start = today - timedelta(days=days - 1)
+    ranged = since is not None or until is not None
+    if ranged:
+        zone = _local_zone()
+        if until is None:
+            until = today or datetime.now(timezone.utc).astimezone(zone).date()
+    else:
+        today = today or datetime.now(timezone.utc).date()
+        start = today - timedelta(days=days - 1)
     matches = []
     undated = 0
     for (payload,) in db.execute('SELECT payload FROM receipts'):
@@ -94,14 +168,24 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None):
         except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
             undated += 1
             continue
-        if not start <= stamp.date() <= today:
+        day = None
+        if ranged:
+            try:
+                day = stamp.astimezone(zone).date()
+            except (ValueError, OverflowError, OSError):
+                # No local day exists for this instant (Windows localtime rejects some); never invent one.
+                undated += 1
+                continue
+            if not (_within(since, stamp, day, True) and _within(until, stamp, day, False)):
+                continue
+        elif not start <= stamp.date() <= today:
             continue
         ident = event.get('event_id')
         if not isinstance(ident, str) or not ident or not isinstance(event.get('summary'), str):
             undated += 1
             continue
         source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
-        matches.append((stamp, ident, source, event))
+        matches.append((stamp, ident, source, event, day))
     missing_sources = 0
     if vault is not None:
         # One directory listing instead of a stat per receipt; symlinked receipts are never adopted by sync.
@@ -114,11 +198,11 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None):
         missing_sources = len(matches) - len(present)
         matches = present
     matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    shown = [(stamp, source, event, [ref for ref in event.get('refs') or [] if isinstance(ref, str)]
-              if isinstance(event.get('refs'), list) else []) for stamp, _, source, event in matches[:limit]]
+    shown = [(stamp, source, event, day, [ref for ref in event.get('refs') or [] if isinstance(ref, str)]
+              if isinstance(event.get('refs'), list) else []) for stamp, _, source, event, day in matches[:limit]]
     hidden = _hidden_ref_sources(db, [ref for *_, refs in shown for ref in refs]) if vault is not None else set()
     items = []
-    for stamp, source, event, refs in shown:
+    for stamp, source, event, day, refs in shown:
         kept, private, missing = [], 0, 0
         for ref in refs:
             if ref in hidden:
@@ -128,12 +212,18 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None):
             else:
                 kept.append(ref)
         item = {'created_at': stamp.isoformat(), 'summary': event['summary'], 'source': source, 'refs': kept}
+        if day is not None:
+            item['day'] = day.isoformat()  # the local day that placed it in the range; created_at stays UTC
         if private or missing:
             item['refs_withheld'] = {'private': private, 'missing': missing}
         items.append(item)
+    if ranged:
+        window = {'from': None if since is None else _bound_day(since, zone).isoformat(),
+                  'through': _bound_day(until, zone).isoformat(), 'timezone': 'local'}
+    else:
+        window = {'from': start.isoformat(), 'through': today.isoformat(), 'timezone': 'UTC'}
     result = {
-        'status': 'ok', 'from': start.isoformat(), 'through': today.isoformat(),
-        'timezone': 'UTC', 'audience': 'internal', 'total': len(matches), 'shown': len(items),
+        'status': 'ok', **window, 'audience': 'internal', 'total': len(matches), 'shown': len(items),
         'truncated': len(matches) > limit, 'undated_omitted': undated,
         'items': items,
         'meaning': 'Agent-authored outcomes, not independently verified facts.',
@@ -149,6 +239,9 @@ def _checkpoint_schema(db):
         db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN turn_at REAL DEFAULT 0')
     if 'prompt_at' not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
         db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN prompt_at REAL DEFAULT 0')
+    # Start of the latest turn that edited a file (#212); a later conversational turn keeps it.
+    if 'edit_at' not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
+        db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN edit_at REAL DEFAULT 0')
     for column in ('project', 'project_id'):
         if column not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
             db.execute(f'ALTER TABLE receipt_checkpoints ADD COLUMN {column} TEXT')
@@ -168,6 +261,9 @@ def record_checkpoints(engine, events):
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at,turn_at) VALUES (?,?,0,?) ON CONFLICT(harness,session) DO UPDATE SET turn_at=MAX(turn_at,excluded.turn_at)', values)
             elif event.get('event') in ('Stop', 'SessionEnd'):
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at) VALUES (?,?,?) ON CONFLICT(harness,session) DO UPDATE SET at=MAX(at,excluded.at)', values)
+            elif event.get('event') == 'PostToolUse':
+                # Installed matchers send only file-editing tools; remember the turn that edited, not the edit.
+                db.execute('INSERT INTO receipt_checkpoints(harness,session,at,edit_at) VALUES (?,?,0,?) ON CONFLICT(harness,session) DO UPDATE SET edit_at=MAX(edit_at,CASE WHEN turn_at>0 AND turn_at<=excluded.edit_at THEN turn_at ELSE excluded.edit_at END)', values)
             if event.get('project') and event.get('project_id'):
                 db.execute('UPDATE receipt_checkpoints SET project=?,project_id=? WHERE harness=? AND session=?',
                            (event['project'], event['project_id'], event['harness'], event['session']))
@@ -187,6 +283,17 @@ def _latest_receipts(db):
     return latest
 
 
+def _coverage_threshold(at, turn_at, edit_at):
+    """Earliest receipt time that closes a checkpoint.
+
+    A receipt must follow the start of the latest turn that edited a file, so a later
+    "thanks" or status question does not reopen finished work (#212), while a later turn
+    that edits again still needs its own receipt. Without an observed edit (other harnesses,
+    rows from before edit_at existed) the latest prompt boundary applies as before.
+    """
+    return edit_at or turn_at or at
+
+
 def receipt_coverage(db, now=None):
     if now is None:
         now = time.time()
@@ -199,14 +306,14 @@ def receipt_coverage(db, now=None):
         'last_7d': {'total': 0, 'covered': 0, 'missing': 0},
         'last_30d': {'total': 0, 'covered': 0, 'missing': 0},
     }
-    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at FROM receipt_checkpoints'):
+    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at,edit_at FROM receipt_checkpoints'):
         if not row[2] or row[2] < row[3]:
             continue
         # Only count sessions that saw a user prompt: UserPromptSubmit, or a SessionStart carrying the first prompt (#78)
         if not row[6]:
             continue
         chk_at = row[2]
-        threshold = row[3] or row[2]
+        threshold = _coverage_threshold(row[2], row[3], row[7])
         matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
         for w_name, w_active in (('all_time', True), ('last_30d', chk_at >= thirty_days), ('last_7d', chk_at >= seven_days)):
             if w_active:
@@ -241,10 +348,10 @@ def refresh_gaps(engine, db):
     _checkpoint_schema(db)
     latest = _latest_receipts(db)
     gaps = []
-    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id FROM receipt_checkpoints'):
+    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,edit_at FROM receipt_checkpoints'):
         if not row[2] or row[2] < row[3]:
             continue
-        threshold = row[3] or row[2]
+        threshold = _coverage_threshold(row[2], row[3], row[6])
         matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
         if not matched:
             gaps.append({'harness': row[0], 'session': row[1], 'checkpoint_at': row[2], 'turn_at': row[3], 'scope': 'session_only' if row[0] == 'antigravity' else 'turn' if row[3] else 'terminal_only'})
@@ -293,6 +400,7 @@ def receipt_day(created_at, zone=None):
 
 def project_receipts(engine, db, warnings=None):
     _hash, atomic, render = engine.projection_helpers()
+    _record_excluded_dirs(engine, db)
     db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
     migration = engine.state/'v2-migration.json'
     previous = json.loads(migration.read_text(encoding='utf-8')) if migration.exists() else {}
@@ -325,12 +433,13 @@ def project_receipts(engine, db, warnings=None):
     if outcomes:
         desired['knowledge/v3/outcomes.md'] = render({'generated': True, 'kind': 'receipt-index'}, '# Outcome source index\n\nThis index links semantic receipts. It is not an automatic knowledge compiler.\n\n'+''.join(outcomes))
     conflicts = []
+    tracked_views = dict(db.execute('SELECT path, hash FROM receipt_views'))
     for relative, content in desired.items():
         path = engine._path(relative)
         old = _hash(path.read_bytes()) if path.exists() else None
         desired_hash = _hash(content)
-        tracked = db.execute('SELECT hash FROM receipt_views WHERE path=?', (relative,)).fetchone()
-        if old != desired_hash and old is not None and (not tracked or old != tracked[0]):
+        tracked = tracked_views.get(relative)
+        if old != desired_hash and old is not None and (tracked is None or old != tracked):
             conflicts.append({'source': relative, 'reason': 'manual receipt view edit preserved'})
             continue
         if old != desired_hash:
@@ -339,10 +448,12 @@ def project_receipts(engine, db, warnings=None):
                 conflicts.append({'source': relative, 'reason': 'receipt view changed during projection'})
                 continue
             atomic(path, content)
-        db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
-# Every sync regroups every receipt, so a receipt that changes day renames its file and leaves
-    # the old one behind. _retire_stale_views does the cleanup: only a file whose bytes still match
-    # the hash recorded when it was written is removed, an edited one is never touched (#149).
+        # Every sync regroups every receipt, so a receipt that changes day renames its file and
+        # leaves the old one behind. _retire_stale_views does the cleanup: only a file whose bytes
+        # still match the hash recorded when it was written is removed, an edited one is never
+        # touched (#149).
+        if tracked != desired_hash:
+            db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)', (relative, desired_hash))
     conflicts.extend(_retire_stale_views(engine, db, desired, _hash))
     refresh_gaps(engine, db)
     return conflicts
@@ -388,16 +499,31 @@ _FRONTMATTER_UPDATED = re.compile(_FRONTMATTER_KEY % '(?:updated|modified)' +
                                   r'["\']?([0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2}(?::[0-9]{2})?)?)', re.M)
 
 
+# Agent concepts live in knowledge/; the official template keeps human-curated notes in 500-Knowledge/.
+# The Stop hook imports these, so its reminder and doctor count the same notes.
+DISTILLATION_ROOTS = ('knowledge/', '🧠 500-Knowledge/', '500-Knowledge/')
+# Generated views and the V2 compiler seeds change without any agent distilling.
+NOT_DISTILLATION = ('knowledge/v3/', 'knowledge/index.md', 'knowledge/log.md')
+
+
+def is_distilled_note(relative):
+    relative = relative.replace('\\', '/')
+    return (relative.startswith(DISTILLATION_ROOTS) and relative.endswith('.md') and
+            not any(relative == item or relative.startswith(item) for item in NOT_DISTILLATION))
+
+
 def knowledge_freshness(vault, db, now=None):
     """Diagnose knowledge distillation recency and count receipts since then."""
     if now is None:
         now = time.time()
     vault = Path(vault)
-    knowledge_dir = vault / 'knowledge'
     latest_mtime = None
     latest_source = None
 
-    if knowledge_dir.is_dir():
+    for root in DISTILLATION_ROOTS:
+        knowledge_dir = vault / root
+        if not knowledge_dir.is_dir():
+            continue
         for path in sorted(knowledge_dir.rglob('*.md')):
             if path.is_symlink() or not path.is_file():
                 continue
@@ -405,8 +531,7 @@ def knowledge_freshness(vault, db, now=None):
                 relative = path.relative_to(vault).as_posix()
             except ValueError:
                 continue
-            # Generated views and the V2 compiler seeds are not distillation.
-            if relative.startswith('knowledge/v3/') or relative in PROJECTION_GUARD:
+            if not is_distilled_note(relative):
                 continue
             try:
                 mtime = path.stat().st_mtime

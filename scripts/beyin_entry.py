@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """Vault-local entry point; configuration contains no credentials."""
-from contextlib import redirect_stdout, redirect_stderr
-import io
 import importlib.util
 import json
 from pathlib import Path
@@ -107,11 +105,39 @@ def state_location_lines(location):
         lines.append(prefix + 'sabitlenmis yol bu surecte baska bir dizine cozumleniyor (' +
                      plain_text(location.get('pinned_resolves_here_to')) +
                      '). doctor komutunu paket icinden ve disindan calistirip karsilastir.')
+    if 'pinned_state_not_absolute' in codes:
+        lines.append(prefix + '.beyin-runtime.json icindeki state yolu bu makinede mutlak bir yol degil; baska bir'
+                     ' isletim sisteminden esitlenmis olabilir. beyin.py bu makinenin varsayilan state dizinini'
+                     ' kullaniyor. Kurulum dosyalari makineye ozeldir, esitleme: docs/v3/MULTI-MACHINE.md.')
     if 'pinned_state_empty' in codes:
         lines.append(prefix + 'sabitlenmis state kokunde kurulum bulunamadi. State tasindiysa kurucuyu yeni'
                      ' --state ile yeniden calistir.')
     if 'effective_state_differs' in codes:
         lines.append(prefix + 'bu calisma sabitlenmis kok yerine baska bir state dizinini okuyor.')
+    return lines
+
+
+def receipt_line_endings_lines(report):
+    """Doctor line for the receipt line-ending warning (#205); information only, never a status."""
+    if isinstance(report, dict) and report.get('status') == 'warning':
+        return ['Receipt satir sonu (bilgi): core.autocrlf=true ve receipts/ sabitlenmemis; baska makineden gelen'
+                ' receipt CRLF ile cikip ayni receipt\'in "event id collision" vermesine yol acabilir.'
+                ' .gitattributes dosyasina "receipts/** -text" ekle, docs/v3/MULTI-MACHINE.md.']
+    return []
+
+
+def index_exclusion_lines(report, pruned=False):
+    """Lines for the user's index exclusions (state/index.json); shared by doctor, sync and preferences."""
+    if not isinstance(report, dict):
+        return []
+    lines = []
+    if report.get('excluded_dirs'):
+        lines.append('Indeks disi klasor adlari (senin listen, her derinlikte): ' +
+                     ', '.join(plain_text(name) for name in report['excluded_dirs']) +
+                     (' (bu taramada ' + str(report.get('pruned', 0)) + ' klasor atlandi)' if pruned else '') + '.')
+    if report.get('error'):
+        lines.append('index.json gecersiz (' + plain_text(report['error']) +
+                     '); klasor haric tutma listesi uygulanmiyor, her sey indeksleniyor.')
     return lines
 
 
@@ -171,6 +197,15 @@ def human_result(result, command, installed_version=None):
                          ', terfi raporu ' + ('acik' if hygiene.get('promotion') else 'kapali'))
         if result.get('hygiene_notice'):
             lines.append(result['hygiene_notice'])
+        inbox = result.get('inbox_report') or {}
+        if inbox:
+            lines.append('Gelen kutusu raporu (varsayilan kapali): ' +
+                         ('acik (' + str(inbox.get('max_items')) + ' not / ' + str(inbox.get('max_days')) + ' gun; ' +
+                          ('klasorler: ' + ', '.join(plain_text(name) for name in inbox['folders'])
+                           if inbox.get('folders') else 'klasor adindan tanima') + ')'
+                          if inbox.get('enabled') else 'kapali'))
+        if result.get('inbox_report_notice'):
+            lines.append(result['inbox_report_notice'])
         if result.get('parallel_sessions'):
             lines.append('Paralel oturum bildirimi: ' + ('acik' if result['parallel_sessions'] == 'on' else 'kapali'))
         if result.get('parallel_sessions_notice'):
@@ -179,16 +214,21 @@ def human_result(result, command, installed_version=None):
             lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']))
         if result.get('exclusion_notice'):
             lines.append(result['exclusion_notice'])
+        lines += index_exclusion_lines(result.get('index_exclusions'))
+        if result.get('index_exclusions_notice') and not (result.get('index_exclusions') or {}).get('error'):
+            lines.append(result['index_exclusions_notice'])
         lines.append('Acikken gunde en fazla bir kez GitHub surum bilgisi okunur; notlar gonderilmez.')
         lines.append('Yerel kontroller model cagirmaz. Zamanlayici kurulmaz.')
         return '\n'.join(lines)
     if command == 'recap':
-        lines = ['Kaynakli etkinlik: ' + result['from'] + ' - ' + result['through'] +
-                 ' (UTC; ajan kayitlari, bagimsiz dogrulanmis olgular degil)']
+        # --since/--until select local calendar days (as daily/v3 is named); the --days window stays UTC.
+        local = result.get('timezone') == 'local'
+        lines = ['Kaynakli etkinlik: ' + (result['from'] or 'baslangic siniri yok') + ' - ' + result['through'] +
+                 (' (yerel gun; ' if local else ' (UTC; ') + 'ajan kayitlari, bagimsiz dogrulanmis olgular degil)']
         if not result['items']:
             lines.append('Bu aralikta tarihli kayit yok.')
         for item in result['items']:
-            lines.append('\n' + item['created_at'][:10] + '  ' + plain_text(item['summary']))
+            lines.append('\n' + (item.get('day') or item['created_at'][:10]) + '  ' + plain_text(item['summary']))
             lines.append('Kaynak: ' + plain_text(item['source']))
             for ref in item.get('refs', []):
                 lines.append('  - ' + plain_text(ref))
@@ -311,6 +351,15 @@ def human_result(result, command, installed_version=None):
                              '); ozel bir kopya tasiyor olabilir.')
             elif code in boundary_lines:
                 lines.append(boundary_lines[code])
+        review = result.get('review') or {}
+        if review.get('due_count'):
+            shown = ', '.join(plain_text(entry['source']) + ' (' + str(entry['days_overdue']) + ' gun)' for entry in review['due'][:3])
+            more = review['due_count'] - min(3, len(review['due']))
+            lines.append('Yeniden bakma tarihi gelen not (review_at, bilgi): ' + shown +
+                         (' ve ' + str(more) + ' tane daha' if more > 0 else '') + '.')
+        if review.get('invalid_count'):
+            lines.append('Gercek tarih olmayan review_at (bilgi): ' +
+                         ', '.join(plain_text(entry['source']) for entry in review['invalid'][:3]) + '.')
         closed = result.get('closed_tasks') or {}
         if closed.get('closed_count'):
             shown = ', '.join(plain_text(entry['source']) + ' (' + str(entry['days_old']) + ' gun)' for entry in closed.get('closed')[:3])
@@ -330,12 +379,32 @@ def human_result(result, command, installed_version=None):
         if promo.get('cold'):
             lines.append('Soguk klasorler (terfi karari senin): ' +
                          ', '.join(plain_text(entry['folder']) + ' (' + str(entry['days_quiet']) + ' gun)' for entry in promo['cold'][:3]))
+        waiting = [entry for entry in (result.get('inbox') or {}).get('folders') or []
+                   if entry.get('attention') or entry.get('error')]
+        if waiting:
+            lines.append('Gelen kutusunda bekleyen (bilgi, isleme karari senin): ' + ', '.join(
+                plain_text(entry['folder']) + (' (okunamadi: ' + plain_text(entry['error']) + ')' if entry.get('error') else
+                                               ' (' + str(entry['notes']) + ' not, en eskisi ' + str(entry['oldest_days']) + ' gun)')
+                for entry in waiting[:3]) + (' ve ' + str(len(waiting) - 3) + ' klasor daha' if len(waiting) > 3 else '') + '.')
         parallel = result.get('parallel_sessions') or {}
         if parallel.get('enabled'):
             lines.append('Paralel oturum bildirimi: acik (son 45 dakikada etkin ' + str(parallel.get('active', 0)) + ' oturum isareti)')
         elif parallel.get('valid') is False:
             lines.append('parallel-sessions.json gecersiz; paralel oturum bildirimi kapali sayiliyor.')
+        index_scope = result.get('index_exclusions') or {}
+        lines += index_exclusion_lines(index_scope)
+        hint = index_scope.get('vendored_hint') or {}
+        if hint.get('notes'):
+            more = len(hint.get('dirs') or []) - 3
+            lines.append('Indeks kapsami (bilgi): baska projelerin kod kopyasi gibi gorunen klasorlerde ' + str(hint['notes']) +
+                         ' not indeksli (' + ', '.join(plain_text(entry['dir']) + ': ' + str(entry['notes'])
+                                                       for entry in (hint.get('dirs') or [])[:3]) +
+                         (' ve baska klasorler' if more > 0 or hint.get('truncated') else '') +
+                         '). Senin notun degilse indeks disinda tut: ' + ('py -3' if sys.platform == 'win32' else 'python3') +
+                         ' beyin.py preferences ' + ' '.join('--index-exclude-dir ' + plain_text(name)
+                                                            for name in hint.get('names') or []))
         lines += state_location_lines(result.get('state_location'))
+        lines += receipt_line_endings_lines(result.get('receipt_line_endings'))
         if status in ('needs_attention', 'pending'):
             lines.append('Ajanina "beyin doktor" diyerek ayrintiyi inceletebilirsin.')
         return '\n'.join(lines + update_lines(result.get('updates', {})))
@@ -347,6 +416,13 @@ def human_result(result, command, installed_version=None):
             message += '\nHaric tutulan bilesenler kaldirildi: ' + ', '.join(result['removed']) + '.'
         if result.get('preserved_excluded'):
             message += '\nHaric tutulan ancak degistirilmis dosyalar korundu: ' + ', '.join(result['preserved_excluded']) + '.'
+        if result.get('orphaned_legacy_state'):
+            message += ('\nYarida kesilmis ' + str(len(result['orphaned_legacy_state'])) + ' V2 flush kaydi var (durumu inflight,'
+                        ' yazan surec artik calismiyor); engel sayilmadi, dosyalara dokunulmadi.'
+                        ' O oturumlarin ozeti daily/ altina yazilmamis olabilir.')
+        if result.get('stale_legacy_locks'):
+            message += ('\nSahipsiz kalmis ' + str(len(result['stale_legacy_locks'])) + ' V2 kilit klasoru var (prompt_count.*.lock,'
+                        ' sekiz gunden eski); engel sayilmadi, dokunulmadi.')
     elif status == 'available':
         message = 'Yeni surum var: ' + str(result.get('current_version', '?')) + ' -> ' + str(result['version']) + '\nGuncellemek icin: python beyin.py update'
     elif status == 'noop':
@@ -364,9 +440,19 @@ def human_result(result, command, installed_version=None):
         message = '\n\n'.join(str(r.get('source', '')) + '\n' + str(r.get('text', '')) for r in records) or 'Eslesen kaynak bulunamadi.'
     else:
         message = 'Islem sonucu: ' + str(status or 'tamamlandi')
+        if command == 'sync':
+            message = '\n'.join([message] + index_exclusion_lines(result.get('index_exclusions'), pruned=True))
     if result.get('trust_review_required'):
         message += '\nHook tanimi degisti: Codex /hooks guven incelemesini tamamla ve yeni oturum ac.'
     return message
+
+
+def load_cli(directory):
+    """The installed CLI module, loaded from its file like every other entry-point command."""
+    spec = importlib.util.spec_from_file_location('beyin_installed_cli', directory / 'beyin_v3_cli.py')
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    return cli
 
 
 def main(argv=None):
@@ -389,9 +475,24 @@ def main(argv=None):
         if not config_path.is_file():
             raise ValueError('Kurulum ayari eksik; resmi V3 installer ile bu vault kurulumunu tamamlayin.')
         config = json.loads(config_path.read_text(encoding='utf-8'))
-        state = Path(config['state'])
         directory = vault / '.claude/scripts'
         sys.path.insert(0, str(directory))
+        cli = None
+        raw_state = config.get('state') if isinstance(config, dict) else None
+        if isinstance(raw_state, str) and raw_state and Path(raw_state).expanduser().is_absolute():
+            state = Path(raw_state)
+        else:
+            # The installer always pins a resolved absolute path. A pin that is not absolute
+            # here came from another OS through a synced vault (a Windows C:\ path on POSIX,
+            # a /home path on Windows, #249) or was edited by hand. Read as a relative path it
+            # would put the state under the working directory, so this machine's default
+            # state is used instead; doctor reports the pin it could not use.
+            cli = load_cli(directory)
+            state = cli.default_state(vault)
+        if argv and argv[0] == 'yakala':
+            # Optional capture tool: its own small CLI, no index or sync engine.
+            import beyin_v3_yakala as yakala
+            return yakala.main(argv[1:], vault=vault, state=state)
         if argv and argv[0] in ('update', 'rollback', 'recover'):
             import argparse
             import beyin_v3_update as updater
@@ -417,21 +518,31 @@ def main(argv=None):
             else: result = updater.recover(vault, state)
             print(human_result(result, command, installed_version) if human else json.dumps(result, ensure_ascii=True, indent=2))
             return 0
-        spec = importlib.util.spec_from_file_location('beyin_installed_cli', directory / 'beyin_v3_cli.py')
-        cli = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cli)
+        cli = cli or load_cli(directory)
         cli_args = ['--vault', str(vault), '--state', str(state)] + (argv or ['doctor'])
         if not human:
             return cli.main(cli_args)
-        output, error = io.StringIO(), io.StringIO()
-        with redirect_stdout(output), redirect_stderr(error):
-            code = cli.main(cli_args)
-        value = output.getvalue() if not code else error.getvalue()
-        try:
-            result = json.loads(value)
-            message = human_result(result, command, installed_version)
-        except (ValueError, TypeError, AttributeError):
-            message = 'Islem tamamlanamadi; ayrinti icin ayni komutu --json ile calistir.' if code else value.strip()
+        if hasattr(cli, 'main') and 'return_result' in getattr(getattr(cli, 'main'), '__code__', {}).co_varnames:
+            result, code = cli.main(cli_args, return_result=True)
+            try:
+                message = human_result(result, command, installed_version)
+            except (ValueError, TypeError, AttributeError):
+                # A result human_result cannot shape (history returns a list) prints as the JSON
+                # the captured path below shows, not as a failed command.
+                message = ('Islem tamamlanamadi; ayrinti icin ayni komutu --json ile calistir.' if code
+                           else json.dumps(result, ensure_ascii=True, indent=2))
+        else:
+            from contextlib import redirect_stdout, redirect_stderr
+            import io
+            output, error = io.StringIO(), io.StringIO()
+            with redirect_stdout(output), redirect_stderr(error):
+                code = cli.main(cli_args)
+            value = output.getvalue() if not code else error.getvalue()
+            try:
+                result = json.loads(value)
+                message = human_result(result, command, installed_version)
+            except (ValueError, TypeError, AttributeError):
+                message = 'Islem tamamlanamadi; ayrinti icin ayni komutu --json ile calistir.' if code else value.strip()
         print(message, file=sys.stderr if code else sys.stdout)
         return code
     except Exception as exc:

@@ -73,6 +73,22 @@ def managed_handler(handler, previous, kept=()):
     return command in previous or "beyin_v3_hook.py" in command or legacy
 
 
+def encoded_script(command):
+    """The PowerShell text inside a Windows -EncodedCommand hook; empty for any other command.
+
+    The encoded form shows no file name, so a vault moved from another account or machine,
+    whose manifest lists none of its commands, kept those stale entries beside the new ones (#204).
+    Only planning drops them; managed_handler, and so the reinstall/update conflict check, keeps
+    treating them as foreign entries, as before, so an update over such a file still applies."""
+    match = re.search(r"-EncodedCommand\s+([A-Za-z0-9+/=]+)", str(command), re.I)
+    if not match:
+        return ""
+    try:
+        return base64.b64decode(match.group(1), validate=True).decode("utf-16le")
+    except (ValueError, UnicodeError):
+        return ""
+
+
 # Vault paths of the file components. Names are validated against
 # beyin_v3_exclusions.EXCLUDABLE_COMPONENTS; core files and the Claude/Codex hook entries are
 # not excludable. agents_block and harnesses/antigravity edit shared files and are handled
@@ -195,6 +211,18 @@ def semantic_unchanged(name, baseline, current, previous, kept=(), user_excluded
             return re.findall(pattern, baseline.decode(), re.S) == blocks
         if name == ".codex/config.toml":
             return bool(re.search(r"(?m)^hooks\s*=\s*true\s*$", current.decode()))
+        if name == ".beyin-runtime.json":
+            # The installer pins a resolved absolute path. A pin that is not absolute here was
+            # written by another OS through a synced vault (#249); it cannot name this machine's
+            # state, so the reinstall replaces it. Any other change still conflicts.
+            data, before = json.loads(current), json.loads(baseline)
+            if not isinstance(data, dict) or not isinstance(before, dict) or not isinstance(data.get("state"), str):
+                return False
+            try:
+                foreign = not Path(data["state"]).expanduser().is_absolute()
+            except RuntimeError:
+                return False
+            return foreign and dict(data, state=None) == dict(before, state=None)
         if name in (".claude/settings.local.json", ".claude/settings.json", ".codex/hooks.json", ".agents/hooks.json"):
             def owned(raw):
                 data = json.loads(raw)
@@ -370,7 +398,8 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         for event, groups in list(hooks.items()):
             cleaned = []
             for group in groups:
-                remaining = [h for h in group.get("hooks", []) if not managed_handler(h, manifest.get("commands", []), kept)]
+                remaining = [h for h in group.get("hooks", []) if not managed_handler(h, manifest.get("commands", []), kept)
+                             and "beyin_v3_hook.py" not in encoded_script(h.get("command", ""))]
                 # Encoded Windows command contains no visible filename; match exact prior manifest below.
                 previous = manifest.get("commands", [])
                 remaining = [h for h in remaining if h.get("command") not in previous]
@@ -617,12 +646,20 @@ not knowledge synthesis.
         exclusions.save_exclusions(vault, user_excluded)
     from beyin_v3_companion import initialize
     companion = initialize(vault, state)
-    return {'status':'installed','files':len(planned),'trust_review_required':True,'kept_legacy':kept,
-            'excluded_components': sorted(user_excluded),
-            'removed': removed, 'preserved_excluded': preserved_excluded,
-            'companion': companion,
-            'update_notice': 'New releases are checked on GitHub at most daily; notes are not sent. Disable with beyin.py preferences --update-notifications off.',
-            'skills':{'synced':[s for s in ('beyin','beyin-doktor','beyin-guncelle') if not is_component_excluded(f'.agents/skills/{s}/', user_excluded)],'conflicts':[], 'mode':'managed'}}
+    result = {'status':'installed','files':len(planned),'trust_review_required':True,'kept_legacy':kept,
+              'excluded_components': sorted(user_excluded),
+              'removed': removed, 'preserved_excluded': preserved_excluded,
+              'companion': companion,
+              'update_notice': 'New releases are checked on GitHub at most daily; notes are not sent. Disable with beyin.py preferences --update-notifications off.',
+              'skills':{'synced':[s for s in ('beyin','beyin-doktor','beyin-guncelle') if not is_component_excluded(f'.agents/skills/{s}/', user_excluded)],'conflicts':[], 'mode':'managed'}}
+    # V2 flush sentinels whose writer provably died: the cutover went ahead, and the summaries
+    # they were writing most likely never reached daily/.
+    if migration_plan and migration_plan.get('orphaned_legacy_state'):
+        result['orphaned_legacy_state'] = migration_plan['orphaned_legacy_state']
+    # Prompt-counter lock directories old enough for V2's own sweep: left where they are.
+    if migration_plan and migration_plan.get('stale_legacy_locks'):
+        result['stale_legacy_locks'] = migration_plan['stale_legacy_locks']
+    return result
 
 
 def package_defaults():

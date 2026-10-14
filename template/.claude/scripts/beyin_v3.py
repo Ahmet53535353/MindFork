@@ -1,6 +1,7 @@
 """Local, source-backed memory foundation. No model or network dependencies."""
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
 import functools
@@ -9,9 +10,12 @@ import json
 import math
 import os
 from pathlib import Path
+import posixpath
 import re
 import sqlite3
+import stat
 import unicodedata
+import urllib.parse
 
 
 # Every supported client. "manual" is accepted for receipts only.
@@ -43,6 +47,203 @@ def _rejected_inference(record):
     """
     return (record.get("kind") in ("inference", "preference") and
             (record.get("validity") == "rejected" or record.get("status") == "rejected"))
+
+
+# A note whose own status says it was replaced is history, like a note another trusted note
+# supersedes. Every read route drops these unless the caller asks for statuses explicitly.
+# Any other status (current, verified, aktif, waiting, a custom word) stays deliverable: an
+# allow-list of `active` alone silently hid most real vaults' notes from per-turn context.
+RETIRED_STATUSES = frozenset(("superseded", "retired", "archived", "archive", "deprecated", "obsolete",
+                              "replaced", "arsiv", "arsivlendi", "eski", "emekli", "gecersiz"))
+_STATUS_FOLD = str.maketrans("ŞşĞğÜüÇçÖöİIı", "SsGgUuCcOoiii")
+
+
+def _status_word(record):
+    """First word of the status, case and Turkish-letter folded; missing status means active.
+
+    A task without a status is not active: task_create always writes one.
+    """
+    value = record.get("status")
+    if not isinstance(value, str) or not value.strip():
+        return "" if record.get("kind") == "task" else "active"
+    word = re.match(r"[^\W_]+", unicodedata.normalize("NFC", value.strip()).translate(_STATUS_FOLD).casefold())
+    return word.group(0) if word else ""
+
+
+def _status_allowed(record, allowed):
+    """allowed: None for the default read gate, else a set of folded status words."""
+    word = _status_word(record)
+    return word not in RETIRED_STATUSES if allowed is None else word in allowed
+
+
+def _allowed_statuses(statuses):
+    if statuses is None:
+        return None
+    if isinstance(statuses, str):
+        statuses = [statuses]
+    return {_status_word({"status": value}) for value in statuses}
+
+
+def _supersedes_key(value):
+    """Normalize a human-readable supersedes reference without substring matching."""
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if value.startswith("[[") and value.endswith("]]"):
+        # [[path#heading|alias]] and [[path^block]] name the note before the anchor.
+        value = re.split(r"[|#^]", value[2:-2], maxsplit=1)[0].strip()
+    return value.replace("\\", "/").strip("/")
+
+
+def _trusted_record(record):
+    return (record.get("trust") != "untrusted" and record.get("trusted") is not False
+            and record.get("status") != "untrusted" and record.get("kind") != "untrusted"
+            and not _rejected_inference(record))
+
+
+def resolve_supersedes(records):
+    """Resolve trusted supersedes references to record ids and report links that do nothing.
+
+    A value is an explicit id, else a vault path (with or without .md) or [[link]] by its whole
+    value, else its last segment when exactly one note has that file name. Never a substring.
+    A reference that resolves to the note itself retires nothing and is reported (#206).
+    Untrusted notes neither retire nor are counted as targets.
+    """
+    trusted = [record for record in records if isinstance(record, dict) and _trusted_record(record)]
+    by_id = {record.get("id"): record for record in trusted if isinstance(record.get("id"), str)}
+    by_path, by_name = {}, {}
+    for record in trusted:
+        source = str(record.get("source", "")).replace("\\", "/").strip("/")
+        if not source:
+            continue
+        path_key = source[:-3] if source.casefold().endswith(".md") else source
+        by_path.setdefault(path_key.casefold(), []).append(record)
+        by_name.setdefault(path_key.rsplit("/", 1)[-1].casefold(), []).append(record)
+    retired, dead = set(), []
+    for record in trusted:
+        values = record.get("supersedes", [])
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            continue
+        for raw in values:
+            key = _supersedes_key(raw)
+            folded = key[:-3] if key.casefold().endswith(".md") else key
+            target, reason = by_id.get(key), None
+            if target is None and folded:
+                matches = by_path.get(folded.casefold(), [])
+                if not matches:
+                    matches = by_name.get(folded.rsplit("/", 1)[-1].casefold(), [])
+                if len(matches) == 1:
+                    target = matches[0]
+                elif matches:
+                    reason = "ambiguous supersedes reference"
+            if target is None:
+                reason = reason or "unresolved supersedes reference"
+            elif target is record or target.get("id") == record.get("id"):
+                target, reason = None, "supersedes reference points to the note itself"
+            if target is None:
+                dead.append({"id": record.get("id"), "source": record.get("source", ""), "value": raw, "reason": reason})
+            else:
+                retired.add(target["id"])
+    return retired, dead
+
+
+_WIKI_LINK = re.compile(r"\[\[([^\[\]\n]+)\]\]")
+# A destination is <angle bracketed> (may hold spaces) or a bare path; an optional "title" may follow.
+_MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]\n]*\]\(\s*(?:<([^<>\n]+)>|([^()<>\s]+))(?:\s+\"[^\"]*\")?\s*\)")
+
+
+def _link_fold(value):
+    """Compare link targets and sources as NFC, case-folded, without .md: a macOS/iCloud
+    file name can be stored decomposed (NFD) while the link a person typed is composed."""
+    value = unicodedata.normalize("NFC", value)
+    return (value[:-3] if value.casefold().endswith(".md") else value).casefold()
+
+
+def _link_keys(record):
+    """Vault-relative link targets in a record's text: [[wikilinks]] by name, Markdown links by path.
+
+    A Markdown link is resolved against the note's folder; URLs and in-page anchors are skipped.
+    """
+    text = record.get("text") if isinstance(record.get("text"), str) else ""
+    keys = []
+    for match in _WIKI_LINK.finditer(text):
+        keys.append((match.group(0), _supersedes_key(match.group(0))))
+    folder = posixpath.dirname(str(record.get("source", "")).replace("\\", "/"))
+    for match in _MARKDOWN_LINK.finditer(text):
+        target = urllib.parse.unquote((match.group(1) or match.group(2)).split("#", 1)[0]).strip()
+        if not target or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
+            continue
+        path = posixpath.normpath(target.lstrip("/") if target.startswith("/") else posixpath.join(folder, target))
+        if path.startswith("../") or path == "..":
+            continue
+        keys.append((match.group(0), path))
+    return keys
+
+
+def rejected_dependents(records):
+    """Current notes that link to a rejected inference or preference, for a person to review.
+
+    Rejecting an inference keeps it out of context, but a note that cites it as support still
+    delivers the claim it rests on (MARKDOWN.md asks for those to be corrected separately).
+    Links resolve like supersedes: a whole vault path (with or without .md), else a file name that
+    exactly one note has; an ambiguous name that could be a rejected note is listed apart.
+    Only the listing is produced: whether the citation still holds is the reader's call. A note
+    that is itself rejected or retired (by status or by another note's supersedes), or that
+    supersedes the rejected note, is not listed.
+    """
+    records = [record for record in records if isinstance(record, dict)]
+    if not any(_rejected_inference(record) for record in records):
+        return [], []
+    superseded = resolve_supersedes(records)[0]
+    by_id, by_path, by_name = {}, {}, {}
+    for record in records:
+        if isinstance(record.get("id"), str):
+            by_id[record["id"]] = record
+        source = str(record.get("source", "")).replace("\\", "/").strip("/")
+        if not source:
+            continue
+        path_key = _link_fold(source)
+        by_path.setdefault(path_key, []).append(record)
+        by_name.setdefault(path_key.rsplit("/", 1)[-1], []).append(record)
+
+    def matches_for(key):
+        folded = _link_fold(key)
+        if not folded:
+            return []
+        return by_path.get(folded) or by_name.get(folded.rsplit("/", 1)[-1], [])
+
+    dependents, ambiguous = {}, {}
+    for record in records:
+        if (_rejected_inference(record) or _status_word(record) in RETIRED_STATUSES or
+                record.get("id") in superseded):
+            continue
+        replaces = record.get("supersedes", [])
+        replaces = [replaces] if isinstance(replaces, str) else replaces if isinstance(replaces, list) else []
+        replaced = set()
+        for value in replaces:
+            key = _supersedes_key(value)
+            found = [by_id[key]] if key in by_id else matches_for(key)
+            if len(found) == 1:
+                replaced.add(id(found[0]))
+        for raw, key in _link_keys(record):
+            matches = matches_for(key)
+            rejected = [match for match in matches if _rejected_inference(match) and match is not record]
+            if not rejected:
+                continue
+            if len(matches) > 1:
+                ambiguous.setdefault((record.get("source", ""), raw), {
+                    "id": record.get("id"), "source": record.get("source", ""), "link": raw,
+                    "candidates": sorted(match.get("source", "") for match in matches)})
+                continue
+            target = rejected[0]
+            if id(target) in replaced:
+                continue
+            dependents.setdefault((record.get("source", ""), target.get("source", "")), {
+                "id": record.get("id"), "source": record.get("source", ""), "link": raw,
+                "rejected_id": target.get("id"), "rejected_source": target.get("source", "")})
+    return ([dependents[key] for key in sorted(dependents)], [ambiguous[key] for key in sorted(ambiguous)])
 
 
 # Opt-in project scope for vaults organized by folder. Without this file an explicit
@@ -203,13 +404,23 @@ def _stem(word):
             break
         else:
             break
+    # Consonant softening: kitap/kitabi and ornek/ornegi (soft g is already folded to g).
+    # A b or g after a vowel goes back to p or k on every stem, peeled or not, so both
+    # sides agree. d is left alone: past tense stems like "dened" would land on "denet".
+    if len(word) >= 4 and word[-1] in "bg" and word[-2] in _VOWELS:
+        word = word[:-1] + ("p" if word[-1] == "b" else "k")
     return word
 
 
-def _tokens(text):
+def _token_counts(text):
+    """Stem -> occurrence count; the keys are exactly _tokens(text)."""
     text = unicodedata.normalize("NFKD", str(text).casefold())
     text = "".join(c for c in text if not unicodedata.combining(c)).replace("ı", "i")
-    return {_stem(word) for word in re.findall(r"[a-z0-9]+", text)}
+    return Counter(_stem(word) for word in re.findall(r"[a-z0-9]+", text))
+
+
+def _tokens(text):
+    return set(_token_counts(text))
 
 
 # Stopwords are matched against stems, so Turkish content words had to leave the list:
@@ -290,6 +501,16 @@ def _rrf_fuse(lexical_ids, semantic_ids, k=60):
 # Signature of the derived lexical index. A schema or tokenizer change MUST bump this;
 # existing databases self-rebuild once on the next open (see MemoryStore.__init__).
 FTS_PARAMS = _json([1, "unicode61 remove_diacritics 2", "id|type|project|text|facts"])
+
+
+def _path_redirected(path):
+    """Symlinks and Windows reparse points require a fresh realpath check."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        # Let the original resolver/type check decide missing or inaccessible paths.
+        return True
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_reparse_tag", 0))
 
 
 class MemoryStore:
@@ -405,17 +626,30 @@ class MemoryStore:
                 pass  # a real failure or a still-building index keeps the note-level path
         return shared_context(self, harness, query, **kwargs)
 
-    def _source(self, value):
+    def _source(self, value, *, _resolved=None):
         if not isinstance(value, str) or not value or Path(value).is_absolute():
             raise ValueError("source must be an existing vault-relative file")
         if ".." in Path(value).parts:
             raise ValueError("source traversal rejected")
-        target = (self.vault_root / value).resolve()
+        path = self.vault_root / value
+        target = _resolved if path.is_relative_to(self.vault_root) else None
+        if target is not None:
+            # A file or directory can become a symlink after the scan's first read.
+            # Reuse the realpath only while its vault-relative components stay real;
+            # otherwise resolve again, preserving _source's inside/outside decision.
+            cursor, boundary = str(path), str(self.vault_root.parent)
+            while cursor != boundary:
+                if _path_redirected(cursor):
+                    target = None
+                    break
+                cursor = os.path.dirname(cursor)
+        if target is None:
+            target = path.resolve()
         if not target.is_relative_to(self.vault_root) or not target.is_file():
             raise ValueError("source missing or outside vault")
         return Path(value).as_posix()
 
-    def _validate(self, record):
+    def _validate(self, record, *, _resolved_source=None):
         if not isinstance(record, dict):
             raise ValueError("record must be an object")
         record = json.loads(_json(record))
@@ -423,7 +657,9 @@ class MemoryStore:
             raise ValueError("record id required")
         if not isinstance(record.get("text"), str):
             raise ValueError("record text required")
-        record["source"] = self._source(record.get("source"))
+        # Sync shares its checked realpath; still recheck existence/type and reread
+        # the source here so edits during the scan cannot validate stale bytes.
+        record["source"] = self._source(record.get("source"), _resolved=_resolved_source)
         record["source_sha256"] = hashlib.sha256((self.vault_root / record["source"]).read_bytes()).hexdigest()
         current = record.get("updated_at")
         if current is None or (isinstance(current, str) and not current.strip()):
@@ -432,9 +668,25 @@ class MemoryStore:
             # and file mtime is not a date: synced vaults rewrite it.
             for alias in RECENCY_ALIASES:
                 value = record.get(alias)
-                if isinstance(value, str) and re.match(r"\d{4}-\d{2}-\d{2}", value.strip()):
-                    record["updated_at"] = value.strip()
-                    break
+                if isinstance(value, str):
+                    v = value.strip()
+                    # YYYY/MM/DD, or day-first DD.MM.YYYY / DD-MM-YYYY / DD/MM/YYYY as Turkish
+                    # templates write it. A converted value must be a real date: month-first text such
+                    # as 12/31/2026 stays unset instead of becoming 2026-31-12.
+                    m = re.match(r"^(\d{4})/(\d{2})/(\d{2})(.*)$", v)
+                    parts = (m[1], m[2], m[3], m[4]) if m else None
+                    if parts is None:
+                        m = re.match(r"^(\d{2})([-/.])(\d{2})\2(\d{4})(.*)$", v)
+                        parts = (m[4], m[3], m[1], m[5]) if m else None
+                    if parts is not None:
+                        try:
+                            datetime(int(parts[0]), int(parts[1]), int(parts[2]))
+                        except ValueError:
+                            continue
+                        v = f"{parts[0]}-{parts[1]}-{parts[2]}{parts[3]}"
+                    if re.match(r"^\d{4}-\d{2}-\d{2}", v):
+                        record["updated_at"] = v
+                        break
         for field in ("project", "kind", "status", "updated_at"):
             if field in record and not isinstance(record[field], str):
                 raise ValueError(field + " must be a string")
@@ -615,8 +867,28 @@ class MemoryStore:
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
+        # Decode only rows that can match; the full Python gates below still decide.
+        # Markdown-owned records: sync writes markdown_sources(id, source) in the same
+        # transaction as the payload, so their basenames are read from that small table.
+        # Other records (ingest): every writer stores _json() payloads, so a matching
+        # source contains the name exactly as _json() serializes it (Unicode, escapes).
+        # Both are supersets of the matches; anything unusual keeps the full scan.
+        needles = list(dict.fromkeys(_json(name)[1:-1] for name in source_names))
+        wanted = set(source_names)
         with self._connect() as db:
-            records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
+            try:
+                owned = db.execute("SELECT id, source FROM markdown_sources").fetchall()
+            except sqlite3.OperationalError:
+                owned = None  # a store that never synced Markdown has no ownership table
+            ids = None if owned is None else sorted(id for id, source in owned if Path(source).name in wanted)
+            if ids is None or len(needles) > 128 or len(ids) > 512:
+                query, params = "SELECT payload FROM records ORDER BY id", ()
+            else:
+                other = "id NOT IN (SELECT id FROM markdown_sources) AND (" + (
+                    " OR ".join("instr(payload, ?) > 0" for _ in needles) or "0") + ")"
+                clause = ("id IN (" + ",".join("?" * len(ids)) + ") OR (" + other + ")") if ids else other
+                query, params = "SELECT payload FROM records WHERE " + clause + " ORDER BY id", ids + needles
+            records = [json.loads(row[0]) for row in db.execute(query, params)]
         candidates = {name: [] for name in source_names}
         stale_count = 0
         for record in records:
@@ -690,8 +962,9 @@ class MemoryStore:
             result["truncated"] = True
         return result
 
-    def _strict_rank(self, ranked, terms, vocabularies):
-        """Keep only meaningful lexical matches; see STRICT_* for the calibrated rules."""
+    @staticmethod
+    def _lexical_weights(ranked, terms, vocabularies):
+        """(weight, shared_count, record) for every candidate; see the strict comment for the formula."""
         frequency = {}
         for vocabulary in vocabularies.values():
             for token in vocabulary:
@@ -700,16 +973,46 @@ class MemoryStore:
         idf_max = math.log((total + 1) / 2) + 1
         weighted = []
         for shared_count, record in ranked:
-            if shared_count < self.STRICT_MIN_SHARED:
-                continue
             vocabulary = vocabularies[record["id"]]
             weight = sum(math.log((total + 1) / (frequency.get(token, 0) + 1)) + 1 for token in terms & vocabulary)
-            weight = weight / idf_max / math.log(10 + len(vocabulary))
-            if weight >= self.STRICT_MIN_WEIGHT:
-                weighted.append((weight, record))
+            weighted.append((weight / idf_max / math.log(10 + len(vocabulary)), shared_count, record))
+        return weighted
+
+    @staticmethod
+    def _by_weight(weighted):
         weighted.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
         weighted.sort(key=lambda item: -item[0])
         return weighted
+
+    def _strict_rank(self, ranked, terms, vocabularies):
+        """Keep only meaningful lexical matches; see STRICT_* for the calibrated rules."""
+        return self._by_weight([(weight, record) for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies)
+                                if shared_count >= self.STRICT_MIN_SHARED and weight >= self.STRICT_MIN_WEIGHT])
+
+    BM25_K1 = 1.5
+    BM25_B = 0.75
+
+    def _weighted_rank(self, ranked, terms, term_counts):
+        """Order without dropping anything: Okapi BM25 over stem counts, no thresholds.
+
+        A raw shared-term count favours whichever note has the largest vocabulary, so one long
+        hub note can win every query; a presence-only idf weight still cannot tell a note that
+        is about a term from one that mentions it once. Records with no shared term (scoped
+        listings, snapshots) weigh 0 and keep their previous updated_at order.
+        """
+        total = len(term_counts)
+        lengths = {rid: sum(counts.values()) for rid, counts in term_counts.items()}
+        average = sum(lengths.values()) / total if total else 0
+        frequency = {term: sum(1 for counts in term_counts.values() if term in counts) for term in terms}
+        weighted = []
+        for _, record in ranked:
+            counts = term_counts[record["id"]]
+            norm = self.BM25_K1 * (1 - self.BM25_B + self.BM25_B * (lengths[record["id"]] / average if average else 0))
+            weight = sum(math.log((total - frequency[term] + 0.5) / (frequency[term] + 0.5) + 1) *
+                         counts[term] * (self.BM25_K1 + 1) / (counts[term] + norm)
+                         for term in terms if counts.get(term))
+            weighted.append((weight, record))
+        return self._by_weight(weighted)
 
     # Strict automatic context: used by the per-turn hook so that a single shared common
     # word never pulls an unrelated note into the prompt. Weight = sum of relative idf over
@@ -726,16 +1029,21 @@ class MemoryStore:
     # matching block (#83, beyin_v3_passage.py). An empty passage result is an answer.
     STRICT_PASSAGES = True
 
-    def _eligible(self, audience="internal", project=None, rejected_only=False):
+    def _records(self):
+        with self._connect() as db:
+            return [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
+
+    def _eligible(self, audience="internal", project=None, rejected_only=False, records=None):
         """Visibility, trust, project and source-freshness gates shared by every retrieval path.
 
         rejected_only inverts the rejection gate alone, for rejected_matches: the same
-        scope applies to history that is looked up but never delivered.
+        scope applies to history that is looked up but never delivered. records lets a
+        caller that also needs the supersession set read the table once.
         """
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
-        with self._connect() as db:
-            records = [json.loads(row[0]) for row in db.execute("SELECT payload FROM records ORDER BY id")]
+        if records is None:
+            records = self._records()
         allowed = {"public"} if audience == "public" else {"public", "internal"} if audience == "internal" else {"public", "internal", "private"}
         # Read only for an explicit project: the per-turn hook path passes none.
         scopes = read_project_scopes(self.vault_root) if project is not None else None
@@ -824,15 +1132,20 @@ class MemoryStore:
         except (sqlite3.Error, ValueError):
             pass
 
+    def _superseded_ids(self, records=None):
+        """Ids retired by any trusted record, not only by the ones this reader may see (#201)."""
+        return resolve_supersedes(self._records() if records is None else records)[0]
+
     def _retrieve(self, query, project=None, audience="internal", statuses=None, limit=5, budget_chars=8000, snapshot=False, strict=False, candidate_only=False, types=None):
         if audience not in ("public", "internal", "private"):
             raise ValueError("invalid audience")
         if not isinstance(query, str) or type(limit) is not int or limit < 0 or type(budget_chars) is not int or budget_chars < 0:
             raise ValueError("invalid query or budget")
         types_set, type_gate = resolve_type_filter(query, types)
-        if isinstance(statuses, str):
-            statuses = [statuses]
-        eligible, stale_count = self._eligible(audience, project)
+        records = self._records()
+        eligible, stale_count = self._eligible(audience, project, records=records)
+        superseded = self._superseded_ids(records)
+        allowed_statuses = _allowed_statuses(statuses)
         if types_set is None and type_gate is None:
             gated, ungated = eligible, None
         else:
@@ -840,7 +1153,6 @@ class MemoryStore:
             # Only an inferred guess may be retried; an explicit types= filter is strict.
             ungated = eligible if type_gate is not None and types_set is None else None
         eligible = gated
-        superseded = {rid for record in eligible for rid in record.get("supersedes", [])}
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
@@ -881,17 +1193,18 @@ class MemoryStore:
                     self._count_retrieval_error("fts_query_errors")  # lexical ranking continues
         ranked = []
         vocabularies = {}
-        # An inferred gate is a guess; it may reorder or narrow, but it must never be the
+# An inferred gate is a guess; it may reorder or narrow, but it must never be the
         # only reason a question comes back empty. Cue stems overlap ordinary Turkish
         # words ("fiyat listesi" against "kontrol listesi"), so a wrong guess is retried
         # without the gate. An explicit types= filter is never relaxed.
         def candidates(pool):
-            found, vocabs = [], {}
+            found, vocabs, counts = [], {}, {}
             for record in pool:
                 if record["id"] in superseded:
                     continue
-                statusless_note = snapshot and "status" not in record and record.get("kind", "note") != "task"
-                if statuses is not None and record.get("status") not in statuses and not statusless_note:
+                # A statusless note reads as active and a statusless task as not active,
+                # so the default gate needs no snapshot exception (#206).
+                if not _status_allowed(record, allowed_statuses):
                     continue
                 if strict and str(record.get("source", "")).startswith(self.STRICT_EXCLUDE):
                     continue
@@ -899,25 +1212,36 @@ class MemoryStore:
                 aliases = record.get("aliases", [])
                 aliases = aliases if isinstance(aliases, list) else []
                 alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
-                vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
+                term_count = _token_counts(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text)
+                for stopword in STOPWORDS & term_count.keys():
+                    del term_count[stopword]
+                vocabulary = set(term_count)
                 vocabs[record["id"]] = vocabulary
+                counts[record["id"]] = term_count
                 score = len(terms & vocabulary)
                 if score or scoped_listing or snapshot:
                     found.append((score, record))
-            return found, vocabs
+            return found, vocabs, counts
 
-        ranked, vocabularies = candidates(eligible)
+        ranked, vocabularies, term_counts = candidates(eligible)
         if not ranked and ungated is not None:
-            fallback, fallback_vocabs = candidates(ungated)
+            fallback, fallback_vocabs, fallback_counts = candidates(ungated)
             if fallback:
-                ranked, vocabularies, type_gate = fallback, fallback_vocabs, None
+                ranked, vocabularies, term_counts = fallback, fallback_vocabs, fallback_counts
+                type_gate = None
         if strict and not snapshot:
             ranked = self._strict_rank(ranked, terms, vocabularies)
         else:
-            ranked.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
-            ranked.sort(key=lambda item: -item[0])
+            # Two BM25 implementations exist, and they disagree: FTS5 reads the maintained
+            # index but tokenizes raw text, so a hub note padded with hundreds of distinct
+            # tokens outranks the focused note that answers the question, while the Python
+            # scorer reads stem counts and gets it right. So FTS5 answers only "did this
+            # record match at all": a record it never matched queues last, which is also
+            # what keeps a drifted index from reordering the healthy records silently, and
+            # the order within each group is the Python BM25 in both.
+            ranked = self._weighted_rank(ranked, terms, term_counts)
             if fts_rank_map:
-                ranked.sort(key=lambda item: fts_rank_map.get(item[1]["id"], 999999))
+                ranked.sort(key=lambda item: item[1]["id"] not in fts_rank_map)
             if callable(self.semantic_searcher):
                 # Contract: the searcher re-ranks, it does not recall. It receives only the
                 # records lexical search already admitted and returns an ordering of those, so

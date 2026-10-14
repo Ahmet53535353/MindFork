@@ -42,6 +42,38 @@ def allowed(name):
     return name in ('scripts/install_v3.py', 'scripts/beyin_v3.py', 'scripts/beyin_entry.py') or bool(re.fullmatch(r'template/\.claude/scripts/beyin_v3(?:_[a-z]+)*\.py', name)) or bool(re.fullmatch(r'template/\.agents/skills/(beyin|beyin-doktor|beyin-guncelle)/SKILL\.md', name))
 
 
+def _read_only(path):
+    """True only for a file that carries the Windows read-only attribute.
+
+    Read from the file's own attributes: os.access also answers False for a target it cannot
+    query at all, such as one pending deletion, and that one is worth a retry.
+    """
+    try:
+        return bool(os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+    except (OSError, AttributeError):
+        return False
+
+
+def _safe_replace(source, destination):
+    """os.replace, retried briefly only for a Windows sharing violation.
+
+    An antivirus scan, the search indexer or an editor can hold the target open for a few
+    milliseconds there (WinError 5/32/33): four retries, 225 ms in all. A POSIX
+    PermissionError is a real EACCES/EPERM and is raised at once, as is any other error and
+    WinError 5 for a read-only target, which no wait will lift (#230).
+    """
+    attempts = 5 if os.name == 'nt' else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as exc:
+            if (attempt == attempts - 1 or getattr(exc, 'winerror', None) not in (5, 32, 33)
+                    or _read_only(destination)):
+                raise
+            time.sleep(0.015 * (2 ** attempt))
+
+
 def atomic(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,7 +83,7 @@ def atomic(path, data):
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        _safe_replace(temporary, path)
         try:
             fd = os.open(path.parent, os.O_RDONLY)
             try: os.fsync(fd)
@@ -172,7 +204,16 @@ def locked(vault, state):
     try:
         # Use the same SQLite writer lock as participating runtime operations.
         for path in (state / 'update-lock.sqlite3', state / 'memory.sqlite3'):
-            connection = sqlite3.connect(path, timeout=5)
+            if path.name == 'memory.sqlite3':
+                # The runtime creates its index on first sync; locking must not leave an empty
+                # one behind. mode=rw never creates the file, and as_uri() escapes '#', '?' and
+                # '%' in the state path: an unescaped URI opened another path, and a skipped
+                # lock let runtime writers run during apply.
+                if not path.is_file():
+                    continue
+                connection = sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=5)
+            else:
+                connection = sqlite3.connect(path, timeout=5)
             connections.append(connection)
             connection.execute('BEGIN IMMEDIATE')
         yield
@@ -266,13 +307,26 @@ def _apply(vault, state, journal, migration=None):
         if actual != after:
             if actual != before:
                 raise ValueError('update conflict: managed target changed ' + operation['name'])
+            # Windows refuses to replace or delete a read-only file (WinError 5); POSIX does not.
+            # Lift the flag for the replacement only and put it back below: a user who locked a
+            # managed file keeps the lock, and rollback restores the recorded old mode anyway.
+            read_only = path.exists() and not os.access(path, os.W_OK)
+            if read_only:
+                try:
+                    path.chmod(stat.S_IWRITE | stat.S_IREAD)
+                except OSError:
+                    pass
             if after is None:
                 path.unlink(missing_ok=True)
             else:
                 atomic(path, after)
                 if operation.get('new_mode') is not None: path.chmod(operation['new_mode'])
-        if path.exists() and operation.get('new_mode') is not None:
+                if read_only:
+                    path.chmod(stat.S_IMODE(path.stat().st_mode) & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+        if path.exists() and operation.get('new_mode') is not None and os.access(path, os.W_OK):
             path.chmod(operation['new_mode'])
+        if path.exists() and operation.get('new_mtime') is not None:
+            os.utime(path, (operation['new_mtime'], operation['new_mtime']))
         transaction_hook('after_replace', index)
     if journal['direction'] == 'update':
         atomic(state / 'last-update.json', jbytes(journal))
@@ -388,7 +442,7 @@ def update(vault, state, package=None, check=False):
                     if name == '.beyin-version': continue
                     path = vault / name
                     previous = path.read_bytes() if path.exists() else None
-                    operations.append({'scope': 'vault', 'name': name, 'old': encode(previous), 'new': encode(data), 'old_mode': stat.S_IMODE(path.stat().st_mode) if path.exists() else None, 'new_mode': plan.get('modes', {}).get(name, 0o644)})
+                    operations.append({'scope': 'vault', 'name': name, 'old': encode(previous), 'new': encode(data), 'old_mode': stat.S_IMODE(path.stat().st_mode) if path.exists() else None, 'old_mtime': path.stat().st_mtime if path.exists() else None, 'new_mode': plan.get('modes', {}).get(name, 0o644)})
                 path = state / 'v3-install.json'
                 operations.append({'scope': 'state', 'name': 'v3-install.json', 'old': encode(path.read_bytes() if path.exists() else None), 'new': encode(jbytes(plan['manifest']))})
                 path = vault / '.beyin-version'
@@ -420,6 +474,18 @@ def update(vault, state, package=None, check=False):
             result['preserved_excluded'] = plan['preserved_excluded']
         if plan.get('manifest', {}).get('excluded_components'):
             result['excluded_components'] = plan['manifest']['excluded_components']
+        # A kept V2 flush that died mid-summary: the guard let its sentinel through on proof,
+        # but nothing else would ever tell the user that session's summary is missing. Sentinels
+        # the cutover receipt already lists were reported by that install and never change again
+        # once the flush is retired, so repeating them here would follow every update forever.
+        # The same goes for a prompt-counter lock directory the guard read as stale.
+        for key in ('orphaned_legacy_state', 'stale_legacy_locks'):
+            if migration and migration[1].get(key):
+                receipt = migration[1].get('previous')
+                reported = set(receipt.get(key) or []) if isinstance(receipt, dict) else set()
+                later = [name for name in migration[1][key] if name not in reported]
+                if later:
+                    result[key] = later
         return result
 
 
@@ -463,7 +529,9 @@ def rollback(vault, state):
                 else:
                     raise ValueError('rollback conflict: changed managed file ' + item['name'] +
                                      (' (deleted)' if actual is None else ' (content differs)'))
-            operations.append(dict(item, old=encode(actual), new=encode(restore), old_mode=item.get('new_mode'), new_mode=item.get('old_mode')))
+            operations.append(dict(item, old=encode(actual), new=encode(restore), old_mode=item.get('new_mode'), new_mode=item.get('old_mode'),
+                                   # A merged settings file holds edits made after the update: keep its new mtime.
+                                   new_mtime=item.get('old_mtime') if restore == decode(item['old']) else None))
         if 'migration_result' in original:
             marker = state / 'v2-migration.json'
             actual = marker.read_bytes() if marker.exists() else None

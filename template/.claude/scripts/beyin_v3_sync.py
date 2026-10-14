@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
+import stat
 import tempfile
 import sys
 import time
@@ -16,7 +18,10 @@ _MODULE_DIR = str(Path(__file__).resolve().parent)
 if _MODULE_DIR not in sys.path:
     sys.path.insert(0, _MODULE_DIR)
 
-from beyin_v3 import HARNESSES, VALID_MEMORY_TYPES, MemoryStore, ReceiptConflict, RevisionConflict, _json
+from beyin_v3 import (HARNESSES, REJECTED_AT, RETIRED_STATUSES, VALID_MEMORY_TYPES, MemoryStore,
+                      ReceiptConflict, RevisionConflict, _json, _path_redirected,
+                      _rejected_inference, _status_word, rejected_dependents, resolve_supersedes)
+from beyin_v3_index import applied_keys, dir_key, exclusions as index_exclusions, prune as prune_excluded
 from beyin_v3_projections import project_receipts
 from beyin_v3_preferences import read as read_preferences
 from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
@@ -24,6 +29,38 @@ from beyin_v3_secrets import redact as redact_secrets, record as record_redactio
 
 def _hash(data):
     return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()
+
+
+def _read_only(path):
+    """True only for a file that carries the Windows read-only attribute.
+
+    Read from the file's own attributes: os.access also answers False for a target it cannot
+    query at all, such as one pending deletion, and that one is worth a retry.
+    """
+    try:
+        return bool(os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+    except (OSError, AttributeError):
+        return False
+
+
+def _safe_replace(source, destination):
+    """os.replace, retried briefly only for a Windows sharing violation.
+
+    An antivirus scan, the search indexer or an editor can hold the target open for a few
+    milliseconds there (WinError 5/32/33): four retries, 225 ms in all. A POSIX
+    PermissionError is a real EACCES/EPERM and is raised at once, as is any other error and
+    WinError 5 for a read-only target, which no wait will lift (#230).
+    """
+    attempts = 5 if os.name == 'nt' else 1
+    for attempt in range(attempts):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError as exc:
+            if (attempt == attempts - 1 or getattr(exc, 'winerror', None) not in (5, 32, 33)
+                    or _read_only(destination)):
+                raise
+            time.sleep(0.015 * (2 ** attempt))
 
 
 def atomic(path, text):
@@ -35,7 +72,7 @@ def atomic(path, text):
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(name, path)
+        _safe_replace(name, path)
         try:
             directory = os.open(path.parent, os.O_RDONLY)
             try:
@@ -135,6 +172,7 @@ def _parse_yaml_value(value):
 # silently ignored (only top-level metadata reaches the gates), so such a source
 # stays excluded with a warning, as before nested mappings were read (#179).
 GATE_KEYS = ('visibility', 'trust', 'trusted', 'remote_allowed')
+COMMA_LIST_KEYS = ('tags', 'aliases')
 
 
 def _mapping_value(sub_key, value):
@@ -219,7 +257,15 @@ def parse(text):
             else:
                 metadata[key] = None
             continue
-        metadata[key] = _parse_yaml_value(value)
+        parsed = _parse_yaml_value(value)
+        # Obsidian reads an unquoted `tags: a, b` or `aliases: a, b` as a list. Other keys keep
+        # their text: `title: Merhaba, dunya` or `project: Acme, Inc` stay one string, and a
+        # task update renders the parsed metadata back into the note.
+        if key in COMMA_LIST_KEYS and isinstance(parsed, str) and value[:1] not in '"\'' and ',' in parsed:
+            items = [part.strip() for part in parsed.split(',') if part.strip()]
+            if len(items) > 1:
+                parsed = items
+        metadata[key] = parsed
     return metadata, body
 
 
@@ -228,14 +274,182 @@ def render(metadata, body):
 
 
 EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md', 'config.md', 'settings.md', 'instructions.md', 'codex.md', 'setup.md', 'install.md'}
-# 'archive' holds a consolidation window's pre-images: a recovery kit, not memory.
-# Indexing it would make every snapshot a note — and each pre-image a merge candidate
-# for the very note it was copied from.
-EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__', 'archive'}
+EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
+# User-chosen directory names (<state>/index.json) are pruned on top of these; see beyin_v3_index.
+# Nothing else is skipped by name: "vendor" or "external" is also an ordinary notes folder.
+# The engine's own recovery kits are registered there by the module that creates them
+# (beyin_v3_dream -> "archive", beyin_v3_compact -> "Arşiv"), never hardcoded here: a name
+# this list holds is skipped in every vault, including one whose "archive" is ordinary notes.
+# User-chosen directory names (<state>/index.json) are pruned on top of these; see beyin_v3_index.
+# Nothing else is skipped by name: "vendor" or "external" is also an ordinary notes folder.
 COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
+TASK_STATUSES = ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled')
+
+
+def _check_task_dates(fields):
+    """Write-path check for due_at/updated_at given to task-create or task-update.
+
+    Sync does not apply it, so task files written before this check, or edited by
+    hand, stay indexed. The explicit grammar (the one rejected_at uses) keeps
+    acceptance the same on every Python version; a null due_at clears the date.
+    """
+    for field in ('due_at', 'updated_at'):
+        if field not in fields or (field == 'due_at' and fields[field] is None):
+            continue
+        value = fields[field]
+        try:
+            if not isinstance(value, str) or not REJECTED_AT.fullmatch(value):
+                raise ValueError(field)
+            datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(field + ' must be an ISO date or timestamp') from exc
+
+
+def _has_conflict_markers(text):
+    """True when a merge left <<<<<<< / ======= / >>>>>>> in order (#205).
+
+    Code fences are not skipped: a real conflict inside a note's code block must not reach context,
+    and a quoted example costs only a visible warning.
+    """
+    stage = 0
+    for line in text.splitlines():
+        if stage == 0 and line.startswith('<<<<<<<'):
+            stage = 1
+        elif stage == 1 and line.rstrip() == '=======':
+            stage = 2
+        elif stage == 2 and line.startswith('>>>>>>>'):
+            return True
+    return False
+
+
+# Warm syncs skip reading a source whose bytes were already indexed (#233). The signature is
+# size, mtime, ctime and file id: on POSIX ctime moves with every content or utime change, on
+# Windows st_ctime is the creation time and st_ino the file index, so an atomic save (a new
+# file) changes both. FAT and exFAT have no change time (st_ctime follows mtime there) and
+# FAT keeps 2 s timestamps, HFS+ and some cloud drives 1 s: a second write in the same tick
+# can leave the whole signature as it was. So, as in git's racy-clean rule, a signature is trusted
+# only for bytes read RACY_WINDOW_NS after the source last changed, and that is established
+# twice: by the file's own timestamps against this machine's clock, and by a second read of
+# the same signature RACY_WINDOW_NS after it was first seen. The second proof compares this
+# clock only with itself, so it also holds where another clock stamps the files (a file
+# server, a VM shared folder) and runs behind this one.
+SIGNATURE_SCHEMA = 'source-signatures/2'
+RACY_WINDOW_NS = 2_000_000_000
+
+
+def _stat_signature(st):
+    # File ids can exceed SQLite's 64-bit INTEGER (ReFS); they are stored as text.
+    return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, str(st.st_ino))
+
+
+def _signature_epoch():
+    """Identify the code that turns bytes into a record; an install, update or rollback rewrites it."""
+    parts = [SIGNATURE_SCHEMA]
+    for module in (__file__, sys.modules[MemoryStore.__module__].__file__):
+        st = os.stat(module)
+        parts.append(f'{st.st_size}:{st.st_mtime_ns}:{st.st_ino}')
+    return '|'.join(parts)
+
+
+class _SignatureCache:
+    """Per-sync view of source_signatures, inside the sync's BEGIN IMMEDIATE transaction.
+
+    A hit stands for the indexed payload itself, so it must be the record a full read would
+    build: the stat signature matches the one taken before those bytes were read,
+    markdown_sources still assigns the id to this source, and the payload is byte for byte
+    the one written (or confirmed) from that read. The payload hash also catches any other
+    writer of the row, e.g. a rolled back version without this table re-indexing the source.
+
+    A row with an empty payload_sha256 is a signature seen once (at seen_ns): it is never a
+    hit, it only lets a later read of the same signature settle it. Rows of sources the walk
+    did not reach (deleted, renamed, in a directory that became excluded) are removed, so a
+    source that comes back is read.
+    """
+
+    COLUMNS = 'source, id, size, mtime_ns, ctime_ns, ino, payload_sha256, seen_ns'
+
+    def __init__(self, db, sources, payloads, full=False):
+        self.db, self.sources, self.payloads = db, sources, payloads
+        self.started = time.time_ns()
+        self.rows, self.kept, self.pending = {}, {}, {}
+        self.full = full
+        try:
+            epoch = _signature_epoch()
+        except (OSError, AttributeError, KeyError, TypeError):
+            epoch = None
+        self.enabled = epoch is not None
+        stored = db.execute("SELECT value FROM metadata WHERE key='source_signature_epoch'").fetchone()
+        if epoch is not None and stored is not None and stored[0] == epoch:
+            try:
+                self.rows = {row[0]: tuple(row[1:]) for row in db.execute(f'SELECT {self.COLUMNS} FROM source_signatures')}
+                return
+            except sqlite3.OperationalError:
+                pass
+        # New or unknown code, or no table yet: no stored signature is trusted.
+        db.execute('DROP TABLE IF EXISTS source_signatures')
+        db.execute('CREATE TABLE source_signatures(source TEXT PRIMARY KEY, id TEXT NOT NULL, size INTEGER NOT NULL, '
+                   'mtime_ns INTEGER NOT NULL, ctime_ns INTEGER NOT NULL, ino TEXT NOT NULL, payload_sha256 TEXT NOT NULL, '
+                   'seen_ns INTEGER NOT NULL)')
+        if epoch is None:
+            db.execute("DELETE FROM metadata WHERE key='source_signature_epoch'")
+        else:
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('source_signature_epoch',?)", (epoch,))
+
+    def lookup(self, relative, st):
+        """The indexed id when the source need not be read, else None."""
+        row = self.rows.get(relative)
+        if self.full or row is None or not row[5] or row[1:5] != _stat_signature(st):
+            return None
+        id, payload = row[0], self.payloads.get(row[0])
+        if payload is None or self.sources.get(id) != relative or _hash(payload) != row[5]:
+            return None
+        self.kept[relative] = row
+        return id
+
+    def read(self, relative, st, id):
+        """Note a source that was just read into a record; `st` was taken before its bytes."""
+        if not self.enabled:
+            return
+        signature, now, row = _stat_signature(st), time.time_ns(), self.rows.get(relative)
+        # When this signature was first seen. A time ahead of the clock (it was set back) starts over.
+        seen = row[6] if row is not None and row[1:5] == signature and row[6] <= now else now
+        # Settled: both proofs put this read RACY_WINDOW_NS after the last change. Otherwise the
+        # row only remembers the sighting and the source is read again next time.
+        settled = (seen <= self.started - RACY_WINDOW_NS
+                   and max(st.st_mtime_ns, st.st_ctime_ns) < self.started - RACY_WINDOW_NS)
+        self.pending[relative] = (id, signature, seen, settled)
+
+    def save(self, indexed):
+        """Record a signature for each read source whose payload is now indexed and owned by it.
+
+        One statement per kind of change, so the SQL of a sync does not grow with the vault.
+        """
+        rows = dict(self.kept)
+        for source, (id, signature, seen, settled) in self.pending.items():
+            if id in indexed:
+                rows[source] = (id, *signature, _hash(indexed[id]) if settled else '', seen)
+        stale = sorted(self.rows.keys() - rows.keys())
+        changed = [[source, *row] for source, row in sorted(rows.items()) if self.rows.get(source) != row]
+        try:
+            if stale:
+                self.db.execute('DELETE FROM source_signatures WHERE source IN (SELECT value FROM json_each(?))',
+                                (json.dumps(stale),))
+            if changed:
+                self.db.execute(f'INSERT OR REPLACE INTO source_signatures({self.COLUMNS}) SELECT '
+                                + ', '.join(f"json_extract(value, '$[{index}]')" for index in range(8))
+                                + ' FROM json_each(?)', (json.dumps(changed, ensure_ascii=False),))
+        except sqlite3.OperationalError:
+            # SQLite built without JSON functions.
+            self.db.executemany('DELETE FROM source_signatures WHERE source=?', [(source,) for source in stale])
+            self.db.executemany(f'INSERT OR REPLACE INTO source_signatures({self.COLUMNS}) VALUES (?,?,?,?,?,?,?,?)', changed)
 
 
 class SyncEngine:
+    # What the last scan skipped on the user's word; None while no index.json exists.
+    index_exclusions = None
+    # Folded names that scan took out of the index; None until a scan has run on this engine.
+    excluded_dir_keys = None
+
     def projection_helpers(self):
         return _hash, atomic, render
 
@@ -337,6 +551,12 @@ class SyncEngine:
                 if isinstance(item, dict) and (item.get('source') == source or
                                                (record_id is not None and item.get('id') == record_id))]
 
+    @staticmethod
+    def _write_blockers(result, source):
+        # Another receipt's divergence leaves this write's projection intact; it stays in every sync report (#210).
+        return [item for item in result['conflicts']
+                if not (item.get('kind') == 'receipt_divergence' and item.get('source') != source)]
+
     def _path(self, relative, existing=False):
         if not isinstance(relative, str) or Path(relative).is_absolute() or '..' in Path(relative).parts:
             raise ValueError('relative source required')
@@ -351,6 +571,25 @@ class SyncEngine:
         if existing and not path.is_file():
             raise ValueError('source missing')
         return path
+
+    def _scan_path(self, relative):
+        """Prove a walk entry's realpath using the already resolved vault root."""
+        if not isinstance(relative, str) or Path(relative).is_absolute() or '..' in Path(relative).parts:
+            raise ValueError('relative source required')
+        path = self.root / relative
+        if not path.is_relative_to(self.root):
+            raise ValueError('source outside vault')
+        cursor, boundary = str(path), str(self.root.parent)
+        while cursor != boundary:
+            if _path_redirected(cursor):
+                # Preserve the original outside-vault vs symlink rejection reason.
+                checked = self._path(relative, existing=True)
+                return checked, checked.resolve()
+            cursor = os.path.dirname(cursor)
+        # Without symlinks or traversal, joining a resolved root is its realpath.
+        if not path.is_file():
+            raise ValueError('source missing')
+        return path, path
 
     @staticmethod
     def _source_identity(path):
@@ -423,28 +662,108 @@ class SyncEngine:
                 'truncated': len(strict_issues) > 20 or len(legacy_done) > 20}
 
     def validity_health(self):
-        """Report `validity: rejected` that has no effect because the record is not an inference or preference."""
+        """Report `validity: rejected` that has no effect because the record is not an inference or preference,
+        and, for review only, current notes that link to a rejected inference or preference."""
         with self.store._connect() as db:
             records = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')]
         ignored = [{'id': record.get('id'), 'source': record.get('source'), 'kind': record.get('kind')}
                    for record in records
                    if record.get('validity') == 'rejected' and record.get('kind') not in ('inference', 'preference')]
-        return {'ignored_rejection_count': len(ignored), 'ignored_rejections': ignored[:20], 'truncated': len(ignored) > 20}
+        dependents, ambiguous = rejected_dependents(records)
+        return {'ignored_rejection_count': len(ignored), 'ignored_rejections': ignored[:20],
+                'rejected_dependent_count': len(dependents), 'rejected_dependents': dependents[:20],
+                'ambiguous_rejected_link_count': len(ambiguous), 'ambiguous_rejected_links': ambiguous[:20],
+                'truncated': len(ignored) > 20 or len(dependents) > 20 or len(ambiguous) > 20}
 
-    def _scan(self):
+    def review_health(self, today=None):
+        """Notes whose own `review_at` date has come: an idea to revisit, not a task to do.
+
+        Only notes that set `review_at` are decoded (the payload is prefiltered in SQLite, so a
+        vault without the field pays no whole-index read); a retired note (by status or by another
+        note's supersedes) or a rejected one is not listed. A date in the rejected_at/due_at grammar
+        (time and offset ignored) on or before today (local) is due, oldest first; any other value
+        is listed apart instead of being guessed. An empty property (`review_at:` left by Obsidian)
+        or a Templater placeholder is not a date yet and is skipped. Information only.
+        """
+        today = today or datetime.now().date()
+        with self.store._connect() as db:
+            # _json() writes compact keys, so every record that sets the field contains this text.
+            records = [json.loads(row[0]) for row in db.execute(
+                'SELECT payload FROM records WHERE instr(payload, ?) > 0 ORDER BY id', ('"review_at":',))]
+        candidates = []
+        for record in records:
+            value = record.get('review_at')
+            if ('review_at' not in record or value is None or (isinstance(value, str) and (
+                    not value.strip() or re.fullmatch(r'\{\{[^{}\n]*\}\}', value.strip()))) or
+                    _rejected_inference(record) or _status_word(record) in RETIRED_STATUSES):
+                continue
+            candidates.append(record)
+        superseded = self.store._superseded_ids() if candidates else set()
+        due, invalid = [], []
+        for record in candidates:
+            if record.get('id') in superseded:
+                continue
+            value = record['review_at']
+            try:
+                when = (datetime.strptime(value[:10], '%Y-%m-%d').date()
+                        if isinstance(value, str) and REJECTED_AT.fullmatch(value) else None)
+            except ValueError:
+                when = None
+            if when is None:
+                invalid.append({'id': record.get('id'), 'source': record.get('source'), 'review_at': value})
+            elif when <= today:
+                due.append({'id': record.get('id'), 'source': record.get('source'), 'review_at': when.isoformat(),
+                            'days_overdue': (today - when).days})
+        due.sort(key=lambda entry: (-entry['days_overdue'], entry['source'] or ''))
+        invalid.sort(key=lambda entry: entry['source'] or '')
+        return {'due_count': len(due), 'due': due[:20], 'invalid_count': len(invalid), 'invalid': invalid[:20],
+                'truncated': len(due) > 20 or len(invalid) > 20}
+
+    def supersedes_health(self):
+        """Report supersedes values that retire nothing: unresolved, ambiguous or the note itself."""
+        with self.store._connect() as db:
+            records = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')]
+        dead = resolve_supersedes(records)[1]
+        return {'dead_count': len(dead), 'dead': dead[:20], 'truncated': len(dead) > 20}
+
+    def _scan(self, cache=None):
+        """Read every source. With sync's signature cache, an unchanged indexed source is not read
+        and its value in the returned records is None: sync keeps that record as indexed."""
         records, warnings, conflicts = {}, [], []
         duplicate = set()
+        # Read once per sync, not per directory: the config cannot change mid-walk.
+        excluded, self.index_exclusions = index_exclusions(self.state, self.root)
+        # A listed name the walk skips anyway is a no-op. One set prunes below and is stored by
+        # project_receipts in this sync's transaction, so the receipt readers withhold exactly
+        # what the list took out of the index.
+        excluded = self.excluded_dir_keys = applied_keys(excluded, EXCLUDED_DIRS)
         for directory, dirs, files in os.walk(self.root, followlinks=False):
             dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d.casefold() not in EXCLUDED_DIRS and not (Path(directory) / d).is_symlink())
+            if excluded:
+                # Pruned here, so an excluded tree is never listed, read or hashed.
+                dirs[:] = prune_excluded(self.root, directory, dirs, excluded, self.index_exclusions)
             for name in sorted(files):
                 if name.startswith('.') or not name.lower().endswith('.md') or name.casefold() in EXCLUDED_FILES or name.casefold().startswith('setup-'):
                     continue
                 path = Path(directory) / name
                 relative = path.relative_to(self.root).as_posix()
                 try:
-                    self._path(relative, existing=True)
+                    # Path proof first: an outside-vault or symlinked source keeps its rejection reason.
+                    path, resolved = self._scan_path(relative)
+                    if cache is not None:
+                        st = os.stat(resolved)
+                        id = cache.lookup(relative, st)
+                        if id is not None:
+                            # Not decoded: sync leaves an unchanged indexed record as it is.
+                            if id in records:
+                                duplicate.add(id)
+                            records[id] = None
+                            continue
                     raw = path.read_bytes()
-                    metadata, body = parse(raw.decode('utf-8'))
+                    text = raw.decode('utf-8')
+                    if _has_conflict_markers(text):
+                        raise ValueError('unresolved git conflict markers; resolve the merge before sync')
+                    metadata, body = parse(text)
                     if metadata.get('kind') == 'task' and body.lstrip().startswith('---'):
                         raise ValueError('task has embedded frontmatter; reconcile metadata and body explicitly')
                     if metadata.get('kind') == 'receipt' or metadata.get('generated') is True:
@@ -452,12 +771,14 @@ class SyncEngine:
                     record = dict(metadata, source=relative, text=body)
                     record.setdefault('id', 'md-' + _hash(relative)[:24])
                     record.setdefault('kind', 'note')
-                    record = self.store._validate(record)
+                    record = self.store._validate(record, _resolved_source=resolved)
                     if record['source_sha256'] != _hash(raw):
                         raise ValueError('source changed while scanning')
                     if record['id'] in records:
                         duplicate.add(record['id'])
                     records[record['id']] = record
+                    if cache is not None:
+                        cache.read(relative, st, record['id'])
                 except (ValueError, OSError, UnicodeError) as exc:
                     warnings.append({'source': relative, 'reason': str(exc)})
         for id in sorted(duplicate):
@@ -497,7 +818,10 @@ class SyncEngine:
         """Rebuild a receipts row from its immutable source; ValueError when the file is not a valid receipt."""
         path = self._path(relative, existing=True)
         # Bytes, not read_text: universal newlines would turn '\r' into '\n' and fake an event id collision.
-        metadata, body = parse(path.read_bytes().decode('utf-8'))
+        text = path.read_bytes().decode('utf-8')
+        if _has_conflict_markers(text):
+            raise ValueError('unresolved git conflict markers; resolve the merge before sync')
+        metadata, body = parse(text)
         event_id, harness, refs = metadata.get('event_id'), metadata.get('harness', 'manual'), metadata.get('refs')
         if metadata.get('kind') != 'receipt' or not isinstance(event_id, str) or not event_id.strip():
             raise ValueError('missing kind receipt or event_id')
@@ -530,25 +854,33 @@ class SyncEngine:
         try:
             receipts_dir = self._path('receipts')
             if not receipts_dir.is_dir():
-                return []
+                return [], []
             # Every new source, local or synced from another device, is a new directory entry and
             # changes this signature; a fresh state has none stored. Warm syncs stop at one stat.
             stat = receipts_dir.stat()
             signature = f'{stat.st_dev}:{stat.st_ino}:{stat.st_mtime_ns}'
             if db.execute("SELECT 1 FROM metadata WHERE key='receipt_scan_signature' AND value=?", (signature,)).fetchone():
-                return []
+                return [], []
             names = sorted(os.listdir(receipts_dir))
         except (ValueError, OSError) as exc:
-            return [{'source': 'receipts', 'reason': str(exc)}]
-        warnings = []
-        known = {_hash(row[0]) + '.md' for row in db.execute('SELECT id FROM receipts')}
+            return [{'source': 'receipts', 'reason': str(exc)}], []
+        warnings, conflicts = [], []
+        known = {_hash(row[0]) + '.md': json.loads(row[1]) for row in db.execute('SELECT id, payload FROM receipts')}
         for name in names:
-            # Indexed receipts stay authoritative; other names were never written by receipt().
-            if name in known or not re.fullmatch(r'[0-9a-f]{64}\.md', name):
+            # Other names were never written by receipt().
+            if not re.fullmatch(r'[0-9a-f]{64}\.md', name):
                 continue
             rel = 'receipts/' + name
             try:
                 event = self._receipt_event(rel)
+                if name in known:
+                    # Indexed receipts stay authoritative, but a source that no longer matches them means
+                    # another device wrote the same event_id and a merge kept its file (#205).
+                    old = known[name]
+                    if (old['summary'], old['refs']) != (event['summary'], event['refs']):
+                        conflicts.append({'source': rel, 'kind': 'receipt_divergence',
+                                          'reason': 'receipt source differs from indexed receipt; event_id reused on another device'})
+                    continue
                 db.execute('INSERT OR IGNORE INTO receipts VALUES (?,?)', (event['event_id'], _json(event)))
             except (ValueError, OSError, UnicodeError) as exc:
                 warnings.append({'source': rel, 'reason': str(exc)})
@@ -556,54 +888,83 @@ class SyncEngine:
         # (up to 2 s on FAT, 1 s on HFS+) could still hide behind an unchanged mtime.
         if not warnings and time.time_ns() - stat.st_mtime_ns > 2_000_000_000:
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('receipt_scan_signature',?)", (signature,))
-        return warnings
+        return warnings, conflicts
 
-    def sync(self):
+    def sync(self, full=False):
+        """Index the vault. `full` reads every source: no stored stat signature is taken on trust."""
         # Serialize recovery, source scan and projection across local processes.
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             completed, recovery_conflicts = self._recover(db)
-            receipt_warnings = self._scan_receipts(db)
-            records, warnings, conflicts = self._scan()
+            receipt_warnings, receipt_conflicts = self._scan_receipts(db)
+            old_sources = dict(db.execute('SELECT id, source FROM markdown_sources ORDER BY id'))
+            # Match the old covering-ID scan's set construction and deletion event order.
+            old_owned = {id for id in old_sources}
+            old_payloads = dict(db.execute('SELECT id, payload FROM records'))
+            cache = _SignatureCache(db, old_sources, old_payloads, full=full)
+            records, warnings, conflicts = self._scan(cache)
             warnings.extend(receipt_warnings)
-            conflicts.extend(recovery_conflicts)
-            old_owned = {row[0] for row in db.execute('SELECT id FROM markdown_sources')}
+            conflicts.extend(recovery_conflicts + receipt_conflicts)
             deleted = 0
             for id in old_owned - records.keys():
-                row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
-                if row:
-                    old = json.loads(row[0])
-                    db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('delete',?,?,?)", (id, old['revision'], row[0]))
+                previous_payload = old_payloads.get(id)
+                if previous_payload is not None:
+                    old = json.loads(previous_payload)
+                    db.execute("INSERT INTO events(event_type,record_id,revision,record) VALUES ('delete',?,?,?)", (id, old['revision'], previous_payload))
                     db.execute('DELETE FROM records WHERE id=?', (id,))
                     MemoryStore.fts_delete(db, id)
                     deleted += 1
                 db.execute('DELETE FROM markdown_sources WHERE id=?', (id,))
+            indexed = {}
             for id, record in records.items():
-                row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
-                if row and id in old_owned:
-                    previous = json.loads(row[0])
+                if record is None:
+                    # A signature cache hit: the indexed payload itself, owned by this source.
+                    continue
+                previous_payload = old_payloads.get(id)
+                if previous_payload is not None and id in old_owned:
+                    previous = json.loads(previous_payload)
                     if previous['source_sha256'] != record['source_sha256']:
                         record['revision'] = max(record['revision'], previous['revision'] + 1)
                     else:
                         record['revision'] = max(record['revision'], previous['revision'])
                 payload = _json(record)
-                if row and id not in old_owned and row[0] != payload:
+                if previous_payload is not None and id not in old_owned and previous_payload != payload:
                     conflicts.append({'id': id, 'reason': 'id already owned by another record'})
                     continue
-                if not row or row[0] != payload:
-                    event_type = 'update' if row else 'ingest'
+                if previous_payload != payload:
+                    event_type = 'update' if previous_payload is not None else 'ingest'
                     db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', (id, payload))
                     MemoryStore.fts_write(db, record)
                     db.execute('INSERT INTO events(event_type,record_id,revision,record) VALUES (?,?,?,?)', (event_type, id, record['revision'], payload))
-                db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
+                if old_sources.get(id) != record['source']:
+                    db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
+                indexed[id] = payload
+            cache.save(indexed)
             conflicts.extend(project_receipts(self, db, warnings))
+            # A supersedes value that retires nothing is reported, not a degraded scan: no
+            # source was excluded and the hook must not warn on every turn about it.
+            dead_supersedes = resolve_supersedes([json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')])[1]
             if conflicts:
                 # A receipt hidden by a directory mtime that did not move surfaces as a view
                 # conflict; the next sync then rescans receipts/ in full.
                 db.execute("DELETE FROM metadata WHERE key='receipt_scan_signature'")
         for entry in completed:
             entry.unlink(missing_ok=True)
-        return {'status': 'conflict' if conflicts else 'degraded' if warnings else 'succeeded', 'indexed': len(records), 'deleted': deleted, 'warnings': warnings, 'conflicts': conflicts}
+        result = {'status': 'conflict' if conflicts else 'degraded' if warnings else 'succeeded', 'indexed': len(records), 'deleted': deleted, 'warnings': warnings, 'conflicts': conflicts}
+        if dead_supersedes:
+            result['supersedes_issues'] = dead_supersedes[:20]
+            result['supersedes_issue_count'] = len(dead_supersedes)
+        if self.index_exclusions is not None:
+            # Reported, not a degraded scan: the user chose these names, or the file is not applied.
+            result['index_exclusions'] = self.index_exclusions
+        return result
+
+    def _refuse_excluded(self, source):
+        """A new source under a directory the user keeps out of the index would be written and
+        then fail its read-back; refuse it before anything is written, naming the setting."""
+        excluded = index_exclusions(self.state, self.root)[0]
+        if excluded and any(dir_key(part) in excluded for part in Path(source).parts[:-1]):
+            raise ValueError('source is under a directory excluded from the index (excluded_dirs in index.json)')
 
     def _intent(self, relative, old_hash, content, kind, event=None):
         path = self._path(relative)
@@ -624,6 +985,9 @@ class SyncEngine:
         allowed = {'title', 'status', 'project', 'visibility', 'facts', 'next_action', 'owner', 'priority', 'due_at', 'updated_at', 'supersedes', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if not isinstance(changes, dict) or set(changes) - allowed:
             raise ValueError('unsupported task metadata changes')
+        if 'status' in changes and changes['status'] not in TASK_STATUSES:
+            raise ValueError('valid explicit task status required')
+        _check_task_dates(changes)
         changes, redacted = self._protect_metadata(changes)
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -667,7 +1031,7 @@ class SyncEngine:
             intended = render(metadata, body)
             self._intent(record['source'], record['source_sha256'], intended, 'task')
         result = self.sync()
-        if result['conflicts']:
+        if self._write_blockers(result, record['source']):
             raise RevisionConflict('source projection conflict')
         with self.store._connect() as db:
             row = db.execute('SELECT payload FROM records WHERE id=?', (id,)).fetchone()
@@ -686,6 +1050,7 @@ class SyncEngine:
             raise ValueError('text must be body only; put frontmatter fields in metadata')
         if not source.startswith(('notes/', 'knowledge/', '🔮 850-Companion/')) or not source.endswith('.md'):
             raise ValueError('new semantic notes belong under notes/, knowledge/, or 🔮 850-Companion/')
+        self._refuse_excluded(source)
         metadata = dict(metadata or {})
         valid_types = VALID_MEMORY_TYPES
         if 'type' in metadata and metadata['type'] not in valid_types:
@@ -749,6 +1114,7 @@ class SyncEngine:
             raise ValueError('task body and metadata required')
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
+        self._refuse_excluded(source)
         allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'type', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
@@ -761,8 +1127,9 @@ class SyncEngine:
             raise ValueError('stable task id required')
         if not isinstance(metadata.get('owner'), str) or not metadata['owner'].strip():
             raise ValueError('explicit task owner required')
-        if metadata.get('status') not in ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled'):
+        if metadata.get('status') not in TASK_STATUSES:
             raise ValueError('valid explicit task status required')
+        _check_task_dates(metadata)
         if type(metadata.get('revision', 1)) is not int or metadata.get('revision', 1) != 1:
             raise ValueError('new task revision must be 1')
         if metadata.get('kind', 'task') != 'task':
@@ -845,7 +1212,7 @@ class SyncEngine:
             else:
                 self._intent(source, None, content, 'receipt', event)
         result = self.sync()
-        if result['conflicts']:
+        if self._write_blockers(result, source):
             raise ReceiptConflict('receipt projection conflict')
         if self._path(source, existing=True).read_bytes() != content.encode('utf-8'):
             raise ReceiptConflict('receipt source changed before readback')

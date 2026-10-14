@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
-from v3_package_helpers import clean_environ
+from v3_package_helpers import clean_environ, isolated_path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'template/.claude/scripts'
@@ -50,7 +50,7 @@ class HookInstallerTest(unittest.TestCase):
         home.mkdir()
         self.env = {'HOME': str(home), 'USERPROFILE': str(home), 'APPDATA': str(home / 'appdata'),
                     'LOCALAPPDATA': str(home / 'localappdata'), 'TEMP': str(self.root), 'TMP': str(self.root),
-                    'PATH': os.defpath, 'PYTHONIOENCODING': 'utf-8', 'PYTHONDONTWRITEBYTECODE': '1',
+                    'PATH': isolated_path(), 'PYTHONIOENCODING': 'utf-8', 'PYTHONDONTWRITEBYTECODE': '1',
                     'BEYIN_V3_NO_SPAWN': '1'}
         for key in ('SYSTEMROOT', 'WINDIR'):
             if key in os.environ:
@@ -327,6 +327,8 @@ class HookInstallerTest(unittest.TestCase):
             queued = len(list((self.state / 'hook-queue').glob('*.json')))
             first = self.lifecycle('Stop', session, harness)
             self.assertEqual(first['decision'], 'block')
+            self.assertIn('receipt --harness ' + harness + ' --session ' + hashlib.sha256(session.encode()).hexdigest()[:24], first['reason'])
+            self.assertIn('--event-id EVENT_ID --summary "Work result" --ref PATH', first['reason'])
             self.assertIn('python3 beyin.py receipt --file RECEIPT_JSON --harness ' + harness, first['reason'])
             self.assertIn('Receipt session=' + hashlib.sha256(session.encode()).hexdigest()[:24] + ';', first['reason'])
             # The Stop checkpoint is queued before any reminder work.
@@ -365,6 +367,28 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(self.hook.prompt_text({'prompt': ['a', {'type': 'text', 'text': 'b'}, {'type': 'image'}]}), 'a\nb')
         self.assertEqual(self.hook.prompt_text({'prompt': None}), '')
         self.assertEqual(self.hook.prompt_text(None), '')
+
+    def test_undecodable_prompt_byte_keeps_the_turn_and_a_cut_payload_is_recorded(self):
+        self.seed()
+
+        def raw(data):
+            result = subprocess.run([sys.executable, str(HOOK), '--vault', str(self.vault), '--state', str(self.state),
+                                     '--harness', 'claude'], input=data, capture_output=True, cwd=self.vault,
+                                    env=self.env, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'raw-bytes', 'event_id': 'raw-bytes-1',
+                   'prompt': 'Nebula calibration owner BYTE'}
+        # A stray byte in the prompt is read as U+FFFD; the turn keeps its context.
+        output = raw(json.dumps(payload).encode('utf-8').replace(b'BYTE', b'\xff'))
+        self.assertIn('Nebula calibration owner', output['hookSpecificOutput']['additionalContext'])
+        self.assertFalse((self.state / 'hook-error.json').exists())
+        # A payload cut at the 1 MB read is not JSON: '{}' for the host, and doctor still sees why.
+        cut = json.dumps(dict(payload, event_id='raw-bytes-2', prompt='x' * 1_100_000)).encode('utf-8')
+        self.assertEqual(raw(cut), {})
+        error = json.loads((self.state / 'hook-error.json').read_text(encoding='utf-8'))
+        self.assertEqual(error['error'], 'JSONDecodeError')
 
     def test_stop_receipt_reminder_session_closes_the_gap(self):
         engine = self.seed()
@@ -433,10 +457,47 @@ class HookInstallerTest(unittest.TestCase):
             'Tuned learning-rate schedule in the trainer': False,
             'Ders-plan sayfası düzeltildi': False,
             'Öğrenilen: yok.': False,
+            # A parenthetical only explains a "none" answer; text after it is still a learning.
+            'Öğrenilen: yok (rutin kontrol)': False,
+            'Öğrenilen: yok (ayrıntı araştırma notunda).': False,
+            'Learned: none (routine check)': False,
+            'Öğrenilen: yok (rutin) ama WAL timeout en az 5 sn': True,
+            'Öğrenilen: yoklama (idempotent) akışı': True,
         }
         for summary, expected in cases.items():
             with self.subTest(summary=summary):
                 self.assertIs(declared(summary), expected)
+
+    def test_stop_knowledge_reminder_accepts_human_knowledge_root(self):
+        # The official template keeps human-curated knowledge in 🧠 500-Knowledge/ (or 500-Knowledge/).
+        engine = self.seed()
+        summary = 'Araştırma bitti.\nÖğrenilen: WAL timeout en az 5 sn.'
+        for index, root in enumerate(('🧠 500-Knowledge', '500-Knowledge')):
+            for via_ref in (True, False):
+                with self.subTest(root=root, via_ref=via_ref):
+                    name = f'human-root-{index}-{via_ref}'
+                    session = hashlib.sha256(name.encode()).hexdigest()[:24]
+                    self.lifecycle('PostToolUse', name, 'claude')
+                    note = self.vault / root / 'Ajanlar' / f'wal-{name}.md'
+                    note.parent.mkdir(parents=True, exist_ok=True)
+                    note.write_text('# WAL\n', encoding='utf-8')
+                    refs = ['notes/task.md']
+                    if via_ref:
+                        refs.append(note.relative_to(self.vault).as_posix())
+                    engine.receipt(f'{name}-1', summary, refs, 'claude', session=session)
+                    self.assertEqual(self.lifecycle('Stop', name, 'claude'), {})
+                    os.utime(note, (0, 0))  # keep the folder scan of the next case honest
+
+    def test_stop_knowledge_reminder_ignores_other_roots(self):
+        engine = self.seed()
+        session = hashlib.sha256('elsewhere'.encode()).hexdigest()[:24]
+        self.lifecycle('PostToolUse', 'elsewhere', 'claude')
+        note = self.vault / 'notes' / '500-Knowledge-plan.md'
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text('# plan\n', encoding='utf-8')
+        engine.receipt('elsewhere-1', 'Refactor bitti.\nÖğrenilen: WAL timeout en az 5 sn.',
+                       ['notes/500-Knowledge-plan.md'], 'claude', session=session)
+        self.assertEqual(self.lifecycle('Stop', 'elsewhere', 'claude').get('decision'), 'block')
 
     def test_stop_knowledge_reminder_follows_a_receipt_written_for_the_receipt_reminder(self):
         engine = self.seed()
@@ -574,6 +635,73 @@ class HookInstallerTest(unittest.TestCase):
         self.install()
         self.assertEqual((self.vault / 'AGENTS.md').read_bytes(), first)
 
+    def stale_hook_commands(self):
+        spec = importlib.util.spec_from_file_location('v3_hook_test_installer', INSTALLER)
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        old = self.root / 'old account' / 'Beyin'
+        return installer.commands([str(old / 'python.exe'), str(old / '.claude/scripts/beyin_v3_hook.py'),
+                                   '--vault', str(old), '--state', str(self.root / 'old account' / 'state'),
+                                   '--harness', 'claude'])
+
+    def doctor_report(self):
+        doctor = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                 '--state', str(self.state), 'doctor'], capture_output=True, text=True,
+                                encoding='utf-8', cwd=self.vault, env=self.env, timeout=30)
+        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        return json.loads(doctor.stdout)
+
+    def test_install_replaces_synced_encoded_hooks_from_another_install(self):
+        # #204: hook files synced from another account carry its Windows EncodedCommand entries.
+        # This state has no record of them and the encoded text never names beyin_v3_hook.py.
+        _, encoded = self.stale_hook_commands()
+        (self.vault / '.claude').mkdir()
+        user_hook = {'type': 'command', 'command': 'echo user-owned'}
+        (self.vault / '.claude/settings.local.json').write_text(json.dumps({'hooks': {'SessionStart': [
+            {'hooks': [{'type': 'command', 'command': encoded, 'timeout': 20}]}, {'hooks': [user_hook]}]}}),
+            encoding='utf-8')
+        self.install()
+        groups = json.loads((self.vault / '.claude/settings.local.json').read_text(encoding='utf-8'))['hooks']['SessionStart']
+        commands = [hook['command'] for group in groups for hook in group['hooks']]
+        self.assertNotIn(encoded, commands)
+        self.assertIn(user_hook['command'], commands)
+        self.assertEqual(len([c for c in commands if 'beyin_v3_hook.py' in decoded_command(c)]), 1)
+
+    def test_reinstall_over_synced_encoded_hook_applies_and_drops_it(self):
+        # The same file arriving after this machine's install: reinstall and update must not stop
+        # with a managed-file conflict over it (they did not before #204 either).
+        self.install()
+        _, encoded = self.stale_hook_commands()
+        name = self.vault / '.claude/settings.local.json'
+        data = json.loads(name.read_text(encoding='utf-8'))
+        data['hooks']['SessionStart'].append({'hooks': [{'type': 'command', 'command': encoded, 'timeout': 20}]})
+        name.write_text(json.dumps(data), encoding='utf-8')
+        self.install()
+        groups = json.loads(name.read_text(encoding='utf-8'))['hooks']['SessionStart']
+        commands = [hook['command'] for group in groups for hook in group['hooks']]
+        self.assertNotIn(encoded, commands)
+        self.assertEqual(len([c for c in commands if 'beyin_v3_hook.py' in decoded_command(c)]), 1)
+
+    def test_doctor_reports_hook_commands_from_another_install(self):
+        self.install()
+        report = self.doctor_report()
+        self.assertEqual(report['hook_paths']['status'], 'ok')
+        self.assertGreater(report['hook_paths']['checked'], 0)
+        name = self.vault / '.claude/settings.local.json'
+        data = json.loads(name.read_text(encoding='utf-8'))
+        for command in self.stale_hook_commands():
+            data['hooks']['SessionStart'].append({'hooks': [{'type': 'command', 'command': command, 'timeout': 20}]})
+        name.write_text(json.dumps(data), encoding='utf-8')
+        report = self.doctor_report()
+        self.assertEqual(report['status'], 'needs_attention')
+        paths = report['hook_paths']
+        self.assertEqual(paths['status'], 'stale')
+        old = str(self.root / 'old account' / 'Beyin')
+        reasons = {(item['reason'], item['path']) for item in paths['stale']}
+        self.assertIn(('other_vault', old), reasons)
+        self.assertIn(('hook_script_missing', str(Path(old) / '.claude/scripts/beyin_v3_hook.py')), reasons)
+        self.assertIn('--state', paths['hint'])
+
     def test_installed_command_runs_with_spaces_and_unicode(self):
         self.install()
         self.seed()
@@ -585,13 +713,28 @@ class HookInstallerTest(unittest.TestCase):
         command = [hook['command']] + hook['args'] if hook.get('args') else hook['command']
         payload = json.dumps(dict(self.payload, hook_event_name='SessionStart', prompt='Nebula calibration'))
         if os.name == 'nt':
-            bash = shutil.which('bash', path=os.environ.get('PATH'))
+            # System32\bash.exe is the WSL launcher; Claude Code uses Git for Windows' bash (#204).
+            git_bash = [p for p in (r'C:\Program Files\Git\bin\bash.exe', r'C:\Program Files\Git\usr\bin\bash.exe')
+                        if os.path.exists(p)]
+            bash = git_bash[0] if git_bash else shutil.which('bash', path=os.environ.get('PATH'))
             self.assertIsNotNone(bash, 'Native Claude Code on Windows requires Git Bash')
             launcher = str(command).split(' -NoProfile ')[0]
             probe = subprocess.run([bash, '-lc', launcher + " -NoProfile -NonInteractive -Command 'exit 0'"],
                                    text=True, encoding='utf-8', capture_output=True,
                                    cwd=self.vault, env=self.env, timeout=20)
             self.assertEqual(probe.returncode, 0, probe.stderr)
+            # The whole encoded command, not only its launcher, must survive Git Bash (#204), as a plain
+            # and as a login shell. Without PATHEXT Windows PowerShell does not run python.exe as a
+            # console program: the command returns exit 0 with no output and leaves a process behind
+            # (measured on the runners). cmd.exe supplies PATHEXT when it is missing, Git Bash passes the
+            # environment on as it is, so this cleared environment has to carry it like a real session does.
+            bash_env = dict(self.env, PATHEXT=os.environ.get('PATHEXT') or '.COM;.EXE;.BAT;.CMD')
+            for flag in ('-c', '-lc'):
+                through_bash = subprocess.run([bash, flag, str(command)], input=payload, text=True, encoding='utf-8',
+                                              capture_output=True, cwd=self.vault, env=bash_env, timeout=30)
+                self.assertEqual(through_bash.returncode, 0, (flag, through_bash.stderr))
+                self.assertIn('Synthetic Reviewer',
+                              json.loads(through_bash.stdout)['hookSpecificOutput']['additionalContext'], flag)
             result = subprocess.run(command, shell=True, input=payload, text=True, encoding='utf-8',
                                     capture_output=True, cwd=self.vault, env=self.env, timeout=20)
         else:
