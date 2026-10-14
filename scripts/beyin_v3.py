@@ -742,6 +742,9 @@ def parser():
                        help="Explicit range end, inclusive: YYYY-MM-DD covers that whole local day; without "
                             "--since there is no lower bound")
     recap.set_defaults(usage_error=recap.error)  # cross-flag checks in main() report with recap's own usage
+    triage = sub.add_parser("triage", help="Vault digestion report: inbox items, stale tasks, and weekly knowledge summary")
+    triage.add_argument("--stale-days", type=int, default=14, help="Days of inactivity before an open task is considered stale (default: 14)")
+    triage.add_argument("--digest-days", type=int, default=7, help="Days to look back for knowledge notes and outcomes (default: 7)")
     settings = sub.add_parser("preferences", help="Control automatic local checks and injected context")
     settings.add_argument("--profile", choices=("normal", "economical", "manual"))
     settings.add_argument("--auto-sync", choices=("on", "off"))
@@ -1311,6 +1314,10 @@ def main(argv=None, return_result=False):
                 result['partial'] = True
                 result['source_sync'] = {'status': 'degraded', 'warnings': warnings[:20],
                                          'warning_count': len(warnings), 'truncated': len(warnings) > 20}
+        elif args.command == "triage":
+            _ensure_scripts_path()
+            import beyin_v3_triage as triage_module
+            result = triage_module.triage(vault, state=state, stale_days=args.stale_days, digest_days=args.digest_days)
         elif args.command == "ingest":
             payload = read_json(args.file)
             result = [store.ingest(record) for record in payload] if isinstance(payload, list) else store.ingest(payload)
