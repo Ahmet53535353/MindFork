@@ -804,6 +804,10 @@ def parser():
     pscope.add_argument("--project", help="Project identifier for the folder")
     pscope.add_argument("--shared-unscoped", choices=["on", "off"],
                         help="Toggle whether unassigned notes are visible in project scope")
+    ingest_server = sub.add_parser("ingest-server", help="Local-first HTTP ingest server for mobile captures")
+    ingest_server.add_argument("--host", default="127.0.0.1", help="Host interface to bind (default 127.0.0.1)")
+    ingest_server.add_argument("--port", type=int, default=8484, help="Port to listen on (default 8484)")
+    ingest_server.add_argument("--token", help="Optional Bearer token for authentication")
     return root
 
 
@@ -849,10 +853,15 @@ def main(argv=None, return_result=False):
         if read_only_context and args.jev:
             raise ValueError("context --no-sync cannot be combined with --jev")
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
-        engine = load_engine() if args.command not in ("jev", "project-scope") else None
+        engine = load_engine() if args.command not in ("jev", "project-scope", "ingest-server") else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
         sync = load_sync()(vault, state) if args.command in ("sync", "recover-views", "recap", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
-        if args.command == "init":
+        if args.command == "ingest-server":
+            _ensure_scripts_path()
+            import beyin_v3_ingest_server
+            beyin_v3_ingest_server.run_server(vault, host=args.host, port=args.port, token=args.token)
+            return 0
+        elif args.command == "init":
             result = {"initialized": True, "state": str(state), "network": False,
                       "hooks_installed": False, "optional_provider": None}
         elif args.command == "preferences":
