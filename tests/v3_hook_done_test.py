@@ -96,10 +96,10 @@ class HookDoneLedgerTest(unittest.TestCase):
         original = Path.unlink
         def deny_done_unlink(path, *args, **kwargs):
             if path == old:
-                raise PermissionError("simulated interruption after DB commit")
+                raise OSError("simulated interruption after DB commit")
             return original(path, *args, **kwargs)
         with patch.object(Path, "unlink", deny_done_unlink):
-            with self.assertRaises(PermissionError):
+            with self.assertRaises(OSError):
                 ledger.prune(self.store)
         self.assertTrue(old.exists())
         self.assertTrue(ledger.acknowledged(self.state, key))
@@ -114,10 +114,10 @@ class HookDoneLedgerTest(unittest.TestCase):
         original = Path.unlink
         def deny_done_unlink(path, *args, **kwargs):
             if path == old:
-                raise PermissionError("keep both copies for race test")
+                raise OSError("keep both copies for race test")
             return original(path, *args, **kwargs)
         with patch.object(Path, "unlink", deny_done_unlink):
-            with self.assertRaises(PermissionError):
+            with self.assertRaises(OSError):
                 ledger.prune(self.store)
         self.assertTrue(ledger.acknowledged(self.state, key))
         real_read_text = Path.read_text
@@ -223,6 +223,25 @@ class HookDoneLedgerTest(unittest.TestCase):
         self.assertEqual(report["lifecycle"]["claude"]["events"], ["SessionStart"])
         self.assertEqual(report["lifecycle"]["codex"]["events"], ["Stop"])
 
+
+
+    def test_prune_survives_permission_error_on_unlink(self):
+        """On Windows, a file held open raises PermissionError on unlink; prune continues removing others."""
+        _key1, path1 = self.marker("file1", event="SessionStart")
+        _key2, path2 = self.marker("file2", event="SessionEnd")
+
+        real_unlink = Path.unlink
+        def deny_one(path, *args, **kwargs):
+            if path == path1:
+                raise PermissionError(13, "Permission denied")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", deny_one):
+            removed = ledger.prune(self.store)
+            self.assertEqual(removed, 1)
+
+        self.assertTrue(path1.exists())
+        self.assertFalse(path2.exists())
 
 if __name__ == "__main__":
     unittest.main()

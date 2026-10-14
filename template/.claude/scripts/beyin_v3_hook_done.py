@@ -103,8 +103,8 @@ def prune(store, now=None):
             if not path.is_symlink():
                 path.unlink()
                 removed += 1
-        except FileNotFoundError:
-            pass  # Another cleanup worker already removed the committed marker.
+        except (FileNotFoundError, PermissionError):
+            pass  # Another cleanup worker already removed the committed marker, or Windows kept it open.
     return removed
 
 
