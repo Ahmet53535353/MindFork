@@ -629,7 +629,7 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
         retrieval_budget = min(remaining, retrieval_share) if companion_clipped else remaining
         ranked = store.context_for(harness, query, project=project, budget_chars=max(0, retrieval_budget - 100))
     elif not companion_clipped and remaining > 200:
-        ranked = store.snapshot_context(budget_chars=min(1500, max(0, remaining - 100)))
+        ranked = store.snapshot_context(project=project, budget_chars=min(1500, max(0, remaining - 100)))
     else:
         ranked = {'records': []}
     used = {r['source'] for r in records}
