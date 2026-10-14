@@ -40,8 +40,10 @@ def main():
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--event", required=True, choices=EVENTS)
     args = parser.parse_args()
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
     try:
-        payload = json.loads(sys.stdin.read(1_000_000) or "{}")
+        payload = json.loads(sys.stdin.read(1_000_000).lstrip("\ufeff").strip() or "{}")
     except ValueError:
         payload = {}
     value = context(args.vault, args.state, args.event, payload)

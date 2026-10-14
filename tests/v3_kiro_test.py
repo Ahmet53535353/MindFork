@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 
+from v3_package_helpers import inherited_env
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts/install_v3.py"
@@ -20,7 +22,7 @@ class KiroIntegrationTest(unittest.TestCase):
         self.vault = root / "Synthetic Kiro Vault"
         self.vault.mkdir()
         self.state = root / "state"
-        self.env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", BEYIN_V3_NO_SPAWN="1")
+        self.env = inherited_env(PYTHONDONTWRITEBYTECODE="1", BEYIN_V3_NO_SPAWN="1")
 
     def run_python(self, script, *args, payload=None, env=None):
         result = subprocess.run([sys.executable, str(script), *map(str, args)],
@@ -42,7 +44,8 @@ class KiroIntegrationTest(unittest.TestCase):
                          ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"])
         self.assertEqual(data["hooks"][2]["matcher"], "write")
         self.assertTrue(all(h["action"]["type"] == "command" for h in data["hooks"]))
-        self.assertTrue(all("beyin_v3_kiro.py" in h["action"]["command"] for h in data["hooks"]))
+        from v3_hook_reconcile_test import decoded_command
+        self.assertTrue(all("beyin_v3_kiro.py" in decoded_command(h["action"]["command"]) for h in data["hooks"]))
         for skill in ("beyin", "beyin-doktor", "beyin-guncelle"):
             canonical = self.vault / ".agents/skills" / skill / "SKILL.md"
             mirror = self.vault / ".kiro/skills" / skill / "SKILL.md"
@@ -70,7 +73,7 @@ class KiroIntegrationTest(unittest.TestCase):
             definitions = json.loads((self.vault / ".kiro/hooks/beyin-v3.json").read_text())
             command = next(h["action"]["command"] for h in definitions["hooks"]
                            if h["trigger"] == "UserPromptSubmit")
-            actual = subprocess.run(command, shell=True, input=json.dumps({"session_id": "kiro-shell"}),
+            actual = subprocess.run(command, shell=True, input="\ufeff" + json.dumps({"session_id": "kiro-shell"}),
                                     text=True, encoding="utf-8", capture_output=True,
                                     cwd=self.vault, env=env, timeout=30)
             self.assertEqual(actual.returncode, 0, actual.stderr)
