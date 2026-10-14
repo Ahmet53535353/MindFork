@@ -1165,14 +1165,17 @@ class MemoryStore:
             aliases = record.get("aliases", [])
             aliases = aliases if isinstance(aliases, list) else []
             alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
-            source_stem = Path(record.get("source", "")).stem.replace("-", " ").replace("_", " ")
+            name_score = self._name_match_score(record, terms)
+            # A filename is a salience signal only for an actual topical name match.
+            # Unrelated/generic stems must not widen candidates or dilute BM25 lengths.
+            source_stem = (Path(record.get("source", "")).stem.replace("-", " ").replace("_", " ")
+                           if name_score else "")
             counts = _token_counts(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text + " " + source_stem)
             for stopword in STOPWORDS & counts.keys():
                 del counts[stopword]
             vocabulary = set(counts)
             vocabularies[record["id"]] = vocabulary
             term_counts[record["id"]] = counts
-            name_score = self._name_match_score(record, terms)
             if name_score:
                 name_scores[record["id"]] = name_score
             score = len(terms & vocabulary)

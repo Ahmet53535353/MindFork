@@ -44,6 +44,17 @@ class TitleMatchSearchTest(unittest.TestCase):
         res = self.store.retrieve(query, limit=limit, strict=strict)
         return [r["id"] for r in res.get("records", [])]
 
+    def test_unmatched_filename_does_not_create_topic_candidate(self):
+        self.ingest('actual', 'Toplanti icin not ve kararlar.', 'toplanti.md')
+        self.ingest('other', 'Farkli konu ve icerik.', 'kisa-not.md')
+        self.assertEqual(self.ids('notlar'), ['actual'])
+
+    def test_unrelated_filename_lengths_do_not_change_existing_bm25_order(self):
+        self.ingest('a', 'calculus geometry ' * 3, 'a.md')
+        self.ingest('b', 'calculus geometry ' * 3, 'a-very-long-unrelated-filename.md')
+        # Equal content keeps the existing stable id tiebreak, independent of path length.
+        self.assertEqual(self.ids('calculus geometry'), ['b', 'a'])
+
     def test_generic_titles_do_not_receive_name_boost(self):
         for title in ('DURUM', 'Proje', 'Notlar', 'Kararlar'):
             record = {'title': title, 'source': title + '.md'}
