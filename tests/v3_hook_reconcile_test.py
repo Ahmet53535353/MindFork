@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline tests for explicit hook reconciliation (#205)."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -249,6 +250,33 @@ class HookReconcileTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         command = json.loads(path.read_text(encoding='utf-8'))['hooks']['SessionStart'][0]['hooks'][0]['command']
         self.assertIn(str(self.state.resolve()), decoded_command(command))
+
+    def test_reconciled_vault_uninstalls_cleanly(self):
+        # Issue #353: install, simulate stale hook or reconcile, verify uninstall succeeds without conflict
+        self.install()
+        stale_posix, stale_win = self.stale_hook_commands()
+        path = self.vault / '.claude/settings.local.json'
+        data = json.loads(path.read_text(encoding='utf-8'))
+        data['hooks']['SessionStart'][0]['hooks'][0]['command'] = stale_win if os.name == 'nt' else stale_posix
+        path.write_text(json.dumps(data), encoding='utf-8')
+
+        # Reconcile hooks
+        res_recon = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'hook-reconcile'],
+                                   env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(res_recon.returncode, 0, res_recon.stderr)
+        self.assertEqual(json.loads(res_recon.stdout)['status'], 'reconciled')
+
+        # Verify manifest files hash was updated
+        manifest = json.loads((self.state / 'v3-install.json').read_text(encoding='utf-8'))
+        self.assertEqual(manifest['files']['.claude/settings.local.json']['installed_hash'],
+                         hashlib.sha256(path.read_bytes()).hexdigest())
+
+        # Uninstall must succeed without "managed file changed" conflict
+        res_uninst = subprocess.run([sys.executable, str(INSTALLER), '--vault', str(self.vault),
+                                     '--state', str(self.state), '--uninstall'],
+                                    env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(res_uninst.returncode, 0, res_uninst.stderr)
+        self.assertEqual(json.loads(res_uninst.stdout)['status'], 'uninstalled')
 
 
 if __name__ == "__main__":

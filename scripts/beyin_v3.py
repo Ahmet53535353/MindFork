@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -583,12 +584,21 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
             total_reconciled += file_reconciled
 
     manifest_path = state / "v3-install.json"
-    if manifest_path.is_file() and all_new_commands:
+    if manifest_path.is_file() and (all_new_commands or reconciled_files):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             cmds = set(manifest.get("commands", []))
             cmds.update(all_new_commands)
             manifest["commands"] = sorted(cmds)
+            files = manifest.get("files", {})
+            for rec in reconciled_files:
+                name = rec["file"]
+                if name in files and isinstance(files[name], dict):
+                    file_path = vault / name
+                    if file_path.is_file():
+                        file_bytes = file_path.read_bytes()
+                        files[name]["installed_hash"] = hashlib.sha256(file_bytes).hexdigest()
+                        files[name]["installed_content"] = base64.b64encode(file_bytes).decode("ascii")
             _write_hook_json(manifest_path, manifest)
         except (OSError, ValueError, UnicodeError):
             pass
