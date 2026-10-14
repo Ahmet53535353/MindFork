@@ -733,7 +733,6 @@ def parser():
     settings.add_argument("--companion-context-chars", type=int,
                           help="Opening context budget (SessionStart, continuity questions), 1000..24000; 0 uses --context-chars")
     settings.add_argument("--secret-filter", choices=("on", "off"))
-    settings.add_argument("--daily-log", choices=("on", "off"), help="Append per-session facts blocks to daily/log/YYYY-MM-DD.md")
     settings.add_argument("--update-notifications", choices=("on", "off"))
     settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
     settings.add_argument("--threads-chars", type=int, help="Hygiene limit for Threads.md; 0 turns it off")
@@ -947,24 +946,12 @@ def main(argv=None, return_result=False):
                     result_excluded = exclusions.read_exclusions(vault)
                 except ValueError as exc:
                     result_excluded, exclusion_notice = [], 'Haric tutma dosyasi gecersiz: ' + str(exc)
-            # Before the vault file is written, so a pre-move daily log choice reaches the
-            # state instead of being dropped with the key.
-            preferences.migrate_legacy_daily_log(vault, state)
             settings = preferences.save(vault, changes, args.profile) if changes or args.profile else preferences.read(vault)
             result = {'status': 'saved' if changes or args.profile or (args.exclude_component or args.include_component) else 'current',
                       'preferences': settings, 'excluded_components': result_excluded,
                       'model_calls': False, 'timer_installed': False}
             if exclusion_notice:
                 result['exclusion_notice'] = exclusion_notice
-            # Machine-local like the hygiene opt-ins: a key in .beyin-preferences.json that a
-            # rolled-back build does not know takes doctor, preferences and the hook down with
-            # it, so the daily log choice is read from the runtime state and never written
-            # back into the vault schema.
-            result['daily_log'] = (preferences.save_daily_log(state, args.daily_log == 'on')
-                                   if args.daily_log is not None
-                                   else preferences.read_daily_log(state, vault)[0])
-            if args.daily_log is not None:
-                result['status'] = 'saved'
             # Machine-local like update notifications: rollback-safe, outside the vault schema.
             result['companion_limits'] = companion.save_limits(state, limits) if limits else companion.read_limits(state)[0]
             if limits:

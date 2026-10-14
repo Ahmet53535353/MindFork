@@ -50,63 +50,6 @@ class PreferencesTest(unittest.TestCase):
         self.assertFalse(result['model_calls'])
         self.assertFalse(result['timer_installed'])
 
-    def test_daily_log_is_on_by_default_in_every_profile(self):
-        # Insan kullanimi E2E'si: gunluk log en gorunur hatirlatma ozelligiydi ama
-        # hicbir profilde varsayilan kapaliydi, o yuzden hic kimse bulamadi. Secim makine
-        # yerel durumda duruyor ama her profilde acik.
-        self.assertTrue(prefs.DEFAULT_DAILY_LOG)
-        self.assertTrue(prefs.read_daily_log(self.state, self.vault)[0])
-        self.assertTrue(self.cli('preferences')['daily_log'])
-
-    def test_daily_log_opt_out_survives_profile_changes_and_stays_off(self):
-        # Ayar artik belirlendigi icin profil degisimi onu sifirlamamali.
-        self.assertFalse(self.cli('preferences', '--daily-log', 'off')['daily_log'])
-        for name in ('economical', 'manual', 'normal'):
-            self.assertFalse(self.cli('preferences', '--profile', name)['daily_log'], name)
-        self.assertFalse(self.cli('preferences')['daily_log'])
-        self.assertFalse(prefs.read_daily_log(self.state, self.vault)[0])
-
-    def test_daily_log_chosen_is_false_until_the_user_sets_it(self):
-        # The notice goes only to a user who never stated a choice, and reading it writes
-        # nothing. Unlike the old key-presence proxy, an unrelated preference no longer counts
-        # as an answer: the state file is the answer, and it holds this setting alone.
-        self.assertFalse(prefs.daily_log_chosen(self.state, self.vault))
-        self.cli('preferences')
-        self.assertFalse(prefs.daily_log_chosen(self.state, self.vault))
-        self.assertFalse((self.state / 'daily-log.json').exists())
-        self.cli('preferences', '--context-chars', '6000')
-        self.assertFalse(prefs.daily_log_chosen(self.state, self.vault),
-                         'ilgisiz bir tercih bu soruyu yanitlamamali')
-        self.cli('preferences', '--daily-log', 'off')
-        self.assertTrue(prefs.daily_log_chosen(self.state, self.vault))
-        self.cli('preferences', '--context-chars', '7000')
-        self.assertTrue(prefs.daily_log_chosen(self.state, self.vault), 'kayit durmali')
-
-    def test_daily_log_never_enters_the_vault_preference_schema(self):
-        # Upstream #132 found this trap: a key in .beyin-preferences.json that the build you
-        # rolled back to does not know makes validate() reject the file, and doctor,
-        # preferences and the SessionStart hook all fail behind it. So the opt-in lives in the
-        # runtime state and does not even create the file; a file saved before the move is
-        # still honoured, and the next save drops the key, which leaves it as a rolled-back
-        # build expects.
-        self.cli('preferences', '--daily-log', 'off')
-        self.assertFalse((self.vault / '.beyin-preferences.json').exists(),
-                         'gunluk log tercihi vault tercih dosyasini olusturmamali')
-        self.cli('preferences', '--context-chars', '6000')
-        stored = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
-        self.assertEqual(set(stored), {'auto_sync', 'interval_minutes', 'context_mode',
-                                        'context_chars', 'secret_filter'})
-        self.vault.joinpath('.beyin-preferences.json').write_text(
-            json.dumps(dict(stored, daily_log=False)), encoding='utf-8')
-        (self.state / 'daily-log.json').unlink()
-        self.assertFalse(prefs.read_daily_log(self.state, self.vault)[0], 'eski dosyadaki secim kaybolmamali')
-        self.cli('preferences', '--context-chars', '7000')
-        healed = json.loads((self.vault / '.beyin-preferences.json').read_text(encoding='utf-8'))
-        self.assertNotIn('daily_log', healed, 'bir sonraki kayit eski anahtari temizlemeli')
-        self.assertTrue((self.state / 'daily-log.json').exists(), 'eski secim duruma tasinmali')
-        self.assertFalse(prefs.read_daily_log(self.state, self.vault)[0],
-                         'anahtar temizlendi ama secim geri donmemeli')
-
     def test_secret_filter_is_explicit_and_survives_profile_changes(self):
         self.assertFalse(self.cli('preferences')['preferences']['secret_filter'])
         self.assertTrue(self.cli('preferences', '--secret-filter', 'on')['preferences']['secret_filter'])

@@ -843,27 +843,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         ):
             self.assertIn(expected, m.context_sources(query), query)
 
-    def test_q9_daily_log_calendar(self):
-        """Gunluk log ay takvimine yayildi mi, ozet bolumleri durdu mu?"""
-        m = self.month
-        logs = sorted(p.name for p in (m.vault / 'daily/log').glob('*.md'))
-        self.assertNotIn(f'{dt.date.today().isoformat()}.md', logs, 'gercek tarihli gunluk log kaldi')
-        for day in (vday(1), vday(4), vday(6), vday(20), vday(29)):
-            self.assertIn(f'{day}.md', logs)
-        self.assertNotIn(vday(13), logs, 'tatil gununde oturum logu olmamali')
-        text = (m.vault / 'daily/log' / f'{vday(6)}.md').read_text(encoding='utf-8')
-        self.assertIn('Idempotency anahtarı', text, 'ajanin doldurdugu Ozet korunmadi')
-        daily = sorted(p.name for p in (m.vault / 'daily/v3').glob('*.md'))
-        self.assertIn(f'{vday(6)}.md', daily, 'receipt projectioni geriye tarihlemedi')
-        self.assertNotIn(f'{dt.date.today().isoformat()}.md', daily)
-        # Gun 1: kullanici hicbir sey yapmadi ve gunluk log yine yazildi (varsayilan acik).
-        self.assertIn(f'{vday(0)}.md', logs, 'varsayilan acikken ilk gun gunluk logu olusmadi')
-        # Kesfedilebilirlik: ajan ilk oturumda kapatma yolunu ogrendi, sonraki oturumlarda
-        # tekrar etmedi (uyari bir kez).
-        self.assertIn('--daily-log off', m.first_context)
-        self.assertEqual([c for c in m.start_contexts if '--daily-log off' in c], [m.first_context],
-                         'gunluk log uyarisi birden fazla oturumda tekrarlandi')
-
     def test_q10_strict_task_gate_rejects_unevidenced_done(self):
         """Kanitsiz strict done reddedildi, kanitli kabul edildi."""
         m = self.month

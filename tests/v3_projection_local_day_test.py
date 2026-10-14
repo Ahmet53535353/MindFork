@@ -1,10 +1,10 @@
 """A receipt's daily index is named in the machine's day, and an old day leaves nothing behind.
 
 `beyin_v3_projections.py` used to slice the day straight off the stored UTC stamp
-(`event['created_at'][:10]`) while the human daily log (`beyin_v3_sessionlog._day`) follows the
-machine. At +03:00 the first hours of a day landed under yesterday's name in one file and today's
-in the other, so one working day was split across two files. Both live in `daily/` and both answer
-"what happened today", so they must read the same clock: the machine's. The consolidation window
+(`event['created_at'][:10]`) while the machine's own clock was the one the user reads. At +03:00
+the first hours of a day landed under yesterday's name in one file and today's in the other, so
+one working day was split across two files. Both answer "what happened today", so they must read
+the same clock: the machine's. The consolidation window
 (`beyin_v3_dream._now`) stays UTC on purpose -- it is a batch boundary, not a human day, and
 `tests/v3_local_utc_day_divergence_test.py` pins that split.
 

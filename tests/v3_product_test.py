@@ -44,7 +44,6 @@ class ProductInstallationTest(unittest.TestCase):
         self.installed()
         scripts = self.vault / '.claude/scripts'
         names = sorted(path.stem for path in scripts.glob('*.py'))
-        self.assertIn('beyin_v3_sessionlog', names)
         probe = ('import sys\n'
                  'sys.path.insert(0, sys.argv[1])\n'
                  'import importlib\n'

@@ -483,7 +483,6 @@ def main():
                                                    harness=args.harness, state=state)
             except Exception:
                 pass
-        log_line = None
         if not args.metadata_only:
             # Opt-in parallel-session notice (#170), machine-local in state/parallel-sessions.json.
             # Without that file a prompt costs one stat; SessionEnd still removes its own marker.
@@ -500,26 +499,8 @@ def main():
             except Exception:
                 pass  # a marker can never cost the turn
 
-        # The daily log is its own switch. It sat inside the parallel-session block above for a
-        # moment, which made the log's notice ride on that feature's off switch -- and the #170
-        # contract is that with the switch off the hook output is byte-identical to no feature.
-        log_line = None
-        if not args.metadata_only:
-            from beyin_v3_preferences import read_daily_log
-            if read_daily_log(state, vault)[0] and event in ('SessionStart', 'SessionEnd'):
-                try:
-                    import beyin_v3_sessionlog
-                    if event == 'SessionStart':
-                        log_line = beyin_v3_sessionlog.session_start(vault, state, settings, args.harness,
-                                                                     payload.get('session_id', 'unknown'))
-                        log_line = (log_line or '') + beyin_v3_sessionlog.default_notice(vault, state)
-                    else:
-                        beyin_v3_sessionlog.session_end(vault, state, settings, args.harness,
-                                                        payload.get('session_id', 'unknown'))
-                except Exception:
-                    log_line = None  # the daily log can never cost the hook its real job
         if not settings['auto_sync']:
-            print(json.dumps(output_context(args.harness, event, (notice + (log_line or ''))[:settings['context_chars']])) if (notice or log_line) else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
+            print(json.dumps(output_context(args.harness, event, notice[:settings['context_chars']])) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return
         enqueue_event(vault, state, payload, args.harness)
         command = [sys.executable, str(Path(__file__).resolve()), "--vault", str(vault),
@@ -645,7 +626,7 @@ def main():
 # The daily log line rides along inside the client's own limit (#175), not on top of
             # it, so a Claude Code or Codex cut-off can never be pushed past by the log.
             output = output_context(args.harness, event,
-                                    fit_client(args.harness, (notice + text + (log_line or ''))[:limit]))
+                                    fit_client(args.harness, (notice + text)[:limit]))
             print(json.dumps(output))
         else:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}")))

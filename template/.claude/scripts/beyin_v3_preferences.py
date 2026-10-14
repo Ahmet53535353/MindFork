@@ -20,14 +20,8 @@ PROFILES = {
 # and while it defaulted off nobody could discover it existed. Users who never state a choice
 # get one SessionStart line naming the opt-out, then silence
 # (docs/specs/2026-09-26-followup-findings-plan.md).
-DEFAULT_DAILY_LOG = True
-# Read from an existing file, never written back: a vault saved before the move keeps the
-# choice it has, and the next preferences save drops the key, so the file self-heals.
-LEGACY_PREFERENCES_KEYS = {'daily_log'}
-
-
 def validate(value):
-    if not isinstance(value, dict) or set(value) - set(PROFILES['normal']) - LEGACY_PREFERENCES_KEYS:
+    if not isinstance(value, dict) or set(value) - set(PROFILES['normal']):
         raise ValueError('Unsupported preferences; use beyin.py preferences')
     result = dict(PROFILES['normal'], **{key: item for key, item in value.items() if key in PROFILES['normal']})
     if type(result['auto_sync']) is not bool:
@@ -52,80 +46,6 @@ def preferences_path(vault):
 def read(vault):
     path = preferences_path(vault)
     return validate(json.loads(path.read_text(encoding='utf-8')) if path.exists() else {})
-
-
-def daily_log_path(state):
-    return Path(state) / 'daily-log.json'
-
-
-def read_daily_log(state, vault):
-    """The daily log opt-in, and whether the user ever stated one of their own.
-
-    Machine-local, like the hygiene opt-ins: it is a habit of this machine, and a released
-    preferences file has to stay valid for a build that predates the setting. A malformed or
-    unreadable state file keeps the default and counts as answered, so a damaged file cannot
-    turn into a notice on every single session.
-    """
-    path = daily_log_path(state)
-    if not path.exists():
-        return _legacy_daily_log(vault)
-    try:
-        stored = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return DEFAULT_DAILY_LOG, True
-    if isinstance(stored, dict) and type(stored.get('daily_log')) is bool:
-        return stored['daily_log'], True
-    return DEFAULT_DAILY_LOG, True
-
-
-def _legacy_daily_log(vault):
-    """The choice in a file saved before the move, and the 'never asked' signal it stands for."""
-    try:
-        path = preferences_path(vault)
-        if not path.exists():
-            return DEFAULT_DAILY_LOG, False  # never touched: this user is owed the one line
-        stored = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        return DEFAULT_DAILY_LOG, True       # unreadable or not a regular file: never fresh
-    if isinstance(stored, dict) and type(stored.get('daily_log')) is bool:
-        return stored['daily_log'], True
-    return DEFAULT_DAILY_LOG, False
-
-
-def daily_log_chosen(state, vault):
-    return read_daily_log(state, vault)[1]
-
-
-def migrate_legacy_daily_log(vault, state):
-    """Carry a choice made before the move out of .beyin-preferences.json into the state, once.
-
-    Without this the choice would only be read from the file, and the next preferences save
-    would drop the key -- silently turning a deliberate opt-out back on. The vault file has one
-    writer, the preferences command, so the migration runs there and nowhere else.
-    """
-    if daily_log_path(state).exists():
-        return None
-    value, chosen = _legacy_daily_log(vault)
-    return save_daily_log(state, value) if chosen else None
-
-
-def save_daily_log(state, on):
-    """Validated before anything is written, like the companion limits, and written atomically."""
-    if type(on) is not bool:
-        raise ValueError('daily_log must be boolean')
-    path = daily_log_path(state)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix='.daily-log-', dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as out:
-            json.dump({'daily_log': on}, out, ensure_ascii=False, indent=2)
-            out.write('\n'); out.flush(); os.fsync(out.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-    return on
-
 
 def save(vault, changes, profile=None):
     # Validate the existing file too: malformed user settings must not be overwritten.

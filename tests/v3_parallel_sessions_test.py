@@ -43,11 +43,9 @@ class ParallelSessionsTest(unittest.TestCase):
                                  '--state', str(self.state)], capture_output=True, text=True, encoding='utf-8',
                                 env=self.env, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr)
-        # This suite measures the parallel-session switch on its own. The daily log is a
-        # separate opt-in that is on by default and prints a one-time notice on its first
-        # session, so leaving it on makes the "off output is byte-identical to no feature"
-        # comparison run against two different vaults' worth of context. Off, deliberately.
-        self.cli('preferences', '--daily-log', 'off')
+        # This suite measures the parallel-session switch on its own. Nothing else writes
+        # to the notice channel, so the "off output is byte-identical to no feature"
+        # comparison compares like with like.
 
     def cli(self, *args):
         result = subprocess.run([sys.executable, str(self.vault / '.claude/scripts/beyin_v3_cli.py'), '--vault',
