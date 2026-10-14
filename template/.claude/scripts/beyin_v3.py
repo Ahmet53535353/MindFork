@@ -508,6 +508,16 @@ def _tokens(text):
 STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel soyle getir bul yok say ignore disregard no")
 
 
+def _strict_terms(terms):
+    """Filter out non-topical terms in strict mode (#358).
+
+    Drops single-character tokens and numeric-only tokens shorter than 3 digits
+    (e.g. '1', '2', '42'). Preserves years ('2026'), 3+ digit numbers ('200'),
+    and alphanumeric identifiers ('722b4dd').
+    """
+    return {t for t in terms if len(t) >= 2 and not (t.isdigit() and len(t) < 3)}
+
+
 def _path_redirected(path):
     """Symlinks and Windows reparse points require a fresh realpath check."""
     try:
@@ -1066,6 +1076,12 @@ class MemoryStore:
         project_tokens = _tokens(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
+        if strict:
+            terms = _strict_terms(terms)
+            if not terms and not scoped_listing and not snapshot:
+                if candidate_only:
+                    return []
+                return pack_context([], limit, budget_chars, stale_count)
         ranked = []
         vocabularies = {}
         term_counts = {}
