@@ -178,14 +178,17 @@ class HermesHarnessTest(unittest.TestCase):
         with patch.object(self.module, 'run_hook', return_value='') as run:
             hooks['pre_llm_call'](session_id='tg-1', turn_id='1', user_message='selam', is_first_turn=True, platform='telegram')
             hooks['on_session_finalize'](session_id='tg-1', platform='gateway')
+            hooks['pre_llm_call'](session_id='a2a-1', turn_id='1', user_message='task', is_first_turn=True, platform='a2a')
+            hooks['on_session_finalize'](session_id='a2a-1', platform='gateway')
             hooks['pre_llm_call'](session_id='cli-1', turn_id='1', user_message='selam', is_first_turn=True, platform='cli')
             hooks['on_session_finalize'](session_id='cli-1', platform='gateway')
             hooks['on_session_finalize'](session_id='never-seen')
         events = [(c.args[2]['session_id'], c.args[2]['hook_event_name']) for c in run.call_args_list]
         self.assertNotIn(('tg-1', 'SessionEnd'), events, 'Telegram session must not be receipt-tracked')
+        self.assertNotIn(('a2a-1', 'SessionEnd'), events, 'A2A session must not be receipt-tracked')
         self.assertIn(('cli-1', 'SessionEnd'), events, 'Interactive session keeps receipt tracking')
         self.assertIn(('never-seen', 'SessionEnd'), events, 'Unknown platform defaults to tracking')
-        self.assertTrue(self.module.UNATTENDED_PLATFORMS >= {'telegram', 'cron'})
+        self.assertTrue(self.module.UNATTENDED_PLATFORMS >= {'telegram', 'cron', 'a2a'})
 
     def test_receipt_reminder_every_nth_user_turn(self):
         hooks = self.module.make_hooks(self.vault, self.state)

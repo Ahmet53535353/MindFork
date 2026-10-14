@@ -61,8 +61,8 @@ close, so it is deliberately not bound.
 ### Unattended sessions
 
 Hermes passes `platform` to `pre_llm_call`. Sessions on platforms nobody sits in front of
-(`cron`, `telegram`, `discord`, `slack`, `whatsapp`, `signal`, `matrix`, `email`, `sms`,
-`webhook`; see `UNATTENDED_PLATFORMS`) still receive context, but their finalize does **not**
+(`a2a`, `cron`, `telegram`, `discord`, `slack`, `whatsapp`, `signal`, `matrix`, `email`,
+`sms`, `webhook`; see `UNATTENDED_PLATFORMS`) still receive context, but their finalize does **not**
 queue `SessionEnd`. Those sessions never submit receipts, so counting them as checkpoints would
 make every later interactive start warn about "missing receipts". The platform is remembered
 from the first turn because Hermes reports a generic value at finalize. Unknown or absent

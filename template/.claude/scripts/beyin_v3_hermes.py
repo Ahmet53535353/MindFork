@@ -41,7 +41,7 @@ LOGGER = logging.getLogger(__name__)
 # their SessionEnd must not be counted as a checkpoint: otherwise every later interactive
 # start warns about "missing receipts" for work that was never receipt-shaped. Hermes
 # reports a generic platform at finalize, so the platform seen on the first turn is kept.
-UNATTENDED_PLATFORMS = frozenset({"cron", "telegram", "discord", "slack", "whatsapp", "signal", "matrix", "email", "sms", "webhook"})
+UNATTENDED_PLATFORMS = frozenset({"a2a", "cron", "telegram", "discord", "slack", "whatsapp", "signal", "matrix", "email", "sms", "webhook"})
 # Same cadence as the V2 nudge: remind a long interactive session to write a receipt.
 REMINDER_EVERY = 15
 REMINDER = "[Hafıza] {n}. mesaj. Anlamlı iş bittiyse `beyin.py receipt --harness hermes` ile kaynak bağlantılı makbuz yaz."
