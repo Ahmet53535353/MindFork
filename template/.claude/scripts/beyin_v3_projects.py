@@ -207,7 +207,8 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
                 not isinstance(data.get('shared_unscoped', False), bool)):
             raise ValueError('invalid project scopes configuration; preserve and repair it first')
         for configured_folder, configured_project in data.get('folders', {}).items():
-            _scope_path(configured_folder)
+            if action != "prune":
+                _scope_path(configured_folder)
             if not isinstance(configured_project, str) or not configured_project.strip():
                 raise ValueError('project scope names must be non-empty strings')
 
