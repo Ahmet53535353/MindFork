@@ -212,6 +212,37 @@ class SourceSyncTest(unittest.TestCase):
             (self.vault / name).unlink()
         self.assertEqual(self.engine.sync()['status'], 'succeeded')
 
+    def test_turkish_and_nextcloud_sync_copies_are_reported_and_left_out_of_index(self):
+        # #205: Turkish locale Dropbox/OneDrive clash and Nextcloud conflict patterns
+        self.write()
+        copies = [
+            'notes/task (çakışan kopya 2026-10-06).md',
+            'notes/task (cakisan kopya 2026-10-06).md',
+            'notes/task (tekrarlanan kopya).md',
+            'notes/task.sync-conflict-20261006-ABCDEF7.md',
+            'notes/task_conflict-20261006-120000.md',
+        ]
+        for name in copies:
+            self.write(name=name, body='Conflict copy body.\n', id='copy-' + str(len(name)))
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'degraded')
+        self.assertEqual(sorted(w['source'] for w in report['warnings']), sorted(copies))
+        self.assertTrue(all('file sync conflict copy' in w['reason'] for w in report['warnings']))
+        for name in copies:
+            (self.vault / name).unlink()
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+
+    def test_state_regression_warning_is_emitted_when_state_timestamp_is_in_future(self):
+        # #205: State regression / foreign state rewind warning
+        import time
+        self.engine.sync()
+        with self.engine.store._connect() as db:
+            future = int(time.time()) + 10000
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('last_sync_time', ?)", (str(future),))
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'degraded')
+        self.assertTrue(any('state regression detected' in w['reason'] for w in report['warnings']))
+
     def test_a_numbered_file_beside_its_name_is_listed_and_both_stay_in_the_index(self):
         # iCloud ("Sezon 2.md") and Drive/Windows ("plan (1).md") number the copy; people name notes like that too.
         self.note('notes/Sezon.md', 'Nebula sezon bir ozeti.\n')
