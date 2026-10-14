@@ -1,5 +1,8 @@
 """Kiro's project hook format, plain-text adapter, and shared skill lifecycle."""
+import base64
 import json
+import re
+import shlex
 import os
 from pathlib import Path
 import subprocess
@@ -51,7 +54,7 @@ class KiroIntegrationTest(unittest.TestCase):
             mirror = self.vault / ".kiro/skills" / skill / "SKILL.md"
             self.assertEqual(mirror.read_bytes(), canonical.read_bytes())
         self.install()  # idempotent registration
-        self.assertEqual(len(json.loads(hook_file.read_text())["hooks"]), 4)
+        self.assertEqual(len(json.loads(hook_file.read_text(encoding="utf-8"))["hooks"]), 4)
         self.run_python(INSTALLER, "--vault", self.vault, "--state", self.state, "--uninstall")
         self.assertFalse(hook_file.exists())
         self.assertFalse((self.vault / ".kiro/skills/beyin/SKILL.md").exists())
@@ -70,7 +73,7 @@ class KiroIntegrationTest(unittest.TestCase):
         self.assertIn("violet compass", output)
         self.assertNotIn("hookSpecificOutput", output)
         if os.name != "nt":
-            definitions = json.loads((self.vault / ".kiro/hooks/beyin-v3.json").read_text())
+            definitions = json.loads((self.vault / ".kiro/hooks/beyin-v3.json").read_text(encoding="utf-8"))
             command = next(h["action"]["command"] for h in definitions["hooks"]
                            if h["trigger"] == "UserPromptSubmit")
             actual = subprocess.run(command, shell=True, input="\ufeff" + json.dumps({"session_id": "kiro-shell"}),
@@ -94,7 +97,7 @@ class KiroIntegrationTest(unittest.TestCase):
         result = json.loads(self.run_python(cli, "skill-sync"))
         self.assertNotIn("beyin", result["conflicts"])
         for root in (".agents", ".claude"):
-            self.assertIn("Kiro synthetic edit", (self.vault / root / "skills/beyin/SKILL.md").read_text())
+            self.assertIn("Kiro synthetic edit", (self.vault / root / "skills/beyin/SKILL.md").read_text(encoding="utf-8"))
         codex = self.vault / ".agents/skills/beyin/SKILL.md"
         claude = self.vault / ".claude/skills/beyin/SKILL.md"
         kiro.write_text(kiro.read_text(encoding="utf-8") + "Kiro second edit.\n", encoding="utf-8")
@@ -111,8 +114,21 @@ class KiroIntegrationTest(unittest.TestCase):
         other.write_text('{"version":"v1","hooks":[]}\n', encoding="utf-8")
         hook_file = self.vault / ".kiro/hooks/beyin-v3.json"
         data = json.loads(hook_file.read_text(encoding="utf-8"))
-        data["hooks"][0]["action"]["command"] = data["hooks"][0]["action"]["command"].replace(
-            str(self.vault), str(self.vault.parent / "old-vault"))
+        old_command = data["hooks"][0]["action"]["command"]
+        if os.name != "nt":
+            # Exercise Windows transport parsing on POSIX too. This fixture is
+            # only inspected by doctor/reconcile, never executed as PowerShell.
+            code = "& " + " ".join("'" + value.replace("'", "''") + "'" for value in shlex.split(old_command))
+            code += "; exit $LASTEXITCODE"
+            old_command = "powershell.exe -NoProfile -NonInteractive -EncodedCommand " + base64.b64encode(code.encode("utf-16le")).decode("ascii")
+        match = re.search(r"(-EncodedCommand\s+)([A-Za-z0-9+/=]+)", old_command, re.IGNORECASE)
+        decoded = base64.b64decode(match.group(2)).decode("utf-16le") if match else old_command
+        stale = decoded.replace(str(self.vault), str(self.vault.parent / "old-vault"))
+        self.assertNotEqual(stale, decoded, "fixture must change the actual command path")
+        if match:
+            encoded = base64.b64encode(stale.encode("utf-16le")).decode("ascii")
+            stale = old_command[:match.start(2)] + encoded + old_command[match.end(2):]
+        data["hooks"][0]["action"]["command"] = stale
         hook_file.write_text(json.dumps(data), encoding="utf-8")
         cli = self.vault / "beyin.py"
         doctor = json.loads(self.run_python(cli, "doctor"))
@@ -121,7 +137,7 @@ class KiroIntegrationTest(unittest.TestCase):
         doctor = json.loads(self.run_python(cli, "doctor"))
         self.assertEqual(doctor["hook_paths"]["status"], "ok")
         self.assertTrue(list(hook_file.parent.glob("beyin-v3.json*.bak")))
-        self.assertEqual(other.read_text(), '{"version":"v1","hooks":[]}\n')
+        self.assertEqual(other.read_text(encoding="utf-8"), '{"version":"v1","hooks":[]}\n')
         self.run_python(INSTALLER, "--vault", self.vault, "--state", self.state,
                         "--exclude-component", "adapters/kiro")
         self.assertFalse(hook_file.exists())
@@ -149,8 +165,9 @@ class KiroIntegrationTest(unittest.TestCase):
         for name in kiro_paths:
             (self.vault / name).unlink()
             manifest["files"].pop(name)
+        from v3_hook_reconcile_test import decoded_command
         manifest["commands"] = [command for command in manifest["commands"]
-                                if "beyin_v3_kiro.py" not in command]
+                                if "beyin_v3_kiro.py" not in decoded_command(command)]
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         user_hook = self.vault / ".kiro/hooks/user.json"
         user_hook.write_text('{"version":"v1","hooks":[]}\n', encoding="utf-8")
@@ -162,11 +179,11 @@ class KiroIntegrationTest(unittest.TestCase):
         self.assertEqual(updated["status"], "updated")
         self.assertTrue(updated["trust_review_required"])
         self.assertTrue(all((self.vault / name).is_file() for name in kiro_paths))
-        self.assertEqual(user_hook.read_text(), '{"version":"v1","hooks":[]}\n')
+        self.assertEqual(user_hook.read_text(encoding="utf-8"), '{"version":"v1","hooks":[]}\n')
         rolled = json.loads(self.run_python(cli, "rollback"))
         self.assertEqual(rolled["status"], "rolled_back")
         self.assertTrue(all(not (self.vault / name).exists() for name in kiro_paths))
-        self.assertEqual(user_hook.read_text(), '{"version":"v1","hooks":[]}\n')
+        self.assertEqual(user_hook.read_text(encoding="utf-8"), '{"version":"v1","hooks":[]}\n')
 
     def test_existing_kiro_hook_file_is_preserved_on_name_collision(self):
         hook_file = self.vault / ".kiro/hooks/beyin-v3.json"
