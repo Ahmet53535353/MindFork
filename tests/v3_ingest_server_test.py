@@ -12,6 +12,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 import beyin_v3_ingest_server as ingest_server
+from v3_package_helpers import inherited_env, install, run_python
 
 
 class IngestServerTest(unittest.TestCase):
@@ -188,10 +189,51 @@ class IngestServerTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['trust'], 'untrusted')
 
+    def test_installed_capture_trust_is_enforced_by_real_index(self):
+        state = Path(self.tmp.name) / 'installed-state'
+        env = inherited_env(BEYIN_UPDATES_OFF='1', BEYIN_V3_NO_SPAWN='1')
+        result = install(self.vault, state, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        script = Path(self.tmp.name) / 'capture.py'
+        script.write_text("import sys\nfrom pathlib import Path\nsys.path.insert(0, str(Path(sys.argv[1]) / '.claude/scripts'))\nfrom beyin_v3_ingest_server import save_capture\nsave_capture(Path(sys.argv[1]), {'text': 'INSTALLED_INGEST_CANARY'})\n")
+        result = run_python(script, [self.vault], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = run_python(self.vault / 'beyin.py', ['sync', '--json'], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(state / 'memory.sqlite3')) as db:
+            rows = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records')]
+        captured = [row for row in rows if 'INSTALLED_INGEST_CANARY' in json.dumps(row)]
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0]['trust'], 'untrusted')
+        result = run_python(self.vault / 'beyin.py', ['context', 'INSTALLED_INGEST_CANARY', '--json'], self.vault, env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['records'], [])
+
+    def test_tokenless_loopback_refuses_browser_writes_but_accepts_native(self):
+        server = ingest_server.create_server(self.vault, port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join(2)))
+        url = f'http://127.0.0.1:{server.server_address[1]}/ingest'
+        for headers in ({'Origin': 'https://attacker.example'}, {'Origin': 'null'},
+                        {'Sec-Fetch-Site': 'cross-site'}):
+            request = urllib.request.Request(url, data=b'capture', headers=headers)
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request)
+            self.assertEqual(caught.exception.code, 403)
+            self.assertIsNone(caught.exception.headers.get('Access-Control-Allow-Origin'))
+            caught.exception.close()
+        self.assertFalse((self.vault / '000-Inbox').exists())
+        with urllib.request.urlopen(urllib.request.Request(url, data=b'native capture')) as response:
+            self.assertEqual(response.status, 201)
+            self.assertIsNone(response.headers.get('Access-Control-Allow-Origin'))
+
     def test_cli_ingest_server_help(self):
         import subprocess
         proc = subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
-                               'ingest-server', '--help'], capture_output=True, text=True, check=True)
+                               'ingest-server', '--help'], capture_output=True, text=True, check=True, env=inherited_env(), timeout=60)
         self.assertIn("--host", proc.stdout)
         self.assertIn("--port", proc.stdout)
         self.assertIn("--token", proc.stdout)

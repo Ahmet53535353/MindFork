@@ -116,3 +116,5 @@ Mobil veya harici cihazlardan toplanan girdiler `000-Inbox/` klasöründe biriki
 2. Ajanınıza `"Gelen kutusundakileri işle"` veya `"beyin-yakala"` diyerek ham kayıtların kalıcı `knowledge/` notlarına ve görevlere dönüştürülmesini sağlayın.
 
 Güvenlik: yerel ağda dinleme Bearer token gerektirir. Token yalnız Authorization başlığıyla kabul edilir; URL sorgusuna yazılmaz. Bağlantı başına 5 saniye okuma zaman aşımı uygulanır.
+
+Tokensiz loopback modunda Origin taşıyan tarayıcı yazma istekleri ve cross-site Fetch Metadata reddedilir; yerel CLI yakalamaları çalışır. Tarayıcı CORS erişimi token korumalı mod gerektirir.

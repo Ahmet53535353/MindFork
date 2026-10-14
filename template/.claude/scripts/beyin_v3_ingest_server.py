@@ -134,16 +134,27 @@ class IngestHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        if self.token:
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         if getattr(self, "close_connection", False):
             self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
+    def _browser_write_forbidden(self):
+        # Native local captures carry no Origin. Browser sites cannot write to a
+        # tokenless loopback listener, including sandboxed origins ("null").
+        return not self.token and (self.headers.get("Origin") is not None or
+                                   self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site")
+
     def do_OPTIONS(self):
+        if self._browser_write_forbidden():
+            self._send_json(403, {"error": "cross_origin_forbidden"})
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        if self.token:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
@@ -162,6 +173,9 @@ class IngestHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not_found", "message": "Only health and ingest endpoints are exposed."})
 
     def do_POST(self):
+        if self._browser_write_forbidden():
+            self._send_json(403, {"error": "cross_origin_forbidden"})
+            return
         path = self.path.split("?")[0].rstrip("/")
         if path not in ("/ingest", "/yakala"):
             self._send_json(404, {"error": "not_found", "message": "Endpoint must be /ingest or /yakala"})
