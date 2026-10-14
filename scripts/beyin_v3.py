@@ -723,6 +723,12 @@ def parser():
                           help="Remove a name from the index exclusion list (repeatable)")
     settings.add_argument("--parallel-sessions", choices=("on", "off"),
                           help="Opt-in one-line notice when another session is open on this vault")
+    settings.add_argument("--hermes-attended-platform", action="append", default=[], metavar="PLATFORM",
+                          help="Treat platform as attended/interactive in Hermes (e.g. slack); repeatable")
+    settings.add_argument("--hermes-unattended-platform", action="append", default=[], metavar="PLATFORM",
+                          help="Treat platform as unattended in Hermes (e.g. custom bot); repeatable")
+    settings.add_argument("--hermes-reset-platforms", action="store_true",
+                          help="Reset Hermes platform overrides to defaults")
     compact = sub.add_parser("companion-compact", help="Move older Last-Session/Threads entries verbatim into a private archive; deletes nothing")
     compact.add_argument("--dry-run", action="store_true", help="Report what would move without writing")
     skill = sub.add_parser("skill-import", help="Import one explicitly chosen skill directory")
@@ -966,6 +972,25 @@ def main(argv=None, return_result=False):
             result['parallel_sessions'] = 'on' if parallel_on else 'off'
             if not parallel_valid:
                 result['parallel_sessions_notice'] = 'parallel-sessions.json gecersiz; paralel oturum bildirimi kapali sayiliyor.'
+            # Machine-local Hermes platform settings (state/hermes-platforms.json, #350)
+            try:
+                import beyin_v3_hermes as hermes_settings
+                if args.hermes_attended_platform or args.hermes_unattended_platform or args.hermes_reset_platforms:
+                    result['hermes_platforms'] = hermes_settings.save_platforms(
+                        state,
+                        attended=args.hermes_attended_platform,
+                        unattended=args.hermes_unattended_platform,
+                        reset=args.hermes_reset_platforms
+                    )
+                    result['status'] = 'saved'
+                else:
+                    h_conf, h_valid = hermes_settings.read_platforms(state, vault)
+                    effective = sorted(hermes_settings.resolve_unattended_platforms(vault, state))
+                    result['hermes_platforms'] = {**h_conf, 'effective_unattended': effective}
+                    if not h_valid:
+                        result['hermes_platforms_notice'] = 'hermes-platforms.json gecersiz; varsayilan platformlar kullaniliyor.'
+            except Exception:
+                pass
         elif args.command == "jev":
             laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
