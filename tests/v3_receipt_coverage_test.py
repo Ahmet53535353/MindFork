@@ -280,6 +280,97 @@ class ReceiptCoverageTest(unittest.TestCase):
         self.assertEqual([item['session'] for item in data['checkpoints']], ['next_edit'])
         self.assertEqual(data['receipt_coverage']['missing'], 1)
 
+    def test_backfill_edit_at_from_hook_done(self):
+        """Historical checkpoints without edit_at are backfilled from hook-done events (#212)."""
+        engine = SyncEngine(self.vault, self.state)
+        now = time.time() - 1000
+        engine.note_create('notes/task.md', 'Work.', {'id': 'task'})
+
+        # Insert legacy checkpoint without edit_at (edit_at=0), turn_at=now+100 (second turn: thanks)
+        with engine.store._connect() as db:
+            _checkpoint_schema(db)
+            db.execute("INSERT INTO receipt_checkpoints(harness,session,at,turn_at,prompt_at,edit_at) VALUES ('claude','legacy_sess',?,?,?,0)",
+                       (now + 150, now + 100, now + 100))
+            # Receipt written at now + 50 (after turn 1 edit, before turn 2 thanks)
+            event_id = 'legacy-receipt'
+            receipt = {
+                'event_id': event_id,
+                'harness': 'claude',
+                'session': 'legacy_sess',
+                'summary': 'Done work.',
+                'refs': ['notes/task.md'],
+                'created_at': datetime.fromtimestamp(now + 50, timezone.utc).isoformat()
+            }
+            db.execute("INSERT INTO receipts VALUES (?,?)", (event_id, json.dumps(receipt)))
+
+        # Before backfill: receipt at now+50 does NOT cover threshold turn_at=now+100
+        with engine.store._connect() as db:
+            cov = receipt_coverage(db, now=now + 200)
+            self.assertEqual(cov['covered'], 0)
+            self.assertEqual(cov['missing'], 1)
+
+        # Place historical events in state/hook-done
+        done_dir = self.state / 'hook-done'
+        done_dir.mkdir(parents=True, exist_ok=True)
+        t1_prompt = {'harness': 'claude', 'session': 'legacy_sess', 'event': 'UserPromptSubmit', 'at': now}
+        t1_edit = {'harness': 'claude', 'session': 'legacy_sess', 'event': 'PostToolUse', 'at': now + 10}
+        t2_prompt = {'harness': 'claude', 'session': 'legacy_sess', 'event': 'UserPromptSubmit', 'at': now + 100}
+        (done_dir / 'ev1.json').write_text(json.dumps(t1_prompt), encoding='utf-8')
+        (done_dir / 'ev2.json').write_text(json.dumps(t1_edit), encoding='utf-8')
+        (done_dir / 'ev3.json').write_text(json.dumps(t2_prompt), encoding='utf-8')
+
+        # Run receipt_coverage with state provided (triggers backfill)
+        with engine.store._connect() as db:
+            cov = receipt_coverage(db, now=now + 200, state=self.state)
+            self.assertEqual(cov['covered'], 1)
+            self.assertEqual(cov['missing'], 0)
+            row = db.execute("SELECT edit_at FROM receipt_checkpoints WHERE session='legacy_sess'").fetchone()
+            self.assertEqual(row[0], now)
+
+        # Marker exists preventing repeated disk scan
+        with engine.store._connect() as db:
+            self.assertTrue(db.execute("SELECT value FROM metadata WHERE key='edit_at_backfilled'").fetchone())
+
+    def test_backfill_preserves_harness_identity_and_rejects_invalid_events(self):
+        engine = SyncEngine(self.vault, self.state)
+        done = self.state / 'hook-done'
+        done.mkdir()
+        with engine.store._connect() as db:
+            _checkpoint_schema(db)
+            for harness in ('claude', 'codex'):
+                db.execute("INSERT INTO receipt_checkpoints(harness,session,at,turn_at,prompt_at,edit_at) VALUES (?, 'shared', 300, 200, 200, 0)", (harness,))
+            events = [[], {'harness': 'claude', 'session': 'shared', 'event': 'PostToolUse', 'at': 'bad'},
+                      {'harness': 'claude', 'session': 'shared', 'event': 'UserPromptSubmit', 'at': 100},
+                      {'harness': 'claude', 'session': 'shared', 'event': 'PostToolUse', 'at': 110},
+                      {'harness': 'codex', 'session': 'shared', 'event': 'PostToolUse', 'at': 120, 'no_memory': True}]
+            for index, event in enumerate(events):
+                (done / f'{index}.json').write_text(json.dumps(event))
+            receipt_coverage(db, now=400, state=self.state)
+            values = dict(db.execute("SELECT harness,edit_at FROM receipt_checkpoints"))
+            self.assertEqual(values, {'claude': 100, 'codex': 0})
+
+    def test_coverage_reports_no_observed_edit(self):
+        """Doctor coverage reports sessions without observed edits (#212)."""
+        engine = SyncEngine(self.vault, self.state)
+        now = time.time()
+        # Session 1: edit session
+        self._enqueue('SessionStart', 'sess_edit', at=now - 50)
+        self._enqueue('UserPromptSubmit', 'sess_edit', at=now - 40)
+        self._enqueue('PostToolUse', 'sess_edit', at=now - 30)
+        self._enqueue('Stop', 'sess_edit', at=now - 20)
+        # Session 2: question-only session (no edit)
+        self._enqueue('SessionStart', 'sess_no_edit', at=now - 45)
+        self._enqueue('UserPromptSubmit', 'sess_no_edit', at=now - 35)
+        self._enqueue('Stop', 'sess_no_edit', at=now - 25)
+
+        hook.drain_queue(self.vault, self.state)
+        with engine.store._connect() as db:
+            cov = receipt_coverage(db, now=now, state=self.state)
+            self.assertEqual(cov['total'], 2)
+            self.assertEqual(cov['no_observed_edit'], 1)
+            self.assertEqual(cov['last_7d']['no_observed_edit'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()
+
