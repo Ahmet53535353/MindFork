@@ -71,6 +71,9 @@ masaüstü oturumundaki bir terminalden çalıştır. SSH gibi bu değişkenin o
 kısayol kurulmaz, kaldırırken de masaüstündeki kısayol ayarı yerinde kalır.
 
 Pencere neyi kaydedeceğini panodan okur: Wayland'da `wl-clipboard` paketi (`wl-paste`) gerekir.
+Kurulu değilse kısayol çalışsa bile pano bağlantısı/metni pencereye gelmeyebilir; `yakala kur`,
+`yakala durum` ve boş yakalama penceresi bunu belirtir. Paketi dağıtımının paket yöneticisiyle
+kurduktan sonra `yakala durum` ile uyarının kaybolduğunu kontrol et; Yakala'yı yeniden kurman gerekmez.
 X11'de tam pencere metni kendisi okur; kopyalanan dosyalar ve `kdialog`/`zenity` yolu için `xclip`
 ya da `xsel` gerekir. Panoda tek bir bağlantı varsa bağlantı, dosya
 yöneticisinden kopyalanan dosyalar (`file://` listesi) varsa dosyalar, başka metin varsa metin

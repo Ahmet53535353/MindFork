@@ -544,6 +544,30 @@ class YakalaUnitTest(unittest.TestCase):
         return [sys.executable, str(Path(state).resolve() / 'yakala' / 'beyin_v3_yakala.py'), 'pencere',
                 '--vault', str(self.vault.resolve())]
 
+    def test_wayland_without_wl_paste_warns_even_when_hotkey_works(self):
+        self._linux_env('KDE')
+        self.linux_missing.add('wl-paste')
+        state = Path(self.tmp.name) / 'state'
+        with patch.dict(yakala.os.environ, {'WAYLAND_DISPLAY': 'wayland-0'}):
+            done = yakala.install(self.vault, state)
+            health = yakala.status(self.vault, state)
+            self.assertTrue(done['kisayol_calisiyor'])
+            self.assertTrue(health['dinleyici_calisiyor'])
+            for result, command in ((done, 'kur'), (health, 'durum')):
+                self.assertIn('wl-paste', result['pano_uyarisi'])
+                self.assertIn('wl-clipboard', yakala.human(result, command))
+            self.assertIn('wl-paste', yakala._empty_capture_hint(self.vault, state))
+
+    def test_wayland_clipboard_warning_is_not_a_false_capture_failure(self):
+        with patch.object(yakala.sys, 'platform', 'linux'), patch.dict(yakala.os.environ, {'WAYLAND_DISPLAY': 'wayland-0'}):
+            with patch.object(yakala, '_which', return_value='/usr/bin/wl-paste'):
+                self.assertIsNone(yakala._clipboard_warning())
+            with patch.object(yakala, '_which', return_value=None):
+                self.assertIn('wl-paste', yakala._clipboard_warning())
+        with patch.object(yakala.sys, 'platform', 'linux'), patch.dict(yakala.os.environ, {'WAYLAND_DISPLAY': ''}):
+            with patch.object(yakala, '_which', return_value=None):
+                self.assertIsNone(yakala._clipboard_warning())  # Tk still reads the X11 clipboard
+
     def test_linux_install_kde_and_uninstall(self):
         entry, calls = self._linux_env('KDE')
         state = Path(self.tmp.name) / 'state'

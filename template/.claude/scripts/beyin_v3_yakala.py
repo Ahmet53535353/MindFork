@@ -1709,6 +1709,17 @@ def _clipboard(root):
     return repair_mojibake(value) if isinstance(value, str) else ''
 
 
+def _clipboard_warning():
+    """Wayland's native clipboard needs wl-paste; Tk's XWayland fallback may be empty (#278)."""
+    if sys.platform.startswith('linux') and os.environ.get('WAYLAND_DISPLAY') and not _which('wl-paste'):
+        return 'Wayland panosu icin wl-paste yok; baglanti/metin gelmeyebilir. wl-clipboard kur.'
+    return None
+
+
+def _empty_capture_hint(vault, state=None):
+    return 'Pano icin wl-paste yok (wl-clipboard kur)' if _clipboard_warning() else _hotkey_hint(vault, state)
+
+
 def _hotkey_hint(vault, state=None):
     try:
         label = json.loads(_state_path(state or resolve_state(Path(vault))).read_text(encoding='utf-8')).get('kisayol')
@@ -1856,7 +1867,9 @@ def popup(vault, context=None, state=None, root=None):
     y += 8
     footer_y = y + 14
     status = canvas.create_text(pad, footer_y, anchor='w', fill=P['muted'], font=_font(12),
-                                text='Tab: panoyu ekle' if clip_text and (url or files) else _hotkey_hint(vault, state))
+                                text='Tab: panoyu ekle' if clip_text and (url or files) else
+                                _hotkey_hint(vault, state) if (url or files or clip_text or image) else
+                                _empty_capture_hint(vault, state))
     right = W - pad
 
     def keycap(x_right, key, label):
@@ -2975,6 +2988,7 @@ def install(vault, state, hotkey=True, spec=None, folder_spec=None):
                                               'klasor': inbox_rel}, ensure_ascii=False) + '\n',
                                   encoding='utf-8')
     done['araclar'] = {name: bool(path) for name, path in tools().items()}
+    done['pano_uyarisi'] = _clipboard_warning()
     return done
 
 
@@ -3050,6 +3064,7 @@ def status(vault, state):
             running = GNOME_PATH in (_gnome_list() or [])
     return {'status': 'tamam', 'kurulu': installed, 'dinleyici_calisiyor': running,
             'bekleyen': pending(vault, state), 'klasor': find_inbox(vault, state),
+            'pano_uyarisi': _clipboard_warning(),
             'araclar': {name: bool(path) for name, path in tools().items()}}
 
 
@@ -3106,6 +3121,8 @@ def human(result, command):
             lines.append(result['ipucu'])
         if result.get('uyari'):
             lines.append('UYARI: ' + result['uyari'])
+        if result.get('pano_uyarisi'):
+            lines.append('UYARI: ' + result['pano_uyarisi'])
         if command == 'kisayol':
             return '\n'.join(lines)
         if result.get('onceki_klasorde_kalan'):
@@ -3126,6 +3143,7 @@ def human(result, command):
                 ('' if result['dinleyici_calisiyor'] is None else '\nKisayol dinleyicisi: ' +
                  ('calisiyor' if result['dinleyici_calisiyor'] else 'durmus (baslatmak icin: beyin.py yakala kur)')) +
                 '\nBekleyen kaynak: ' + str(result['bekleyen']) +
+                ('\nUYARI: ' + result['pano_uyarisi'] if result.get('pano_uyarisi') else '') +
                 '\nAraclar: ' + ', '.join(n + ('=var' if ok else '=yok') for n, ok in result['araclar'].items()))
     if result.get('status') == 'islendi':
         return 'Kart islendi olarak isaretlendi: ' + result['id']
