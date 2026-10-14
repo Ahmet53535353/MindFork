@@ -282,14 +282,14 @@ TASK_STATUSES = ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled')
 
 
 def _check_task_dates(fields):
-    """Write-path check for due_at/updated_at given to task-create or task-update.
+    """Write-path check for due_at/updated_at/created_at given to task-create or task-update.
 
     Sync does not apply it, so task files written before this check, or edited by
     hand, stay indexed. The explicit grammar (the one rejected_at uses) keeps
     acceptance the same on every Python version; a null due_at clears the date.
     """
-    for field in ('due_at', 'updated_at'):
-        if field not in fields or (field == 'due_at' and fields[field] is None):
+    for field in ('due_at', 'updated_at', 'created_at'):
+        if field not in fields or ((field == 'due_at' or field == 'created_at') and fields[field] is None):
             continue
         value = fields[field]
         try:
@@ -1175,10 +1175,15 @@ class SyncEngine:
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
         self._refuse_excluded(source)
-        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'completion_contract', 'completion_criterion', 'evidence_refs'}
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'created_at', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
+        now_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        if 'updated_at' not in metadata:
+            metadata['updated_at'] = now_date
+        if 'created_at' not in metadata:
+            metadata['created_at'] = metadata['updated_at']
         text, redacted = self._protect(text)
         if not isinstance(metadata.get('id'), str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}', metadata['id']):
             raise ValueError('stable task id required')
@@ -1193,7 +1198,7 @@ class SyncEngine:
             raise ValueError('task kind required')
         if not isinstance(metadata.get('facts', {}), dict) or metadata.get('visibility', 'internal') not in ('internal', 'public', 'private'):
             raise ValueError('invalid task facts or visibility')
-        for field in ('title', 'project', 'next_action', 'updated_at'):
+        for field in ('title', 'project', 'next_action', 'updated_at', 'created_at'):
             if field in metadata and not isinstance(metadata[field], str):
                 raise ValueError('task metadata text fields must be strings')
         metadata, meta_redacted = self._protect_metadata(metadata)
