@@ -388,6 +388,11 @@ FENCE = re.compile(r'[ \t]{0,3}(`{3,}|~{3,})')
 SCOPE_TAG = re.compile(r'(?i)(?:\[(?:scope|kapsam):\s*([^\]]+)\]|\b(?:scope|kapsam):\s*([a-zA-Z0-9_\-]+(?:\s*,\s*[a-zA-Z0-9_\-]+)*))')
 
 
+def scope_key(value):
+    # Match Turkish uppercase and dotted/dotless i consistently with source names.
+    return str(value).strip().replace('İ', 'i').replace('I', 'ı').casefold().replace('ı', 'i').replace('\u0307', '')
+
+
 def rule_scopes(rule_text):
     """Set of lower-cased scope names for a rule, or empty set for global."""
     scopes = set()
@@ -395,7 +400,7 @@ def rule_scopes(rule_text):
         raw = match.group(1) or match.group(2)
         if raw:
             for item in raw.split(','):
-                cleaned = item.strip().lower()
+                cleaned = scope_key(item)
                 if cleaned and cleaned not in ('global', 'genel', 'all', 'herkes'):
                     scopes.add(cleaned)
     return scopes
@@ -408,7 +413,7 @@ def filter_scoped_rules(text, active_project=None):
     """
     if not active_project or not isinstance(active_project, str):
         return text
-    active = active_project.strip().lower()
+    active = scope_key(active_project)
     lines = text.split('\n')
     filtered_lines = []
     current_rule = []
@@ -549,11 +554,16 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
                     candidate = (store.vault_root / folder / proj_clean / p_name).resolve()
                     try:
                         if candidate.is_relative_to(store.vault_root.resolve()) and candidate.is_file() and not candidate.is_symlink():
-                            p_text = candidate.read_text(encoding='utf-8', errors='replace').strip()
-                            if p_text:
-                                p_rel = candidate.relative_to(store.vault_root.resolve()).as_posix()
-                                sections.append((f'\n[{p_rel}]\n', p_text, 'Kurallar.md'))
-                                found = True
+                            p_rel = candidate.relative_to(store.vault_root.resolve()).parent.as_posix()
+                            project_snapshot = store.source_snapshot(
+                                [p_name], source_directory=p_rel, budget_chars=200000,
+                                text_transform=lambda name, text: filter_scoped_rules(
+                                    without_v2_window(text), active_project=project))
+                            for record in project_snapshot['records']:
+                                if record['text'].strip():
+                                    sections.append((f"\n[{record['source']}]\n", record['text'], 'Kurallar.md'))
+                                    found = True
+                            if found:
                                 break
                     except (ValueError, OSError):
                         pass

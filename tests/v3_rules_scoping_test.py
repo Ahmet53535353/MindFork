@@ -83,15 +83,37 @@ class RulesScopingTest(unittest.TestCase):
         proj.mkdir(parents=True)
         (proj / 'Kurallar.md').write_text('# Alpha Kuralları\n- Alpha özel kuralı\n', encoding='utf-8')
 
+
         # Without project, project rules are not loaded
         ctx_no_proj = companion.context(self.store, 8000, 'session-1', 'claude', project=None)
         self.assertNotIn('Alpha özel kuralı', ctx_no_proj)
         self.assertIn('Global kural', ctx_no_proj)
 
+        self.store.ingest({'id': 'project-rule', 'kind': 'note', 'status': 'active',
+                           'source': 'projects/alpha/Kurallar.md',
+                           'text': '# Alpha Kuralları\n- Alpha özel kuralı\n', 'updated_at': '2026-10-12T00:00:00Z'})
+
         # With project='alpha', project rules are loaded into companion context
         ctx_proj = companion.context(self.store, 8000, 'session-1', 'claude', project='alpha')
         self.assertIn('[projects/alpha/Kurallar.md]', ctx_proj)
         self.assertIn('Alpha özel kuralı', ctx_proj)
+
+    def test_private_unindexed_and_changed_project_rules_are_not_delivered(self):
+        self.seed('# Kurallar\n- Global kural\n')
+        source = 'projects/alpha/Kurallar.md'
+        target = self.vault / source
+        target.parent.mkdir(parents=True)
+        target.write_text('- PRIVATE-MARKER', encoding='utf-8')
+        self.assertNotIn('PRIVATE-MARKER', companion.context(self.store, 8000, 's', 'claude', project='alpha'))
+        self.store.ingest({'id': 'private-rule', 'kind': 'note', 'status': 'active',
+                           'source': source, 'text': '- PRIVATE-MARKER', 'visibility': 'private',
+                           'updated_at': '2026-10-12T00:00:00Z'})
+        self.assertNotIn('PRIVATE-MARKER', companion.context(self.store, 8000, 's', 'claude', project='alpha'))
+
+    def test_turkish_scope_matching(self):
+        text = '- [kapsam: ARŞİV] Kural\n- [scope: backend] Other'
+        self.assertIn('Kural', companion.filter_scoped_rules(text, 'arşiv'))
+        self.assertNotIn('Other', companion.filter_scoped_rules(text, 'arşiv'))
 
     def test_path_traversal_project_is_safely_ignored(self):
         self.seed('# Kurallar\n- Global kural\n')
