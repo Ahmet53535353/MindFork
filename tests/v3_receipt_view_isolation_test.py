@@ -20,6 +20,12 @@ subject = load_module()
 
 class ReceiptViewIsolationTest(unittest.TestCase):
     def setUp(self):
+        # load_module() imports SyncEngine by path, then removes its temporary
+        # path. Installed clients retain this directory for lazy policy imports.
+        scripts = str(ROOT / 'template/.claude/scripts')
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+            self.addCleanup(lambda: sys.path.remove(scripts))
         self.tmp = tempfile.TemporaryDirectory(prefix='v3-view-isolation-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
