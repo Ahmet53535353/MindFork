@@ -70,7 +70,12 @@ class FtsSyncSpineTest(unittest.TestCase):
 
     def test_legacy_drifted_database_self_heals_on_open(self):
         # Shape of a pre-fix vault: records carry fresh payloads while the frozen FTS
-        # snapshot lags and no fts_params signature exists. Rebuild must repair once.
+        # snapshot lags, and no fts_params signature exists because nothing had ever
+        # stamped one. Rebuild must repair once. The missing signature is part of the
+        # shape, not an accident: it is what tells the reader this index predates the
+        # writer that stamps it, and an index that *is* stamped is not rebuilt on open --
+        # its row sits in the same transaction as the record it mirrors, so it cannot
+        # have drifted without something outside this engine having written the file.
         self.write()
         self.engine.sync()
         with sqlite3.connect(self.store.database) as db:  # legacy drift: index lags behind
@@ -78,6 +83,7 @@ class FtsSyncSpineTest(unittest.TestCase):
             record['text'] = 'Zirkon kova yeni metin'
             db.execute("UPDATE records SET payload=? WHERE id='spine-note'", (json.dumps(record),))
             db.execute("DELETE FROM records_fts")
+            db.execute("DELETE FROM metadata WHERE key='fts_params'")
             db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
                        ('spine-note', '', 'nebula', 'Nebula calibration StripeWebhookHandler handler.', ''))
             db.commit()

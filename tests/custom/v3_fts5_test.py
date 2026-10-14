@@ -50,6 +50,39 @@ class Fts5IndexingTest(unittest.TestCase):
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn('records_fts', tables)
 
+    def test_the_signature_is_written_when_the_index_is_filled_and_never_triggers_a_later_rebuild(self):
+        """The signature is written by the rebuild branch alone, so an index filled record
+        by record through the sync spine never gets one. `stored is None` then stays true
+        forever, and the next command that merely opens the store wipes and rewrites the
+        whole index -- which is why a note-create that refuses its source still changed
+        memory.sqlite3 in v3_sensitive_installed_test. A refusal must leave the runtime
+        byte-identical, so the signature has to be written once the index is consistent.
+
+        The observable is not the index contents: a full rebuild of the same records writes
+        the same rows, so content cannot tell a rebuild from a no-op. It is a sentinel row
+        that exists in records_fts but not in records -- a rebuild wipes it, an open that
+        trusts the signature leaves it alone.
+        """
+        for i in range(3):
+            self.store.ingest(self.make_record(f'sig-{i}', f'Kayit {i} imza denemesi icin yazildi'))
+        self.assertIsNotNone(self.metadata('fts_params'),
+                             'sync omurgasi indeksi doldurdu ama imzayi yazmadi')
+
+        with sqlite3.connect(self.store.database) as db:
+            db.execute("INSERT INTO records_fts(id, type, project, text, facts)"
+                       " VALUES ('sentinel-not-a-record','','','olmasi gerekmeyen satir','')")
+            db.commit()
+        reopened = self.module.MemoryStore(self.state, self.vault)
+        self.addCleanup(lambda: evaluator.close_store(reopened))
+        with sqlite3.connect(reopened.database) as db:
+            self.assertIsNotNone(
+                db.execute("SELECT 1 FROM records_fts WHERE id='sentinel-not-a-record'").fetchone(),
+                'indeks yeniden kuruldu; imza zaten dogruydu, sadece hic yazilmamisti')
+
+    def metadata(self, key):
+        with sqlite3.connect(self.store.database) as db:
+            return db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+
     def test_fts5_synced_on_ingest(self):
         rec = self.make_record('stripe-note', 'StripeWebhookHandler handles payment exceptions ERR_401_EXPIRED')
         self.store.ingest(rec)

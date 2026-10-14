@@ -813,10 +813,18 @@ class MemoryStore:
     def fts_write(db, record):
         # The single writer for the derived lexical row: every write path (ingest,
         # update, sync scan, rebuild) folds facts here and replaces the row atomically.
+        # It also stamps the index signature, and it is the only place that can: the row
+        # is written in the same BEGIN IMMEDIATE transaction as the record it mirrors, so
+        # the writer knows the index now matches the schema recorded here. Only the
+        # rebuild branch used to stamp it, which left every vault filled through this
+        # writer looking unsigned forever -- `stored is None` stayed true, so each later
+        # open rebuilt the whole index and wrote the database even for a command that
+        # refuses its input and must leave the runtime byte-identical.
         facts_str = " ".join(f"{k} {v}" for k, v in record.get("facts", {}).items() if isinstance(v, (str, int, float)))
         db.execute("DELETE FROM records_fts WHERE id=?", (record["id"],))
         db.execute("INSERT INTO records_fts(id, type, project, text, facts) VALUES (?,?,?,?,?)",
                    (record["id"], record.get("type", ""), record.get("project", ""), record.get("text", ""), facts_str))
+        db.execute("INSERT OR REPLACE INTO metadata VALUES ('fts_params',?)", (FTS_PARAMS,))
 
     @staticmethod
     def fts_delete(db, id):
