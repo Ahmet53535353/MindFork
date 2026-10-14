@@ -245,7 +245,7 @@ Runtime klasöründeki (konumu için bkz. QUICKSTART) isteğe bağlı `retrieval
 ```
 
 - `strict_floor`: 0 ile 2 arası sayı, varsayılan 0,20. Yükseltmek yanlış eklemeyi azaltır, cevabı bulma oranını da düşürür.
-- `strict_exclude`: vault köküne göre en fazla 64 yol öneki. `daily/` ve `receipts/` her zaman dışarıdadır, liste bunlara eklenir. Karşılaştırma büyük/küçük harfe ve Unicode biçimine (NFC/NFD) duyarsızdır, `\` ayırıcısı da kabul edilir. Arşiv ya da oturum dökümü klasörleri için uygundur.
+- `strict_exclude`: vault köküne göre en fazla 64 yol öneki. `daily/` ve `receipts/` her zaman dışarıdadır, liste bunlara eklenir. Karşılaştırma büyük/küçük harfe ve Unicode biçimine (NFC/NFD) duyarsızdır, `\` ayırıcısı da kabul edilir. Arşiv ya da oturum dökümü klasörleri için uygundur. Bu ayar yalnızca tur başı otomatik pasaj aramasını (`context_mode: turn`) etkiler; `context_mode: session` kurulumlarında per-turn strict yolu çalışmadığı gibi doğrudan `beyin.py context` aramalarında da Passage strict filtresi devreye girmez (arşiv klasörünü indeksten tamamen uzak tutmak için aşağıda anlatılan `--index-exclude-dir` tercih edilmelidir).
 - Dosya bozuksa ya da bir değer geçersizse varsayılanlar kullanılır; hook bozulmaz.
 
 Bu ayar makineye özeldir ve `.beyin-preferences.json` şemasına girmez: eski bir sürüme dönüldüğünde tanımadığı bir tercih alanı yüzünden hook'un durması istenmedi.
