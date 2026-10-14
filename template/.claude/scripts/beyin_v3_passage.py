@@ -30,7 +30,7 @@ import tempfile
 import time
 import unicodedata
 
-from beyin_v3 import HARNESSES, STOPWORDS, _allowed_statuses, _json, _status_allowed, _tokens, pack_context
+from beyin_v3 import HARNESSES, STOPWORDS, _allowed_statuses, _json, _name_match_score, _status_allowed, _tokens, pack_context
 
 # #83 chose 0.15 on one 263-note Turkish vault without a coverage cap. With the cap, on a
 # second 1,285-note vault 0.20 is the lowest floor that keeps everyday and agent-command
@@ -358,6 +358,9 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED):
             continue
         rank = _weight(shared, index.source_df, sources_total, size) * coverage
         record = passage[0]
+        name_score = _name_match_score(record, terms)
+        if name_score > 0:
+            rank += 10.0 * name_score
         current = best.get(record["id"])
         if current is None or rank > current[0]:
             best[record["id"]] = (rank, passage)
