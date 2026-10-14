@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hmac
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import json
 import os
 from pathlib import Path
@@ -23,11 +23,14 @@ def _find_inbox_dir(vault: Path) -> Path:
     """Dynamically resolve preferred inbox directory inside vault."""
     vault = Path(vault).resolve()
     for candidate in INBOX_CANDIDATES:
-        cand_path = (vault / candidate).resolve()
-        if cand_path.is_dir() and not cand_path.is_symlink():
-            if cand_path.is_relative_to(vault):
-                return cand_path
-    target = (vault / "000-Inbox").resolve()
+        candidate_path = vault / candidate
+        if candidate_path.is_symlink():
+            continue
+        if candidate_path.is_dir():
+            return candidate_path
+    target = vault / "000-Inbox"
+    if target.is_symlink():
+        raise ValueError("Inbox symlink is not allowed")
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -35,10 +38,8 @@ def _find_inbox_dir(vault: Path) -> Path:
 def _clean_yaml_str(value: str) -> str:
     """Sanitize strings for YAML frontmatter to prevent multiline or separator injection."""
     text = re.sub(r'[\r\n]+', ' ', str(value or '')).strip()
-    if ': ' in text or text.startswith(('-', '*', '#', '[', '{', '@', '`', '|', '>')):
-        escaped = text.replace('"', '\\"')
-        return f'"{escaped}"'
-    return text
+    # JSON string escaping is a valid YAML quoted scalar, including backslashes.
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _slugify(text: str, max_length: int = 40) -> str:
@@ -59,7 +60,7 @@ def save_capture(vault: Path, data: dict | str, now: datetime | None = None) -> 
     if isinstance(data, str):
         text = data.strip()
         first_line = text.splitlines()[0][:60] if text else "Mobil Not"
-        title = _clean_yaml_str(first_line.lstrip("# \t")).strip('"')
+        title = first_line.lstrip("# \t")
         url = None
         tags = ["mobil", "yakalama"]
         source = "mobile-ingest"
@@ -69,31 +70,20 @@ def save_capture(vault: Path, data: dict | str, now: datetime | None = None) -> 
         if not title:
             first_line = text.splitlines()[0][:60] if text else "Mobil Not"
             title = first_line.lstrip("# \t")
-        title = _clean_yaml_str(title).strip('"')
+        title = re.sub(r'[\r\n]+', ' ', title)
         url = data.get("url")
         tags = data.get("tags") or ["mobil", "yakalama"]
         source = data.get("source") or "mobile-ingest"
 
     slug = _slugify(title)
     filename = f"{stamp}-{slug}.md"
-    target = (inbox_dir / filename).resolve()
-
-    # Avoid filename collision
-    counter = 1
-    while target.exists():
-        target = (inbox_dir / f"{stamp}-{slug}-{counter}.md").resolve()
-        counter += 1
-
-    # Security check: ensure path is strictly inside vault
-    if not target.is_relative_to(vault):
-        raise ValueError("Invalid target path traversal")
-
     # Build Markdown document with untrusted: true marker for V3 trust model
     lines = [
         "---",
         f"created_at: {now.isoformat()}",
         f"source: {_clean_yaml_str(source)}",
         "untrusted: true",
+        "trust: untrusted",
     ]
     if url:
         lines.append(f"url: {_clean_yaml_str(url)}")
@@ -117,13 +107,27 @@ def save_capture(vault: Path, data: dict | str, now: datetime | None = None) -> 
     lines.append("")
 
     content = "\n".join(lines).encode("utf-8")
-    target.write_bytes(content)
-    return target, len(content)
+    # Exclusive creation preserves existing captures, including dangling symlinks.
+    counter = 0
+    while True:
+        target = inbox_dir / (filename if not counter else f"{stamp}-{slug}-{counter}.md")
+        if inbox_dir.is_symlink() or not inbox_dir.resolve().is_relative_to(vault):
+            raise ValueError("Invalid inbox path")
+        try:
+            with target.open("xb") as output:
+                output.write(content)
+            return target, len(content)
+        except FileExistsError:
+            counter += 1
 
 
 class IngestHandler(BaseHTTPRequestHandler):
     vault: Path
     token: str | None = None
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(5)
 
     def _send_json(self, status_code: int, data: dict):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -170,11 +174,6 @@ class IngestHandler(BaseHTTPRequestHandler):
             token_valid = False
             if auth_header.startswith("Bearer "):
                 token_valid = hmac.compare_digest(auth_header.encode("utf-8"), expected_bearer.encode("utf-8"))
-            if not token_valid and "?" in self.path:
-                params = dict(q.split("=", 1) for q in self.path.split("?")[1].split("&") if "=" in q)
-                query_token = params.get("token")
-                if query_token:
-                    token_valid = hmac.compare_digest(query_token.encode("utf-8"), self.token.encode("utf-8"))
             if not token_valid:
                 self._send_json(401, {"error": "unauthorized", "message": "Invalid or missing Bearer token"})
                 return
@@ -193,16 +192,12 @@ class IngestHandler(BaseHTTPRequestHandler):
                 return
             if length > MAX_PAYLOAD_BYTES:
                 self.close_connection = True
-                # Drain incoming payload up to reasonable bound so socket doesn't reset before response reaches client
-                drain_len = min(length, MAX_PAYLOAD_BYTES + 256 * 1024)
-                while drain_len > 0:
-                    chunk = self.rfile.read(min(drain_len, 65536))
-                    if not chunk:
-                        break
-                    drain_len -= len(chunk)
                 self._send_json(413, {"error": "payload_too_large", "message": "Payload exceeds 1MB limit"})
                 return
-            body = self.rfile.read(length).decode("utf-8", errors="replace")
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError("Incomplete request body")
+            body = raw.decode("utf-8", errors="strict")
         except (ValueError, OSError) as exc:
             self.close_connection = True
             self._send_json(400, {"error": "bad_request", "message": str(exc)})
@@ -220,6 +215,9 @@ class IngestHandler(BaseHTTPRequestHandler):
             except Exception:
                 data = body
 
+        if not isinstance(data, (dict, str)):
+            self._send_json(400, {"error": "invalid_payload"})
+            return
         try:
             target_path, nbytes = save_capture(self.vault, data)
             rel = target_path.resolve().relative_to(self.vault.resolve()).as_posix()
@@ -230,14 +228,14 @@ class IngestHandler(BaseHTTPRequestHandler):
                 "message": "Kayit basariyla gelen kutusuna eklendi."
             })
         except Exception as exc:
-            self._send_json(500, {"error": "write_failed", "message": str(exc)})
+            self._send_json(500, {"error": "write_failed", "message": "Capture could not be saved"})
 
     def log_message(self, format, *args):
         # Quiet stderr logging
-        sys.stderr.write(f"[ingest-server] {self.address_string()} - {format % args}\n")
+        sys.stderr.write(f"[ingest-server] {self.address_string()} request completed\n")
 
 
-def create_server(vault: Path, host: str = "127.0.0.1", port: int = 8484, token: str | None = None) -> HTTPServer:
+def create_server(vault: Path, host: str = "127.0.0.1", port: int = 8484, token: str | None = None) -> ThreadingHTTPServer:
     token = token or os.environ.get("BEYIN_INGEST_TOKEN")
 
     class BoundHandler(IngestHandler):
@@ -245,7 +243,9 @@ def create_server(vault: Path, host: str = "127.0.0.1", port: int = 8484, token:
 
     BoundHandler.vault = Path(vault).resolve()
     BoundHandler.token = token
-    return HTTPServer((host, port), BoundHandler)
+    if host not in ("127.0.0.1", "localhost", "::1") and not token:
+        raise ValueError("Non-loopback ingest requires a Bearer token")
+    return ThreadingHTTPServer((host, port), BoundHandler)
 
 
 def run_server(vault: Path, host: str = "127.0.0.1", port: int = 8484, token: str | None = None):

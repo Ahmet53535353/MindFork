@@ -114,3 +114,5 @@ yakala() {
 Mobil veya harici cihazlardan toplanan girdiler `000-Inbox/` klasöründe birikir. Masanıza döndüğünüzde:
 1. `python3 beyin.py triage` çalıştırarak gelen kutusunda kaç kaynak olduğunu ve en eskilerini görün.
 2. Ajanınıza `"Gelen kutusundakileri işle"` veya `"beyin-yakala"` diyerek ham kayıtların kalıcı `knowledge/` notlarına ve görevlere dönüştürülmesini sağlayın.
+
+Güvenlik: yerel ağda dinleme Bearer token gerektirir. Token yalnız Authorization başlığıyla kabul edilir; URL sorgusuna yazılmaz. Bağlantı başına 5 saniye okuma zaman aşımı uygulanır.

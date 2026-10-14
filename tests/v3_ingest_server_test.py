@@ -34,9 +34,9 @@ class IngestServerTest(unittest.TestCase):
         self.assertIn("sqlite-kilitleri-ve-cozumleri", target.name)
 
         content = target.read_text(encoding="utf-8")
-        self.assertIn("source: mobile-ingest", content)
+        self.assertIn('source: "mobile-ingest"', content)
         self.assertIn("untrusted: true", content)
-        self.assertIn("url: https://example.com/sqlite-locks", content)
+        self.assertIn('url: "https://example.com/sqlite-locks"', content)
         self.assertIn("Windows üzerinde dosya kilitleme", content)
 
     def test_save_capture_resolves_existing_custom_inbox(self):
@@ -126,11 +126,13 @@ class IngestServerTest(unittest.TestCase):
             self.assertIn("İzinsiz fırlatma", content)
             self.assertIn("untrusted: true", content)
 
-        # 6. POST /ingest with query token fallback -> 201 Created
+        # 6. Query strings cannot carry credentials
         req_query = urllib.request.Request(f"{base_url}/ingest?token=test-secret-token", data=post_data,
                                            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req_query) as resp:
-            self.assertEqual(resp.status, 201)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(req_query)
+        self.assertEqual(error.exception.code, 401)
+        error.exception.close()
 
         # 7. OPTIONS /ingest -> 204 No Content with CORS
         req_options = urllib.request.Request(f"{base_url}/ingest", method="OPTIONS")
@@ -152,6 +154,39 @@ class IngestServerTest(unittest.TestCase):
         except urllib.error.URLError as err:
             # If underlying TCP socket was reset by kernel before response body was read
             self.assertTrue(isinstance(err.reason, (OSError, ConnectionError)) or "reset" in str(err).lower() or "pipe" in str(err).lower() or "aborted" in str(err).lower())
+
+    def test_symlink_default_inbox_cannot_create_external_file(self):
+        outside = Path(self.tmp.name) / 'outside'
+        outside.mkdir()
+        (self.vault / '000-Inbox').symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            ingest_server.save_capture(self.vault, 'capture')
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_concurrent_captures_are_append_only(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from datetime import datetime, timezone
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            paths = list(pool.map(lambda _: ingest_server.save_capture(self.vault, 'same', now)[0], range(12)))
+        self.assertEqual(len(set(paths)), 12)
+
+    def test_non_loopback_requires_auth_and_scalars_are_strings(self):
+        with self.assertRaises(ValueError):
+            ingest_server.create_server(self.vault, host='0.0.0.0', port=0)
+        from beyin_v3_sync import parse
+        target, _ = ingest_server.save_capture(self.vault, {'text': 'capture', 'source': r'\evil: true', 'url': 'false'})
+        fields, _ = parse(target.read_text())
+        self.assertEqual(fields['source'], r'\evil: true')
+        self.assertEqual(fields['url'], 'false')
+        self.assertTrue(fields['untrusted'])
+        from beyin_v3_sync import SyncEngine
+        engine = SyncEngine(self.vault, Path(self.tmp.name) / 'state')
+        engine.sync()
+        with engine.store._connect() as db:
+            rows = [json.loads(row[0]) for row in db.execute('SELECT payload FROM records')]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['trust'], 'untrusted')
 
     def test_cli_ingest_server_help(self):
         import subprocess
