@@ -52,12 +52,20 @@ Kontrol: kurulumdan ya da güncellemeden hemen sonra `git status --short` boş o
 
 `.beyin-runtime.json` yine de başka bir işletim sisteminden geldiyse (Windows'ta `C:\...`,
 macOS ya da Linux'ta `/...` yolu) bu makinede mutlak bir yol değildir. `beyin.py` o zaman bu
-makinenin varsayılan state dizinini kullanır ve `doctor` bunu `pinned_state_not_absolute`
-olarak gösterir. Kurucu da böyle bir yolu değişmiş dosya saymaz, bu makinenin yoluyla yeniden
+makinenin varsayılan state dizinini kullanır; her komut bunu stderr'e tek satırla söyler
+(stdout ve `--json` çıktısı değişmez) ve `doctor` `pinned_state_not_absolute` olarak gösterir.
+Böyle bir vault'un hook dosyaları da öbür makinenin yollarını taşır; `doctor` onları `hook_paths`
+altında listeler, bu makinede kurulum ikisini birlikte düzeltir. Kurucu da böyle bir yolu değişmiş dosya saymaz, bu makinenin yoluyla yeniden
 yazar ([#249](https://github.com/avenoxai/avenoxbeyin/issues/249)). 3.8.1 ve öncesinin
 `beyin.py`'si bu yolu okuyamadığı için `beyin.py update` çalışmaz; bir kez yeni paketin
 kurucusunu çalıştır (`python3 scripts/install_v3.py --vault "<vault>"`; bu makinede özel
 state kullandıysan `--state` ile onu ver), sonra dosyayı `.gitignore`'a ekle.
+
+Aynı veya farklı işletim sisteminden (Windows, Linux, macOS) ya da başka bir kullanıcı hesabından
+gelen varsayılan state yolları (`AppData/Local/beyin-v3/<vault-hash>`, `.local/state/beyin-v3/<vault-hash>`
+veya `Library/Application Support/beyin-v3/<vault-hash>`) yabancı pin sayılır; CLI ve lifecycle hook bu
+makinenin ve kullanıcının yerel varsayılan state dizinine geri döner. Özel `--state` dizinleri bu
+sezgisel eşlemeden etkilenmez; taşınan vault'ta `doctor` ile pin ve etkin state'i ayrıca doğrula.
 
 `companion-compact` kilit dosyasını companion klasöründe kalıcı bırakır. Dosyanın
 silinmemesi, POSIX üzerinde kilit tutulurken aynı yolda yeni bir inode açılmasını önler.
@@ -108,17 +116,33 @@ göre sıralar, en yenisini korur.
 - **Git adımları:** çalışmaya başlamadan önce `pull`; bitince `commit`, `pull --rebase`,
   `push`. Aynı vault'ta birden çok oturum açıksa git komutlarını aynı anda birden çok
   oturumdan çalıştırma; bir oturumdan ya da günün sonunda tek seferde gönder.
-- **Aynı makinede paralel oturumlar:** `preferences --parallel-sessions on` açıkken ajan,
+- **Paralel oturumlar ve çapraz cihaz farkındalığı:** `preferences --parallel-sessions on` açıkken ajan,
   aynı vault'ta son 45 dakikada etkin başka bir oturum varsa ilk isteminde tek satırlık bir
-  uyarı alır ([PREFERENCES.md](PREFERENCES.md#paralel-oturum-bildirimi)). İşaretler makineye
-  özel runtime klasöründe durur; öbür makinedeki oturumları görmez, onlar için yukarıdaki git
-  adımları geçerlidir.
+  uyarı alır ([PREFERENCES.md](PREFERENCES.md#paralel-oturum-bildirimi)). Oturumlar vault kökündeki
+  hafif `.presence/<session_id[:24]>.json` dosyaları ve makine-yerel runtime işaretleri ile
+  senkronize edilir; oturum kapandığında (`SessionEnd`) dosya temizce silinir, 45 dakikadan eski
+  işaretler otomatik elenir ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
 - **Çakışma çözülmeden oturum açma:** `pull --rebase` çakışmada durduğunda dosyada
   `<<<<<<<`, `=======`, `>>>>>>>` işaretleri kalır. `sync` bu üç işareti sırayla taşıyan
   dosyayı (receipt dahil) indekslemez ve `unresolved git conflict markers` uyarısıyla `degraded`
   döner; dosya çözülene kadar bağlamdan çıkar ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
   Kod bloğundaki işaretler de sayılır: notta alıntılanmış bir çakışma örneği de uyarı verir. Önce çakışmayı çöz (`git status` temiz olmalı), sonra
   oturum aç.
+- **Dosya senkron servisinin çakışma kopyaları:** iCloud, Dropbox, Syncthing, Google Drive gibi
+  servisler çakışmada iki tarafı iki dosya olarak bırakır ([#205](https://github.com/avenoxai/avenoxbeyin/issues/205)).
+  `sync` hiçbir dosyayı taşımaz, silmez ya da yeniden adlandırmaz; hangi tarafın doğru olduğuna
+  sen karar verirsin.
+  - Servisin kendi damgasını taşıyan kopya (`Not (… conflicted copy …).md`, `Not (Case Conflict).md`,
+    `Not.sync-conflict-20261006-120000-ABCDEF7.md`) indekse alınmaz; `file sync conflict copy`
+    uyarısıyla `degraded` döner. Asıl not normal indekslenir.
+  - Numaralı ad (`Not 2.md`, `Not (1).md`) aynı klasörde `Not.md` varken yalnız listelenir:
+    `sync_copy_candidates` alanında iki dosya ve içeriklerinin aynı olup olmadığı (`same_content`)
+    görünür, ikisi de indekste kalır ve sync durumu değişmez. Böyle adlandırılmış gerçek bir not
+    (`Sezon 2.md`) düşmez; listeden çıkarmak için adını değiştir. Kopya notun `id`'sini de taşıyorsa
+    iki dosya ayrıca `duplicate source id` çakışmasıyla bağlamdan çıkar.
+  - `receipts/` altında `<özet>.md` adına eklenmiş her şey (`<özet> 2.md`, `<özet> (conflicted copy).md`)
+    receipt kopyasıdır: indekslenmez, `file sync copy of a receipt` uyarısıyla görünür. Receipt'ler
+    yalnız eklenir; kopyayı asılla karşılaştırıp sil.
 - **Receipt `event_id`'sini makineler arasında tekil tut:** `event_id`'yi ajan seçer ve dosya
   adı onun özetidir. İki makine aynı gün aynı konuya aynı adı verirse (`ortak-konu-2026-09-27`)
   iki farklı receipt aynı dosyaya düşer ve `pull --rebase` `CONFLICT (add/add)` ile durur.
@@ -195,3 +219,8 @@ Uyarıyı gördüysen:
    `python3 beyin.py sync` çalıştır; indeks Markdown'dan yeniden kurulur.
 
 Kontrol: `git check-attr text -- receipts/x.md` çıktısı `text: unset` olmalıdır.
+
+Presence eşitlemesi varsayılan olarak kapalıdır. Her cihazda `preferences --parallel-sessions on`
+ile açılır. Yerel `<state>/parallel-presence-device.json` dosyası rastgele bir cihaz kimliği
+tutar; iki cihaz aynı kullanıcı ve state yolunu kullansa da diğerinin açık kaydını silmez.
+Bu kimlik dosyasını vault ile eşitleme. `doctor` kimlik veya presence dosyası oluşturmaz.

@@ -441,7 +441,8 @@ class MigrationTest(unittest.TestCase):
         from beyin_v3_projections import record_checkpoints
         self.source('notes/example.md', 'Synthetic source')
         engine = SyncEngine(self.root, self.state)
-        record_checkpoints(engine, [{'event': 'Stop', 'harness': 'codex', 'session': 'synthetic', 'at': 1}])
+        record_checkpoints(engine, [{'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'synthetic', 'at': .5},
+                                    {'event': 'Stop', 'harness': 'codex', 'session': 'synthetic', 'at': 1}])
         engine.sync()
         gaps = json.loads((self.state/'receipt-gaps.json').read_text())
         self.assertEqual(gaps['potential_missing_receipts'], 1)

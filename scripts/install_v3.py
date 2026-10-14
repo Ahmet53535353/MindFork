@@ -62,6 +62,41 @@ WINDOWS_STOCK_DOCTOR_HASH = "4b0e9aeae1067ae084380f7f179f12b9090213f3990c2973adb
 RETIRED_STUB = b"# BEYIN_V3_LEGACY_RETIRED: canonical source runtime owns new outcomes.\n"
 
 
+# User-owned starter embedded in an already-allowed package file. Old V3 updaters
+# accept only runtime/installer payloads, so adding a standalone template ZIP member
+# would prevent existing installations from updating.
+PERSON_TEMPLATE_PATH = "📋 Templates/Kisi.md"
+PERSON_TEMPLATE = """---
+# Kişi notu şablonu. Yeni kişi notunu notes/kisiler/<ad-soyad>.md olarak aç ve
+# aşağıdaki satırın başındaki "# " işaretini kaldır (şablonun kendisi kişi sayılmasın diye kapalı).
+# kind: person
+title:
+aliases:
+facts:
+  kurum:
+  rol:
+  iliski:
+  son_temas:
+visibility: internal
+created: {{TODAY}}
+modified: {{TODAY}}
+---
+#
+
+## Beyan
+<!-- Kullanıcının doğrudan söyledikleri, tarihli: "2026-10-12 (kullanıcı): ..." -->
+
+## Çıkarım (onay bekliyor)
+<!-- Ajanın tahmini. Kullanıcı onaylarsa Beyan'a taşınır, reddederse silinmez: "reddedildi" diye işaretlenir. -->
+
+## Temaslar
+<!-- Tarih, kanal, kısa özet. -->
+
+## Kaynaklar
+<!-- Bilginin geldiği not, receipt veya açık kaynak bağlantısı. -->
+"""
+
+
 def managed_handler(handler, previous, kept=()):
     command = handler.get("command", "")
     serialized = command + " " + " ".join(str(arg) for arg in handler.get("args", []))
@@ -360,6 +395,10 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         if source.exists():
             add(".agents/skills/" + name + "/SKILL.md", source.read_bytes())
             add(".claude/skills/" + name + "/SKILL.md", source.read_bytes())
+    # Seed once; a customized template is never a managed upgrade target.
+    person_template = vault / PERSON_TEMPLATE_PATH
+    if not person_template.exists() and not person_template.is_symlink():
+        add(PERSON_TEMPLATE_PATH, PERSON_TEMPLATE.encode("utf-8"))
     launcher = ROOT / "template/.claude/scripts/beyin_v3_launchers.py"
     if launcher.exists():
         spec = importlib.util.spec_from_file_location("beyin_release_launchers", launcher)
@@ -414,7 +453,7 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
                 handler["commandWindows"] = windows
             group = {"hooks": [handler]}
             if event == "PostToolUse":
-                group["matcher"] = "Edit|Write|apply_patch"
+                group["matcher"] = "Edit|Write|apply_patch|MultiEdit|NotebookEdit"
             hooks.setdefault(event, []).append(group)
         add(name, jbytes(data))
         manifest.setdefault("new_commands", []).extend([posix, windows])
@@ -598,6 +637,9 @@ not knowledge synthesis.
         else:
             preserved_excluded.append(name)
     for name, content in planned.items():
+        if name == PERSON_TEMPLATE_PATH:
+            next_manifest["files"].pop(name, None)
+            continue
         if name in removed: continue
         if "agents_block" in user_excluded and name in ("AGENTS.md", "CLAUDE.md"): continue
         path = vault / name
@@ -751,6 +793,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--uninstall", action="store_true")
     mode.add_argument("--plan", action="store_true", help="report what an install would do; change nothing")
+    mode.add_argument("--reconcile-hooks", action="store_true", help="reconcile stale hook commands with backup")
     parser.add_argument("--accept-customized-legacy", action="append", default=[], metavar="PATH",
                         help="retire one named customized legacy runner (vault-relative); repeatable")
     parser.add_argument("--keep-customized-legacy", action="append", default=[], metavar="PATH",
@@ -765,6 +808,16 @@ def main():
     default_state = defaults.default_state
     os.umask(0o077)
     try:
+        if args.reconcile_hooks:
+            selected_state = args.state
+            if selected_state is None:
+                pin_path = args.vault / '.beyin-runtime.json'
+                pin_data = json.loads(pin_path.read_text(encoding='utf-8')) if pin_path.is_file() else {}
+                pinned = pin_data.get('state') if isinstance(pin_data, dict) else None
+                selected_state = Path(pinned).expanduser() if isinstance(pinned, str) and Path(pinned).expanduser().is_absolute() else default_state(args.vault.resolve())
+            result = defaults.hook_reconcile(args.vault, selected_state)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         accepted = tuple(name.replace("\\", "/") for name in args.accept_customized_legacy)
         kept = tuple(name.replace("\\", "/") for name in args.keep_customized_legacy)
         excluded = tuple(name.replace("\\", "/") for name in args.exclude_component)

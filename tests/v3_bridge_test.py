@@ -62,6 +62,20 @@ class BridgeTest(unittest.TestCase):
         self.assertNotIn(str(self.project), json.dumps(events))
         self.assertNotIn('TRANSCRIPT_CANARY', json.dumps(events))
 
+    def test_sensitive_folder_task_cannot_enter_external_project_context(self):
+        secret = self.vault / '🔐 Kasa/task.md'
+        secret.parent.mkdir()
+        secret.write_text('Task details from a private folder', encoding='utf-8')
+        safe = self.vault / 'notes/task.md'
+        safe.parent.mkdir()
+        safe.write_text('Ordinary task', encoding='utf-8')
+        record = {'source': secret.relative_to(self.vault).as_posix(),
+                  'source_sha256': hashlib.sha256(secret.read_bytes()).hexdigest()}
+        self.assertFalse(bridge._fresh(self.vault, record))
+        record = {'source': safe.relative_to(self.vault).as_posix(),
+                  'source_sha256': hashlib.sha256(safe.read_bytes()).hexdigest()}
+        self.assertTrue(bridge._fresh(self.vault, record))
+
     def test_vault_subdirectory_and_other_installed_vault_skip_duplicates(self):
         for cwd in (self.vault, self.vault / 'nested', self.project):
             cwd.mkdir(exist_ok=True)
@@ -261,7 +275,10 @@ class BridgeTest(unittest.TestCase):
             db.execute("INSERT INTO receipt_checkpoints VALUES ('codex','old',123)")
         hook.drain_queue(self.vault, self.state)
         gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints']
-        self.assertEqual(gaps[0]['session'], 'old')
+        self.assertEqual(gaps, [], 'legacy rows without prompt evidence do not imply missing work')
+        with engine.store._connect() as db:
+            self.assertEqual(db.execute("SELECT harness,session,at FROM receipt_checkpoints WHERE session='old'").fetchone(),
+                             ('codex', 'old', 123.0), 'migration preserves the source row')
 
     def test_installed_zip_config_executes_from_external_project_without_global_writes(self):
         package = self.root / 'candidate.zip'
@@ -445,6 +462,24 @@ class BridgeTest(unittest.TestCase):
         for line in lines[2:]:
             self.assertTrue(line.startswith('- TASK_'))
             self.assertIn(': Action', line)
+
+    def test_project_context_handles_legacy_schema_without_project_id_column(self):
+        engine = SyncEngine(self.vault, self.state)
+        engine.task_create('tasks/legacy_due.md', 'Body', {
+            'id': 'legacy_due', 'title': 'LEGACY_DUE_TASK', 'status': 'active',
+            'due_at': '2026-09-01', 'project': self.project.name, 'owner': 'user'
+        })
+        engine.sync()
+        import sqlite3
+        db = sqlite3.connect(self.state / 'memory.sqlite3')
+        try:
+            db.execute('DROP TABLE IF EXISTS receipt_checkpoints')
+            db.execute('CREATE TABLE receipt_checkpoints(harness TEXT, session TEXT, at REAL, turn_at REAL DEFAULT 0, PRIMARY KEY(harness,session))')
+        finally:
+            db.close()
+        ctx = bridge.project_context(self.vault, self.state, 'test-id', self.project.name, budget=1200)
+        self.assertIn('Project context (' + self.project.name + '):', ctx)
+        self.assertIn('- LEGACY_DUE_TASK', ctx)
 
     def raw(self, data):
         command = [sys.executable, str(SCRIPTS / 'beyin_v3_bridge.py'), '--vault', str(self.vault), '--state',

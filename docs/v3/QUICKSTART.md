@@ -110,7 +110,10 @@ options. Command-line `--status` can be repeated. `--limit` defaults to 5 and
 choose its harness using `--harness`. Reuse an event ID only for the same outcome.
 Prefer receipt flags to avoid preparing JSON: `--event-id`, exactly one of
 `--summary` or `--summary-file PATH` (UTF-8), and at least one repeatable `--ref`.
-`--session` is optional. Summary text and line endings are preserved; literal
+`--session` is optional. `--link URL` (JSON `links`) names an external result such as
+a pull request or a published page; it is repeatable, only http(s), never read and never
+a vault source, so it adds to `--ref` rather than replacing it. A link with credentials or
+a known secret pattern is refused. Summary text and line endings are preserved; literal
 `\n` in `--summary` is not expanded. `--file` cannot be combined with these flags.
 Task patch JSON requires `id`, `expected_revision`, and `changes`. A revision
 conflict requires reading current state and reconciling the intended change.

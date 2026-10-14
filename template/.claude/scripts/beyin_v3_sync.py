@@ -18,10 +18,10 @@ _MODULE_DIR = str(Path(__file__).resolve().parent)
 if _MODULE_DIR not in sys.path:
     sys.path.insert(0, _MODULE_DIR)
 
-from beyin_v3 import (HARNESSES, REJECTED_AT, RETIRED_STATUSES, VALID_MEMORY_TYPES, MemoryStore,
-                      ReceiptConflict, RevisionConflict, _json, _path_redirected,
-                      _rejected_inference, _status_word, rejected_dependents, resolve_supersedes)
+from beyin_v3 import (HARNESSES, MAX_RECEIPT_LINKS, REJECTED_AT, RETIRED_STATUSES, VALID_MEMORY_TYPES, MemoryStore, ReceiptConflict, RevisionConflict, _json,
+                      _path_redirected, _plain_link, _rejected_inference, _status_word, rejected_dependents, resolve_supersedes)
 from beyin_v3_index import applied_keys, dir_key, exclusions as index_exclusions, prune as prune_excluded
+from beyin_v3_hygiene import sensitive_excluded, sensitive_source
 from beyin_v3_projections import project_receipts
 from beyin_v3_preferences import read as read_preferences
 from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
@@ -280,8 +280,6 @@ EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
 # The engine's own recovery kits are registered there by the module that creates them
 # (beyin_v3_dream -> "archive", beyin_v3_compact -> "Arşiv"), never hardcoded here: a name
 # this list holds is skipped in every vault, including one whose "archive" is ordinary notes.
-# User-chosen directory names (<state>/index.json) are pruned on top of these; see beyin_v3_index.
-# Nothing else is skipped by name: "vendor" or "external" is also an ordinary notes folder.
 COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
 TASK_STATUSES = ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled')
 
@@ -320,6 +318,29 @@ def _has_conflict_markers(text):
         elif stage == 2 and line.startswith('>>>>>>>'):
             return True
     return False
+
+
+# File-sync services keep both sides of a clash as two files (#205). Some name the copy with
+# their own stamp; nothing a person types looks like it, so such a copy is left out of the
+# index with a warning, and never moved: the user decides which side is right.
+_STAMPED_COPY = re.compile(r'.*\((?:[^()]*\bconflicted copy\b[^()]*|[^()]*\bcase conflict\b[^()]*)\)\.md'
+                           r'|.*\.sync-conflict-\d{8}-\d{6}-[0-9A-Za-z]+\.md', re.IGNORECASE)
+# iCloud ("Note 2.md") and Google Drive or Windows ("Note (1).md") number the copy instead. A
+# person names notes like that too ("Sezon 2.md"), so such a file is indexed as usual and only
+# listed, with its sibling and whether the two hold the same bytes.
+_NUMBERED_COPY = re.compile(r'(.+?)(?: (?:[2-9]|[1-9][0-9])| \((?:[1-9]|[1-9][0-9])\))\.md', re.IGNORECASE)
+
+
+def stamped_copy(name):
+    """True when a file-sync service named this file as the other side of a clash."""
+    return _STAMPED_COPY.fullmatch(name) is not None
+
+
+def numbered_copy_of(name, siblings):
+    """The sibling this file may be a numbered copy of, or None. `siblings` maps casefolded names
+    in the same directory to their spelling, so a case-insensitive volume finds it too."""
+    match = _NUMBERED_COPY.fullmatch(name)
+    return siblings.get((match[1] + '.md').casefold()) if match else None
 
 
 # Warm syncs skip reading a source whose bytes were already indexed (#233). The signature is
@@ -554,8 +575,11 @@ class SyncEngine:
     @staticmethod
     def _write_blockers(result, source):
         # Another receipt's divergence leaves this write's projection intact; it stays in every sync report (#210).
-        return [item for item in result['conflicts']
-                if not (item.get('kind') == 'receipt_divergence' and item.get('source') != source)]
+        # Receipt view conflicts preserve edited or untracked generated views without blocking source writes (#323).
+        from beyin_v3_projections import is_receipt_view_conflict
+        return [item for item in result.get('conflicts', [])
+                if not (item.get('kind') == 'receipt_divergence' and item.get('source') != source)
+                and not is_receipt_view_conflict(item)]
 
     def _path(self, relative, existing=False):
         if not isinstance(relative, str) or Path(relative).is_absolute() or '..' in Path(relative).parts:
@@ -731,6 +755,7 @@ class SyncEngine:
         and its value in the returned records is None: sync keeps that record as indexed."""
         records, warnings, conflicts = {}, [], []
         duplicate = set()
+        self.copy_candidates = []
         # Read once per sync, not per directory: the config cannot change mid-walk.
         excluded, self.index_exclusions = index_exclusions(self.state, self.root)
         # A listed name the walk skips anyway is a no-op. One set prunes below and is stored by
@@ -738,15 +763,24 @@ class SyncEngine:
         # what the list took out of the index.
         excluded = self.excluded_dir_keys = applied_keys(excluded, EXCLUDED_DIRS)
         for directory, dirs, files in os.walk(self.root, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d.casefold() not in EXCLUDED_DIRS and not (Path(directory) / d).is_symlink())
+            dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d.casefold() not in EXCLUDED_DIRS
+                             and not sensitive_excluded(d) and not (Path(directory) / d).is_symlink())
             if excluded:
                 # Pruned here, so an excluded tree is never listed, read or hashed.
                 dirs[:] = prune_excluded(self.root, directory, dirs, excluded, self.index_exclusions)
+            siblings = {name.casefold(): name for name in files}
             for name in sorted(files):
                 if name.startswith('.') or not name.lower().endswith('.md') or name.casefold() in EXCLUDED_FILES or name.casefold().startswith('setup-'):
                     continue
                 path = Path(directory) / name
                 relative = path.relative_to(self.root).as_posix()
+                if stamped_copy(name):
+                    warnings.append({'source': relative, 'reason': 'file sync conflict copy; compare it with the original, '
+                                                                   'keep the right side and delete the other'})
+                    continue
+                original = numbered_copy_of(name, siblings)
+                if original is not None:
+                    self.copy_candidates.append(self._copy_candidate(Path(directory), name, original))
                 try:
                     # Path proof first: an outside-vault or symlinked source keeps its rejection reason.
                     path, resolved = self._scan_path(relative)
@@ -786,6 +820,20 @@ class SyncEngine:
             conflicts.append({'id': id, 'reason': 'duplicate source id; all copies quarantined'})
         return records, warnings, conflicts
 
+    def _copy_candidate(self, directory, name, original):
+        """A numbered file beside its possible original, for the report; reads both only here."""
+        candidate = {'source': (directory / name).relative_to(self.root).as_posix(),
+                     'original': (directory / original).relative_to(self.root).as_posix()}
+        try:
+            # Reporting must obey the same source boundary as indexing. In particular,
+            # never follow an external sibling symlink merely to compare its contents.
+            copy_path, _ = self._scan_path(candidate['source'])
+            original_path, _ = self._scan_path(candidate['original'])
+            candidate['same_content'] = copy_path.read_bytes() == original_path.read_bytes()
+        except (OSError, ValueError):
+            candidate['same_content'] = None
+        return candidate
+
     def _recover(self, db):
         completed, conflicts = [], []
         for entry in sorted(self.journal.glob('*.json')):
@@ -806,7 +854,7 @@ class SyncEngine:
                     row = db.execute('SELECT payload FROM receipts WHERE id=?', (event['event_id'],)).fetchone()
                     if row:
                         previous = json.loads(row[0])
-                        if previous['summary'] != event['summary'] or previous['refs'] != event['refs']:
+                        if (previous['summary'], previous['refs'], previous.get('links')) != (event['summary'], event['refs'], event.get('links')):
                             raise ReceiptConflict('event id collision during recovery')
                     db.execute('INSERT OR IGNORE INTO receipts VALUES (?,?)', (event['event_id'], _json(event)))
                 completed.append(entry)
@@ -837,6 +885,12 @@ class SyncEngine:
         if not summary.strip():
             raise ValueError('empty receipt summary')
         event = {'event_id': event_id, 'summary': summary, 'refs': [Path(ref).as_posix() for ref in refs], 'harness': harness}
+        links = metadata.get('links')
+        if links is not None:
+            if not isinstance(links, list) or not links:
+                raise ValueError('invalid receipt links')
+            self._links(links)  # Synced/restored receipts obey the same unconditional secret gate.
+            event['links'] = links
         created_at, session = metadata.get('created_at'), metadata.get('session')
         if created_at is not None:
             # The stamp stays as written (UTC); projections name daily/v3 by its local day (#149).
@@ -867,8 +921,13 @@ class SyncEngine:
         warnings, conflicts = [], []
         known = {_hash(row[0]) + '.md': json.loads(row[1]) for row in db.execute('SELECT id, payload FROM receipts')}
         for name in names:
-            # Other names were never written by receipt().
             if not re.fullmatch(r'[0-9a-f]{64}\.md', name):
+                # receipt() writes only <hash>.md; that name with anything more is a sync service's
+                # copy of an append-only receipt, never indexed, always shown. Other names were
+                # never written by receipt().
+                if re.fullmatch(r'[0-9a-f]{64}.+\.md', name, re.IGNORECASE):
+                    warnings.append({'source': 'receipts/' + name, 'reason': 'file sync copy of a receipt; '
+                                     'receipts are append-only, compare it with the original and delete the copy'})
                 continue
             rel = 'receipts/' + name
             try:
@@ -877,7 +936,7 @@ class SyncEngine:
                     # Indexed receipts stay authoritative, but a source that no longer matches them means
                     # another device wrote the same event_id and a merge kept its file (#205).
                     old = known[name]
-                    if (old['summary'], old['refs']) != (event['summary'], event['refs']):
+                    if (old['summary'], old['refs'], old.get('links')) != (event['summary'], event['refs'], event.get('links')):
                         conflicts.append({'source': rel, 'kind': 'receipt_divergence',
                                           'reason': 'receipt source differs from indexed receipt; event_id reused on another device'})
                     continue
@@ -890,7 +949,7 @@ class SyncEngine:
             db.execute("INSERT OR REPLACE INTO metadata VALUES ('receipt_scan_signature',?)", (signature,))
         return warnings, conflicts
 
-    def sync(self, full=False):
+    def sync(self, full=False, recover_views=False):
         """Index the vault. `full` reads every source: no stored stat signature is taken on trust."""
         # Serialize recovery, source scan and projection across local processes.
         with self.store._connect() as db:
@@ -940,7 +999,8 @@ class SyncEngine:
                     db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
                 indexed[id] = payload
             cache.save(indexed)
-            conflicts.extend(project_receipts(self, db, warnings))
+            recovered_views = [] if recover_views else None
+            conflicts.extend(project_receipts(self, db, warnings, recover_views=recover_views, recovered=recovered_views))
             # A supersedes value that retires nothing is reported, not a degraded scan: no
             # source was excluded and the hook must not warn on every turn about it.
             dead_supersedes = resolve_supersedes([json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')])[1]
@@ -951,9 +1011,15 @@ class SyncEngine:
         for entry in completed:
             entry.unlink(missing_ok=True)
         result = {'status': 'conflict' if conflicts else 'degraded' if warnings else 'succeeded', 'indexed': len(records), 'deleted': deleted, 'warnings': warnings, 'conflicts': conflicts}
+        if recover_views:
+            result['recovered_views'] = recovered_views or []
         if dead_supersedes:
             result['supersedes_issues'] = dead_supersedes[:20]
             result['supersedes_issue_count'] = len(dead_supersedes)
+        if self.copy_candidates:
+            # Reported, not a degraded scan: both files are notes in the index until the user says otherwise.
+            result['sync_copy_candidates'] = self.copy_candidates[:20]
+            result['sync_copy_candidate_count'] = len(self.copy_candidates)
         if self.index_exclusions is not None:
             # Reported, not a degraded scan: the user chose these names, or the file is not applied.
             result['index_exclusions'] = self.index_exclusions
@@ -962,6 +1028,8 @@ class SyncEngine:
     def _refuse_excluded(self, source):
         """A new source under a directory the user keeps out of the index would be written and
         then fail its read-back; refuse it before anything is written, naming the setting."""
+        if sensitive_source(source):
+            raise ValueError('source is under a sensitive directory excluded from the memory index')
         excluded = index_exclusions(self.state, self.root)[0]
         if excluded and any(dir_key(part) in excluded for part in Path(source).parts[:-1]):
             raise ValueError('source is under a directory excluded from the index (excluded_dirs in index.json)')
@@ -1169,15 +1237,41 @@ class SyncEngine:
                     source_sync={'status': result['status'], 'warnings': result['warnings'],
                                  'conflicts': result['conflicts']})
 
-    def receipt(self, event_id, summary, refs, harness, session=None):
+    def _links(self, links):
+        """External results (a pull request, a published page) as plain http(s) URLs.
+
+        Unlike refs they are not vault sources: nothing checks that they exist and they are never
+        read. A URL with a user name, a password or a known secret pattern is refused, not rewritten,
+        so the receipt never stores a half-hidden address. Unlike summaries this check does not wait
+        for the opt-in secret filter: a token in a query string is the usual way a link leaks one.
+        """
+        if links is None:
+            return []
+        if not isinstance(links, list) or len(links) > MAX_RECEIPT_LINKS:
+            raise ValueError(f'links must be a list of at most {MAX_RECEIPT_LINKS} URLs')
+        kept = []
+        for link in links:
+            if not isinstance(link, str) or not _plain_link(link):
+                raise ValueError('link must be an http(s) URL without spaces or credentials')
+            import urllib.parse
+            if redact_secrets(urllib.parse.unquote(link), self.state)[1]:
+                raise ValueError('link contains a secret')
+            if link not in kept:
+                kept.append(link)
+        return kept
+
+    def receipt(self, event_id, summary, refs, harness, session=None, links=None):
         if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
             raise ValueError('event id and summary required')
         if harness not in HARNESSES + ('manual',) or not isinstance(refs, list) or not refs:
             raise ValueError('harness and refs required')
         summary, redacted = self._protect(summary)
         refs = [self.store._source(ref) for ref in refs]
+        links = self._links(links)
         source = 'receipts/' + _hash(event_id) + '.md'
         event = {'event_id': event_id, 'summary': summary, 'refs': refs, 'harness': harness, 'created_at': datetime.now(timezone.utc).isoformat()}
+        if links:
+            event['links'] = links
         if session is not None:
             if not isinstance(session, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', session):
                 raise ValueError('invalid receipt session')
@@ -1195,10 +1289,12 @@ class SyncEngine:
                 row = (_json(old),)
             if row:
                 old = json.loads(row[0])
-                if old['summary'] != summary or old['refs'] != refs:
+                if old['summary'] != summary or old['refs'] != refs or old.get('links', []) != links:
                     raise ReceiptConflict('event id collision')
                 event = old
             receipt_metadata = {'kind': 'receipt', 'event_id': event_id, 'harness': event['harness'], 'refs': refs, 'visibility': 'internal'}
+            if links:
+                receipt_metadata['links'] = links
             if event.get('created_at'):
                 receipt_metadata['created_at'] = event['created_at']
             if event.get('session'):
@@ -1216,7 +1312,12 @@ class SyncEngine:
             raise ReceiptConflict('receipt projection conflict')
         if self._path(source, existing=True).read_bytes() != content.encode('utf-8'):
             raise ReceiptConflict('receipt source changed before readback')
-        self.store.submit_receipt(event_id, summary, refs, event['harness'])
+        self.store.submit_receipt(event_id, summary, refs, event['harness'], links=links)
         self._record_redactions(redacted)
-        return {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
-                'redacted': redacted, 'secrets_redacted': redacted}
+        from beyin_v3_projections import is_receipt_view_conflict
+        view_conflicts = [item for item in result.get('conflicts', []) if is_receipt_view_conflict(item)]
+        receipt_res = {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
+                       'redacted': redacted, 'secrets_redacted': redacted}
+        if view_conflicts:
+            receipt_res['view_conflicts'] = view_conflicts
+        return receipt_res

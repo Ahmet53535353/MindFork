@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -169,6 +170,125 @@ class JsonTextTest(unittest.TestCase):
         # A lone surrogate (a file name the system could not decode) cannot be written as UTF-8.
         self.assertEqual(yakala._json_text({'ad': 'x\udcff'}, Mock(encoding='utf-8', closed=False)),
                          '{\n  "ad": "x\\udcff"\n}')
+
+
+@unittest.skipUnless(WINDOWS, 'the waiting window is a real Windows process')
+class WarmWindowTest(unittest.TestCase):
+    """`pencere --hazir` as the listener starts it: alive to Windows while it waits, gone when the pipe closes."""
+
+    def top_level_windows(self, pid):
+        user32 = ctypes.windll.user32
+        found = []
+        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def each(hwnd, _param):
+            owner = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(owner))
+            if owner.value == pid:
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(callback(each), None)
+        return found
+
+    def test_waiting_window_answers_messages_and_exits_when_the_pipe_closes(self):
+        vault = Path(tempfile.mkdtemp(prefix='v3-yakala-hazir-'))
+        self.addCleanup(shutil.rmtree, vault, True)
+        child = subprocess.Popen([sys.executable, str(MODULE), 'pencere', '--vault', str(vault), '--hazir'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 env=inherited_env())
+
+        def stop_child():
+            if child.stdin and not child.stdin.closed:
+                child.stdin.close()
+            if child.poll() is None:
+                child.kill()
+            child.wait(15)
+        self.addCleanup(stop_child)
+        self.assertTrue(wait_until(lambda: self.top_level_windows(child.pid), 30), 'Tk never created a window')
+        time.sleep(0.5)  # well past start-up: from here on it only waits for the key
+        user32 = ctypes.windll.user32
+        for hwnd in self.top_level_windows(child.pid):
+            answer = ctypes.c_size_t()
+            # WM_NULL with SMTO_ABORTIFHUNG: a window that stopped reading messages times out here.
+            self.assertTrue(user32.SendMessageTimeoutW(ctypes.c_void_p(hwnd), 0, 0, 0, 0x0002, 2000, ctypes.byref(answer)))
+        child.stdin.close()
+        self.assertEqual(child.wait(15), 0)
+
+
+class BrowserUrlTest(unittest.TestCase):
+    """The active tab's link comes from the browser's own address bar; anything else is not a link."""
+
+    def test_address_bar_values(self):
+        self.assertEqual(yakala.tab_url('youtube.com/watch?v=abc\r\n'), 'https://youtube.com/watch?v=abc')
+        self.assertIsNone(yakala.tab_url('http://127.0.0.1:8080/x'))
+        self.assertEqual(yakala.tab_url('https://github.com/avenoxai'), 'https://github.com/avenoxai')
+        for value in ('yarim kalmis arama', 'brave://settings', 'localhost', 'http://10.0.0.1/', 'https://user:pass@example.com/', 'https://[broken/', 'https://example.com:bad/', '', None):
+            self.assertIsNone(yakala.tab_url(value), value)
+
+    def test_a_private_browser_tab_does_not_override_clipboard_capture(self):
+        with patch.object(yakala, '_uia_address_bar', return_value='http://127.0.0.1:8080/panel'):
+            self.assertIsNone(yakala.windows_browser_url(42, 'chrome'))
+
+    def test_each_browser_is_asked_for_its_own_address_bar_class(self):
+        with patch.object(yakala, '_uia_address_bar', return_value='github.com/avenoxai') as read:
+            self.assertEqual(yakala.windows_browser_url(42, 'Brave'), 'https://github.com/avenoxai')
+            self.assertEqual(yakala.windows_browser_url(42, 'msedge'), 'https://github.com/avenoxai')
+            self.assertIsNone(yakala.windows_browser_url(42, 'firefox'))
+        self.assertEqual([c.args for c in read.call_args_list], [(42, 'BraveOmniboxViewViews'), (42, 'OmniboxViewViews')])
+
+    def test_reader_failure_falls_back_to_the_clipboard(self):
+        with patch.object(yakala, '_uia_address_bar', side_effect=OSError('UI Automation yok')):
+            self.assertIsNone(yakala.windows_browser_url(42, 'chrome'))
+        with patch.object(yakala, '_uia_address_bar', return_value=None):
+            self.assertIsNone(yakala.windows_browser_url(42, 'chrome'))  # no omnibox found
+
+    def test_a_slow_browser_costs_at_most_the_timeout(self):
+        release, finished = threading.Event(), threading.Event()
+
+        def slow(*_):
+            release.wait(10)
+            finished.set()
+            return 'late.example.com'
+        with patch.object(yakala, '_uia_address_bar', side_effect=slow) as read:
+            try:
+                started = time.monotonic()
+                self.assertIsNone(yakala.windows_browser_url(42, 'chrome', timeout=0.1))
+                self.assertLess(time.monotonic() - started, 2)
+                # A timed-out COM provider keeps only its original worker. Repeated hotkeys return
+                # immediately instead of leaking one daemon/apartment on every press.
+                for _ in range(10):
+                    self.assertIsNone(yakala.windows_browser_url(42, 'chrome', timeout=0.1))
+                self.assertEqual(read.call_count, 1)
+            finally:
+                release.set()
+                self.assertTrue(finished.wait(2))
+                self.assertTrue(wait_until(lambda: not any(t.name == 'yakala-adres' for t in threading.enumerate()), 2))
+        with patch.object(yakala, '_uia_address_bar', return_value='github.com/avenoxai'):
+            self.assertEqual(yakala.windows_browser_url(42, 'chrome'), 'https://github.com/avenoxai')
+
+    @unittest.skipUnless(WINDOWS, 'IsHungAppWindow is Windows only')
+    def test_a_hung_window_is_not_asked_at_all(self):
+        with patch.object(ctypes.windll.user32, 'IsHungAppWindow', return_value=1), \
+                patch.object(yakala, '_uia_address_bar') as read:
+            self.assertIsNone(yakala.windows_browser_url(42, 'chrome'))
+        read.assert_not_called()
+
+    @unittest.skipUnless(WINDOWS, 'UI Automation is Windows only')
+    def test_real_ui_automation_with_a_dead_window_gives_nothing_and_releases_com(self):
+        # The real COM path end to end: ElementFromHandle fails on a closed handle and nothing escapes.
+        self.assertIsNone(yakala.windows_browser_url(0, 'chrome'))
+        seen = {}
+
+        def run():
+            with self.assertRaises(OSError):
+                yakala._uia_address_bar(0, 'OmniboxViewViews')
+            # Balanced: COM is not left initialised on the thread, so this is a fresh S_OK, not S_FALSE.
+            seen['again'] = ctypes.windll.ole32.CoInitializeEx(None, 2)
+            ctypes.windll.ole32.CoUninitialize()
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join(10)
+        self.assertEqual(seen.get('again'), 0)
 
 
 class FakeSession:
@@ -329,6 +449,11 @@ class ListenerFlowTest(unittest.TestCase):
         return thread, result
 
     def test_registers_reports_opens_the_window_and_stops_by_name(self):
+        windows = [Mock(pid=4321), Mock(pid=4322)]
+        spawn_patch = patch.object(yakala.subprocess, 'Popen', side_effect=windows)
+        spawn = spawn_patch.start()
+        self.addCleanup(spawn_patch.stop)
+        self.addCleanup(self.stop_all)  # stop the listener while the Popen/Win32 fakes are still installed
         thread, result = self.listen(self.vault)
         self.assertTrue(wait_until(lambda: yakala._windows_listener_running(self.vault), 10))
         self.assertEqual(list(self.session.hotkeys), [(0x4003, ord('B'))])
@@ -336,21 +461,85 @@ class ListenerFlowTest(unittest.TestCase):
         # The mutex `durum` reads exists only once the key is registered.
         order = [name for name, _detail in self.session.calls]
         self.assertLess(order.index('register'), order.index('create-mutex'))
-        context = {'uygulama': 'chrome', 'pencere': 'Şifre & Müşteri'}
-        with patch.object(yakala, 'windows_context', return_value=context), \
-                patch.object(yakala.subprocess, 'Popen', return_value=Mock(pid=4321)) as spawn:
-            self.session.press(0x4003, ord('B'))
-            self.assertTrue(wait_until(lambda: ('foreground', 4321) in self.session.calls, 10))
+        # A window is already waiting before the first key, past Python, the module and Tk.
+        self.assertTrue(wait_until(lambda: spawn.call_count == 1, 10))
         argv = spawn.call_args.args[0]
-        self.assertEqual(argv[1:5], [str(MODULE.resolve()), 'pencere', '--vault', str(self.vault.resolve())])
-        self.assertEqual(json.loads(argv[argv.index('--baglam') + 1]), context)
+        self.assertEqual(argv[1:], [str(MODULE.resolve()), 'pencere', '--vault', str(self.vault.resolve()), '--hazir'])
+        self.assertEqual(spawn.call_args.kwargs['stdin'], subprocess.PIPE)
+        context = {'uygulama': 'chrome', 'pencere': 'Şifre & Müşteri'}
+        windows[0].stdin.write.side_effect = lambda _line: self.session.calls.append(('wake', 4321))
+        with patch.object(yakala, 'windows_context', return_value=context):
+            self.session.press(0x4003, ord('B'))
+            self.assertTrue(wait_until(lambda: ('wake', 4321) in self.session.calls, 10))
+        # The foreground right is handed over before the window wakes, never after.
+        self.assertLess(self.session.calls.index(('foreground', 4321)), self.session.calls.index(('wake', 4321)))
+        # The key hands the context to the waiting window and readies the next one.
+        line = windows[0].stdin.write.call_args.args[0]
+        self.assertEqual(json.loads(line.decode('utf-8')), context)
+        self.assertTrue(line.endswith(b'\n') and windows[0].stdin.close.called)
+        self.assertTrue(wait_until(lambda: spawn.call_count == 2, 10))
+        self.assertIn('--hazir', spawn.call_args.args[0])
         yakala._windows_stop_listener(self.other, timeout=1)  # another vault's uninstall
         self.assertTrue(thread.is_alive() and yakala._windows_listener_running(self.vault))
+        self.assertFalse(windows[1].stdin.close.called)
         yakala._windows_stop_listener(self.vault, timeout=5)
         thread.join(10)
         self.assertEqual(result, {'code': 0})
+        # Stopping closes the pipe of the window still waiting, which ends it without a window.
+        self.assertTrue(windows[1].stdin.close.called)
+        windows[1].stdin.write.assert_not_called()
         self.assertEqual((self.session.hotkeys, self.session.objects, self.session.handles), ({}, {}, {}))
         yakala._windows_stop_listener(self.vault, timeout=1)  # twice is harmless
+
+    def test_a_dead_waiting_window_falls_back_to_a_fresh_one(self):
+        dead, fresh, next_one = Mock(pid=1), Mock(pid=4321), Mock(pid=2)
+        dead.stdin.write.side_effect = BrokenPipeError
+        spawn_patch = patch.object(yakala.subprocess, 'Popen', side_effect=[dead, fresh, next_one])
+        spawn = spawn_patch.start()
+        self.addCleanup(spawn_patch.stop)
+        self.addCleanup(self.stop_all)  # stop the listener while the Popen/Win32 fakes are still installed
+        self.listen(self.vault)
+        self.assertTrue(wait_until(lambda: spawn.call_count == 1, 10))
+        context = {'uygulama': 'code', 'pencere': 'not'}
+        with patch.object(yakala, 'windows_context', return_value=context):
+            self.session.press(0x4003, ord('B'))
+            self.assertTrue(wait_until(lambda: ('foreground', 4321) in self.session.calls, 10))
+        argv = spawn.call_args_list[1].args[0]
+        self.assertEqual(json.loads(argv[argv.index('--baglam') + 1]), context)
+        self.assertTrue(wait_until(lambda: spawn.call_count == 3, 10))
+
+    def test_quick_presses_each_get_their_own_window(self):
+        windows = [Mock(pid=4321 + n) for n in range(4)]
+        spawn_patch = patch.object(yakala.subprocess, 'Popen', side_effect=windows)
+        spawn = spawn_patch.start()
+        self.addCleanup(spawn_patch.stop)
+        self.addCleanup(self.stop_all)  # stop the listener while the Popen/Win32 fakes are still installed
+        self.listen(self.vault)
+        self.assertTrue(wait_until(lambda: spawn.call_count == 1, 10))
+        with patch.object(yakala, 'windows_context', side_effect=[{'pencere': 'bir'}, {'pencere': 'iki'}, {'pencere': 'uc'}]):
+            for _ in range(3):  # back to back: the next window may still be starting, it is still the one used
+                self.session.press(0x4003, ord('B'))
+            self.assertTrue(wait_until(lambda: spawn.call_count == 4, 10))
+        sent = [json.loads(w.stdin.write.call_args.args[0])['pencere'] for w in windows[:3]]
+        self.assertEqual(sent, ['bir', 'iki', 'uc'])
+        self.assertEqual([('foreground', w.pid) in self.session.calls for w in windows], [True, True, True, False])
+
+    def test_context_failure_keeps_the_waiting_child_and_shutdown_reaps_it(self):
+        waiting = Mock(pid=4321)
+        with patch.object(yakala.subprocess, 'Popen', return_value=waiting) as spawn:
+            thread, result = self.listen(self.vault)
+            self.assertTrue(wait_until(lambda: spawn.called, 10))
+            with patch.object(yakala, 'windows_context', side_effect=RuntimeError('provider failed')) as read:
+                self.session.press(0x4003, ord('B'))
+                self.assertTrue(wait_until(lambda: read.called, 10))
+                # Let pressed() finish before checking that it did not abandon the ready child.
+                self.assertTrue(wait_until(lambda: not self.session.queues.get(thread.native_id), 10))
+                yakala._windows_stop_listener(self.vault, timeout=5)
+                thread.join(10)
+            self.assertEqual(result, {'code': 0})
+            self.assertEqual(spawn.call_count, 1)
+            waiting.stdin.close.assert_called_once()
+            waiting.wait.assert_called_once_with(timeout=2)
 
     def test_a_taken_key_never_looks_like_a_running_listener(self):
         self.session.hotkeys[(0x4003, ord('B'))] = -1  # another application owns the combination
@@ -430,6 +619,11 @@ class WindowsEyes:
 class FakeListenerProcess:
     """`pythonw <copy> dinle --vault V --tus K` as install() starts it, run on a thread."""
     started = []
+
+    def __new__(cls, command, **options):
+        if 'dinle' not in command:  # the listener's waiting window: nothing to run here
+            return Mock(pid=4321, command=command)
+        return super().__new__(cls)
 
     def __init__(self, command, **options):
         self.command, self.options, self.code = command, options, None
@@ -760,21 +954,24 @@ class WindowsListenerTest(unittest.TestCase):
                 result['code'] = yakala.listen_windows(self.vault, MODULE, KEY, self.state)
             except SystemExit as exc:
                 result['code'] = exc.code
-        with patch.object(yakala.subprocess, 'Popen', return_value=Mock(pid=os.getpid())) as spawn:
+        waiting = Mock(pid=os.getpid())
+        with patch.object(yakala.subprocess, 'Popen', return_value=waiting) as spawn:
             thread = threading.Thread(target=run, daemon=True)
             thread.start()
             self.assertTrue(wait_until(lambda: yakala._windows_listener_running(self.vault) or not thread.is_alive()))
             self.assertTrue(thread.is_alive(), result)
+            self.assertTrue(wait_until(lambda: spawn.called, 30))
             # WM_HOTKEY as the system posts it to the registering thread; no synthetic key press needed.
             self.assertTrue(hotkey_user32().PostThreadMessageW(thread.native_id, 0x0312, 1, 0))
-            self.assertTrue(wait_until(lambda: spawn.called, 30))
+            self.assertTrue(wait_until(lambda: waiting.stdin.write.called, 30))
             yakala._windows_stop_listener(self.vault, timeout=30)
             thread.join(60)
         self.assertEqual(result, {'code': 0})
-        argv = spawn.call_args.args[0]
-        self.assertEqual(argv[1:5], [str(MODULE.resolve()), 'pencere', '--vault', str(self.vault.resolve())])
-        # The same two facts the window gathered for itself when the Start menu shortcut opened it.
-        self.assertLessEqual(set(json.loads(argv[argv.index('--baglam') + 1])), {'pencere', 'uygulama'})
+        argv = spawn.call_args_list[0].args[0]
+        self.assertEqual(argv[1:], [str(MODULE.resolve()), 'pencere', '--vault', str(self.vault.resolve()), '--hazir'])
+        # The warm-window context also carries an active Chromium tab's URL and title.
+        line = waiting.stdin.write.call_args_list[0].args[0]
+        self.assertLessEqual(set(json.loads(line.decode('utf-8'))), {'pencere', 'uygulama', 'url', 'baslik'})
 
     def test_shortcut_content_and_clean_rewrite(self):
         link = self.root / 'kısayollar' / 'Beyne At Dinleyici deneme.lnk'

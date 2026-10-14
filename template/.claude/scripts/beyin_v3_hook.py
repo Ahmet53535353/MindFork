@@ -238,7 +238,7 @@ def _has_knowledge_update(vault, receipt, since):
 def receipt_reminder(payload, state, harness, event, vault=None):
     """Track edits per session and return a one-time Stop block, or None.
 
-    Installed PostToolUse hooks match only Edit|Write|apply_patch for Claude and
+    Installed PostToolUse hooks match Edit|Write|apply_patch|MultiEdit|NotebookEdit for Claude and
     Codex, so that event marks the session as edited without reading transcripts.
     Stop then looks for a receipt of this harness and session in the runtime store.
     If a receipt declared learnings but no note under knowledge/ was touched,
@@ -319,7 +319,9 @@ def enqueue_event(vault, state, payload, harness):
     key = hashlib.sha256(identity.encode()).hexdigest()
     path = state / "hook-queue" / (key + ".json")
     if not path.exists() and not (state / "hook-done" / (key + ".json")).exists():
-        atomic(path, dict(metadata, at=time.time()))
+        from beyin_v3_hook_done import acknowledged
+        if not acknowledged(state, key):
+            atomic(path, dict(metadata, at=time.time()))
     return key
 
 
@@ -355,7 +357,11 @@ def drain_queue(vault, state):
     # A degraded scan is complete but excluded one or more invalid sources. The
     # fresh healthy subset may be injected with an explicit warning. Source
     # conflicts still block acknowledgement because ownership is ambiguous.
-    if result.get("status") in ("ok", "succeeded", "synced", "degraded") and not result.get("conflicts"):
+    # Receipt view conflicts (outcomes.md, daily/v3) own no queued event (#323).
+    from beyin_v3_projections import is_receipt_view_conflict
+    source_conflicts = [c for c in result.get("conflicts", []) if not is_receipt_view_conflict(c)]
+    if (result.get("status") in ("ok", "succeeded", "synced", "degraded")
+        or (result.get("status") == "conflict" and not source_conflicts)) and not source_conflicts:
         (state / "hook-error.json").unlink(missing_ok=True)
         processed = 0
         # Acknowledge under the index's writer lock. On Windows two workers that both open a
@@ -370,6 +376,13 @@ def drain_queue(vault, state):
                 except FileNotFoundError:
                     continue  # Another worker already atomically acknowledged this event.
                 processed += 1
+        # Compaction is best effort and runs only after durable acknowledgement.
+        # A failure leaves old JSONs in place and cannot turn a successful sync into a retry.
+        try:
+            from beyin_v3_hook_done import prune
+            prune(engine.store)
+        except Exception:
+            pass
         return {"processed": processed, "failed": 0, "pending": len(list((state / "hook-queue").glob("*.json")))}
     return {"processed": 0, "failed": len(pending), "pending": len(pending)}
 
@@ -387,7 +400,11 @@ def main():
     parser.add_argument("--drain-queue", action="store_true")
     parser.add_argument("--metadata-only", action="store_true", help="Queue lifecycle metadata without injecting vault context")
     args = parser.parse_args()
-    vault, state = args.vault.resolve(), args.state.resolve()
+    vault = args.vault.resolve()
+    from beyin_v3 import resolve_state
+    state = resolve_state(vault, args.state)
+    if state != args.state.expanduser().resolve() and not os.environ.get('BEYIN_V3_INTERNAL') and os.environ.get('BEYIN_V3_SKIP') != '1':
+        print('V3 state fallback: synced foreign default resolved to this machine; reinstall hooks locally.', file=sys.stderr)
     if state == vault or vault in state.parents:
         raise ValueError("Runtime state must be outside vault")
     os.umask(0o077)
@@ -439,6 +456,13 @@ def main():
                 notice += session_notice(vault, state)
             except Exception:
                 pass
+        if event == 'SessionStart' and not args.metadata_only and (state / 'scheduled-notice.json').is_file():
+            # A scheduled-check run that needs attention (#267): one small state file, said once, then gone.
+            try:
+                from beyin_v3_scheduled import session_notice as scheduled_notice
+                notice += scheduled_notice(state)
+            except Exception:
+                pass
         if not args.metadata_only and event in ('SessionStart', 'PostToolUse') and (state / 'hygiene.json').is_file():
             # Opt-in hygiene signals (#130), machine-local in state/hygiene.json. Independent of the
             # performance profile, and never able to cost the session or the turn itself.
@@ -465,14 +489,14 @@ def main():
             # Without that file a prompt costs one stat; SessionEnd still removes its own marker.
             try:
                 if event == 'SessionEnd':
-                    if (state / 'session-markers').is_dir():
+                    if (state / 'session-markers').is_dir() or (vault / '.presence').is_dir():
                         from beyin_v3_parallel import end
-                        end(state, args.harness, payload.get('session_id'))
+                        end(state, args.harness, payload.get('session_id'), vault=vault)
                 elif (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity'))) \
                         and (state / 'parallel-sessions.json').is_file() and not is_synthetic_prompt(payload):
                     from beyin_v3_parallel import enabled, touch
                     if enabled(state):
-                        notice += touch(state, args.harness, payload.get('session_id'))
+                        notice += touch(state, args.harness, payload.get('session_id'), vault=vault)
             except Exception:
                 pass  # a marker can never cost the turn
 
@@ -552,6 +576,9 @@ def main():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
                 if sync.get("status") not in ("ok", "succeeded", "synced"):
                     warning += "V3 sync needs attention; consult current sources and doctor.\n"
+                from beyin_v3_projections import is_receipt_view_conflict
+                if any(is_receipt_view_conflict(c) for c in sync.get('conflicts', [])):
+                    warning += "V3 receipt view conflicted; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
@@ -578,8 +605,10 @@ def main():
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
                 # header plus the newest unrelated notes. Superseded and retired-status notes are
-                # dropped by the shared read gate before ranking (#201).
-                context = store.context_for(args.harness, query, project=project, budget_chars=limit, strict=True) if query else {"records": []}
+                try:
+                    context = store.context_for(args.harness, query, project=project, budget_chars=limit, strict=True) if query else {"records": []}
+                except (ValueError, OSError):
+                    context = {"records": []}
                 inherited = False
                 from beyin_v3_continuity import resolve, remember
                 topic_session = payload.get('session_id', 'unknown')
