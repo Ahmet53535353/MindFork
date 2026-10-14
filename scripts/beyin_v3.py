@@ -293,7 +293,8 @@ def jev_advice(result):
     return result
 
 
-HOOK_FILES = (".claude/settings.local.json", ".codex/hooks.json", ".agents/hooks.json")
+HOOK_FILES = (".claude/settings.local.json", ".codex/hooks.json", ".agents/hooks.json",
+              ".kiro/hooks/beyin-v3.json")
 
 
 def _hook_arguments(command: str) -> list:
@@ -319,7 +320,7 @@ def hook_paths(vault: Path) -> dict:
 
     A vault moved to another account or machine together with its hook files keeps commands
     such as C:\\Users\\<old>\\...\\beyin_v3_hook.py; every lifecycle hook then fails with a
-    generic error. Reads only the three hook files; never writes and never walks the vault."""
+    generic error. Reads only managed hook files; never writes and never walks the vault."""
     stale, checked = [], 0
     try:
         here = vault.resolve()
@@ -334,18 +335,26 @@ def hook_paths(vault: Path) -> dict:
         except (OSError, ValueError, UnicodeError):
             stale.append({"file": name, "reason": "unreadable"})
             continue
-        events = data.get("beyin-v3", {}) if name == ".agents/hooks.json" else data.get("hooks", {})
         handlers = []
-        for event, groups in (events.items() if isinstance(events, dict) else ()):
-            for group in groups if isinstance(groups, list) else ():
-                if not isinstance(group, dict):
-                    continue
-                for handler in group.get("hooks", [group]) if "hooks" in group else [group]:
-                    if isinstance(handler, dict) and isinstance(handler.get("command"), str):
-                        handlers.append((event, handler["command"]))
+        if name == ".kiro/hooks/beyin-v3.json":
+            for item in data.get("hooks", []) if isinstance(data.get("hooks"), list) else ():
+                if isinstance(item, dict) and isinstance(item.get("action"), dict):
+                    command = item["action"].get("command")
+                    if isinstance(command, str):
+                        handlers.append((item.get("trigger", ""), command))
+        else:
+            events = data.get("beyin-v3", {}) if name == ".agents/hooks.json" else data.get("hooks", {})
+            for event, groups in (events.items() if isinstance(events, dict) else ()):
+                for group in groups if isinstance(groups, list) else ():
+                    if not isinstance(group, dict):
+                        continue
+                    for handler in group.get("hooks", [group]) if "hooks" in group else [group]:
+                        if isinstance(handler, dict) and isinstance(handler.get("command"), str):
+                            handlers.append((event, handler["command"]))
         for event, command in handlers:
             arguments = _hook_arguments(command)
-            script = next((a for a in arguments if a.replace("\\", "/").endswith("/beyin_v3_hook.py")), None)
+            expected = "/beyin_v3_kiro.py" if name == ".kiro/hooks/beyin-v3.json" else "/beyin_v3_hook.py"
+            script = next((a for a in arguments if a.replace("\\", "/").endswith(expected)), None)
             if script is None:
                 continue
             checked += 1
@@ -445,9 +454,14 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
     vault = vault.resolve()
     state = state.resolve()
     hook_script = vault / ".claude/scripts/beyin_v3_hook.py"
+    kiro_script = vault / ".claude/scripts/beyin_v3_kiro.py"
     _local_hook_file(vault, hook_script)
     if not hook_script.is_file():
         raise RuntimeError(f"Hook script not found at {hook_script}. Reinstall or repair the vault first.")
+    if (vault / ".kiro/hooks/beyin-v3.json").is_file():
+        _local_hook_file(vault, kiro_script)
+        if not kiro_script.is_file():
+            raise RuntimeError(f"Kiro hook adapter not found at {kiro_script}. Reinstall or repair the vault first.")
 
     for name in HOOK_FILES:
         _local_hook_file(vault, vault / name)
@@ -495,7 +509,29 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
         file_reconciled = 0
         changes = []
 
-        if name == ".agents/hooks.json":
+        if name == ".kiro/hooks/beyin-v3.json":
+            for item in data.get("hooks", []) if isinstance(data.get("hooks"), list) else ():
+                if not isinstance(item, dict) or not isinstance(item.get("action"), dict):
+                    continue
+                event = item.get("trigger")
+                old_cmd = item["action"].get("command")
+                if event not in ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop") or not isinstance(old_cmd, str):
+                    continue
+                args = _hook_arguments(old_cmd)
+                if not any(a.replace("\\", "/").endswith("/beyin_v3_kiro.py") for a in args):
+                    continue
+                posix, windows = _hook_commands([sys.executable, kiro_script, "--vault", vault, "--state", state,
+                                                  "--event", event])
+                all_new_commands.extend([posix, windows])
+                target_cmd = windows if os.name == "nt" else posix
+                if old_cmd != target_cmd or force:
+                    changes.append({"event": event, "old_command": old_cmd, "new_command": target_cmd,
+                                    "old_summary": " ".join(args[:2]),
+                                    "new_summary": f"{sys.executable} {kiro_script}"})
+                    item["action"]["command"] = target_cmd
+                    item["timeout"] = 25 if os.name == "nt" else 10
+                    file_reconciled += 1
+        elif name == ".agents/hooks.json":
             managed = data.get("beyin-v3")
             if isinstance(managed, dict):
                 for event in ("PreInvocation", "Stop"):
@@ -764,7 +800,7 @@ def parser():
     context = sub.add_parser("context", help="Retrieve source-backed shared context")
     context.add_argument("query", nargs="?", help="Query; alternatively use --file")
     context.add_argument("--file", help="JSON retrieval arguments, or - for stdin")
-    context.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
+    context.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp", "kiro"), default="codex")
     context.add_argument("--project")
     context.add_argument("--audience", choices=("internal", "public"), default="internal")
     context.add_argument("--status", action="append", dest="statuses")
@@ -791,7 +827,7 @@ def parser():
     answer.add_argument("--project", required=True)
     receipt = sub.add_parser("receipt", help="Submit an idempotent source-linked receipt")
     receipt.add_argument("--file", help="JSON input path, or - for stdin (default without receipt flags)")
-    receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
+    receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp", "kiro"), default="codex")
     receipt.add_argument("--event-id", help="Required receipt event identifier in flag mode")
     receipt.add_argument("--summary", help="Receipt summary text, preserving literal newlines")
     receipt.add_argument("--summary-file", type=Path, metavar="PATH", help="Read the receipt summary from a UTF-8 file")
@@ -1042,7 +1078,7 @@ def main(argv=None, return_result=False):
         elif args.command == "doctor":
             _ensure_scripts_path()
             from beyin_v3_hook_done import summary as hook_done_summary
-            done = hook_done_summary(state, ('codex', 'claude', 'antigravity', 'hermes', 'opencode', 'omp'))
+            done = hook_done_summary(state, ('codex', 'claude', 'antigravity', 'hermes', 'opencode', 'omp', 'kiro'))
             result = {"pending_events": len(list((state / "hook-queue").glob("*.json"))),
                       **done}
             for filename in ("hook-health.json", "hook-error.json", "receipt-gaps.json"):

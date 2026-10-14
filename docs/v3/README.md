@@ -2,7 +2,7 @@
 
 Vault dışındaki seçili proje oturumları için: [opsiyonel global köprü](GLOBAL-BRIDGE.md).
 
-V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity, [Hermes Agent](HERMES.md), [OpenCode](OPENCODE.md) ve [OMP](OMP.md) ise aynı motora bağlanan istemcilerdir. Python 3.11+ dışında ek Python paketi gerekmez. Varsayılan akışta Mem0, API anahtarı, daemon veya ayrı sunucu kurulmaz. [Jev danışmanı](JEV.md) isteğe bağlıdır ve varsayılan kapalıdır; `beyin.py jev` ile açılmadıkça normal arama ve hook akışını değiştirmez. Aynı danışman ayrı kurulan yerel Laya sunucusunu da yalnız gölge modda, ölçüm için kullanabilir (`jev shadow --provider laya`).
+V3'te Markdown kaynak, SQLite yerel indeks, Codex/Claude Code/Antigravity, [Hermes Agent](HERMES.md), [OpenCode](OPENCODE.md), [OMP](OMP.md) ve [Kiro](KIRO.md) ise aynı motora bağlanan istemcilerdir. Python 3.11+ dışında ek Python paketi gerekmez. Varsayılan akışta Mem0, API anahtarı, daemon veya ayrı sunucu kurulmaz. [Jev danışmanı](JEV.md) isteğe bağlıdır ve varsayılan kapalıdır; `beyin.py jev` ile açılmadıkça normal arama ve hook akışını değiştirmez. Aynı danışman ayrı kurulan yerel Laya sunucusunu da yalnız gölge modda, ölçüm için kullanabilir (`jev shadow --provider laya`).
 
 [Yeni kullanıcı başlangıcı](../../README.md) · [Ajanla kurulum](../../SETUP-V3.md) · [Güncelleme/geri alma](UPDATE.md) · [Birden çok makine](MULTI-MACHINE.md) · [Kaynak şeması](MARKDOWN.md) · [Runtime](RUNTIME.md)
 
@@ -18,7 +18,7 @@ Kurucu ortak motoru, `beyin`, `beyin-doktor`, `beyin-guncelle` skill'lerini, kur
 - Kısa lifecycle hook'ları kalıcı metadata kuyruğuna yazar. İş gerektiğinde başlar; istemciler kapalıyken sürekli çalışan servis yoktur.
 - Kaynak bağlantılı receipt tekrar denemede aynı sonucu verir. Önceki sonuç sonraki oturumda tarihsel iddia olarak bulunur; ham sohbet doğrulanmış bilgiye çevrilmez.
 - Yeni sonuçlar `daily/v3/` ve `knowledge/v3/outcomes.md` altında receipt bağlantılarıyla görünür. Eski günlük ve bilgi metinleri yeniden yazılmaz.
-- Ortak skill kaynakları `.agents/skills` içindedir. Claude tarafı platforma göre aynı kaynağa veya kontrol edilen karşılığa erişir; kişisel skill çakışmaları gizlenmez.
+- Ortak skill kaynakları `.agents/skills` içindedir. Claude ve Kiro kendi proje kopyalarına erişir; kişisel skill çakışmaları gizlenmez.
 - Updater yalnız resmi stable release veya açıkça verilen yerel paketi kullanır. Yönetilen dosya yedekleri, kesinti journal'ı, checksum ve runtime ön kontrolleri uygulanır; başarılı sürüm kaydı en son yazılır.
 
 ## V2 geçişi
