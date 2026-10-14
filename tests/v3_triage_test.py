@@ -21,6 +21,7 @@ if _SCRIPTS not in sys.path:
 import beyin_v3_triage as triage_module
 import beyin_v3_hygiene as hygiene_module
 from beyin_entry import human_result
+from tests.v3_package_helpers import inherited_env
 
 
 class TriageTest(unittest.TestCase):
@@ -248,7 +249,7 @@ class TriageTest(unittest.TestCase):
     def test_cli_triage_json_output(self):
         cmd = [sys.executable, str(ROOT / 'scripts/beyin_v3.py'),
                '--vault', str(self.vault), '--state', str(self.state), 'triage']
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        result = subprocess.run(cmd, env=inherited_env(), capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
         self.assertEqual(data.get('schema'), 1)
@@ -259,7 +260,7 @@ class TriageTest(unittest.TestCase):
         self.assertIn('recommendations', data)
 
     def test_cli_human_via_beyin_entry(self):
-        env = dict(os.environ, PYTHONIOENCODING='utf-8')
+        env = inherited_env(PYTHONIOENCODING='utf-8')
         cmd = [sys.executable, str(self.vault / 'beyin.py'), 'triage', '--human']
         result = subprocess.run(cmd, cwd=str(self.vault), env=env, capture_output=True, text=True, encoding='utf-8', errors='replace')
         self.assertEqual(result.returncode, 0, result.stderr)
