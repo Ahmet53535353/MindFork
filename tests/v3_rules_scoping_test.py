@@ -123,7 +123,7 @@ class RulesScopingTest(unittest.TestCase):
         except OSError as exc:
             self.skipTest(str(exc))
         text = companion.context(self.store, 8000, 's', 'claude', project='alpha')
-        self.assertNotIn('[projects/beta/Kurallar.md]', text)
+        self.assertNotIn('BETA-MARKER', text)
 
     def test_turkish_scope_matching(self):
         text = '- [kapsam: ARŞİV] Kural\n- [scope: backend] Other'

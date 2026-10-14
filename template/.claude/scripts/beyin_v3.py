@@ -871,9 +871,9 @@ class MemoryStore:
         return self._retrieve(query, project, audience, statuses, limit, 0,
                               strict=strict, candidate_only=True)
 
-    def snapshot_context(self, audience="internal", budget_chars=6000, limit=5):
+    def snapshot_context(self, audience="internal", budget_chars=6000, limit=5, project=None):
         """Explicit bounded current-state snapshot; normal empty queries abstain."""
-        return self._retrieve("", audience=audience, statuses=("active", "waiting"),
+        return self._retrieve("", project=project, audience=audience, statuses=("active", "waiting"),
                               limit=limit, budget_chars=budget_chars, snapshot=True)
 
     def source_snapshot(self, source_names, audience="internal", budget_chars=3000, source_directory=None, text_transform=None):
