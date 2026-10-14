@@ -1142,7 +1142,7 @@ class ReceiptStateResetTest(unittest.TestCase):
         self.assertIn('Second device.', (self.vault / 'knowledge/v3/outcomes.md').read_text(encoding='utf-8'))
 
     def test_receipt_hidden_by_unchanged_directory_mtime_heals_on_next_sync(self):
-        """Where a filesystem keeps the directory mtime, a missed receipt costs one conflicted sync, not a deadlock."""
+        """Where a filesystem keeps the directory mtime, a missed receipt costs one degraded sync, not a deadlock."""
         engine = self.module.SyncEngine(self.vault, self.root / 'state_heal')
         engine.receipt('event-1', 'First device.', ['notes/task.md'], 'codex')
         receipts_dir = self.vault / 'receipts'
@@ -1153,7 +1153,7 @@ class ReceiptStateResetTest(unittest.TestCase):
         self.assertEqual(other.sync()['conflicts'], [])
         self.assertEqual(other.receipt('event-2', 'Second device.', ['notes/task.md'], 'codex')['status'], 'succeeded')
         os.utime(receipts_dir, ns=(past, past))
-        self.assertTrue(engine.sync()['conflicts'])
+        self.assertTrue(any(w.get('kind') == 'receipt_view' for w in engine.sync()['warnings']))
         self.assertEqual(engine.sync()['conflicts'], [])
         self.assertEqual(engine.receipt('event-3', 'Back in step.', ['notes/task.md'], 'codex')['status'], 'succeeded')
 

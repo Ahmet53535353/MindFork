@@ -14,6 +14,7 @@ import math
 
 # metadata row: the folded directory names the last sync kept out of the index, as a JSON list.
 EXCLUDED_DIRS_ROW = 'index_excluded_dirs'
+RECEIPT_VIEW_SOURCES_ROW = 'receipt_view_sources'
 
 
 def _record_excluded_dirs(engine, db):
@@ -57,6 +58,13 @@ def _hidden_ref_sources(db, refs):
     refs = sorted(set(refs))
     from beyin_v3_hygiene import sensitive_source
     hidden = {ref for ref in refs if sensitive_source(ref)}
+    # View provenance survives removal of its indexed privacy/trust metadata.
+    # All claimed paths and proven aliases are withheld, including in fresh state.
+    try:
+        row = db.execute('SELECT value FROM metadata WHERE key=?', (RECEIPT_VIEW_SOURCES_ROW,)).fetchone()
+        hidden.update(set(refs).intersection(json.loads(row[0]) if row else []))
+    except sqlite3.OperationalError:  # receipts-only reader
+        pass
     excluded = _excluded_dir_keys(db)
     if excluded:
         from beyin_v3_index import dir_key
@@ -86,6 +94,12 @@ def _vault_file(vault, relative):
         return False
 
 
+def _withheld_view_receipts(db):
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='receipt_view_receipts'").fetchone():
+        return {row[0] for row in db.execute('SELECT id FROM receipt_view_receipts')}
+    return set()
+
+
 def latest_receipts(db, vault, sessions=None):
     """Receipts an automatic context may show, newest first by created_at, then event_id, as (source, event).
 
@@ -96,6 +110,7 @@ def latest_receipts(db, vault, sessions=None):
     describes that record. The SessionStart hook and the global bridge share this gate.
     """
     vault = Path(vault)
+    withheld = _withheld_view_receipts(db)
     candidates = []
     for (payload,) in db.execute('SELECT payload FROM receipts'):
         try:
@@ -104,7 +119,7 @@ def latest_receipts(db, vault, sessions=None):
             continue
         if not isinstance(event, dict) or not isinstance(event.get('event_id'), str) or not isinstance(event.get('summary'), str):
             continue
-        if sessions is not None and event.get('session') not in sessions:
+        if event['event_id'] in withheld or (sessions is not None and event.get('session') not in sessions):
             continue
         instant = _receipt_instant(event.get('created_at'))
         if instant is not None:
@@ -157,6 +172,7 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None, since=None, un
         start = today - timedelta(days=days - 1)
     matches = []
     undated = 0
+    withheld = _withheld_view_receipts(db)
     for (payload,) in db.execute('SELECT payload FROM receipts'):
         try:
             event = json.loads(payload)
@@ -182,6 +198,8 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None, since=None, un
         ident = event.get('event_id')
         if not isinstance(ident, str) or not ident or not isinstance(event.get('summary'), str):
             undated += 1
+            continue
+        if ident in withheld:
             continue
         source = 'receipts/' + hashlib.sha256(ident.encode()).hexdigest() + '.md'
         matches.append((stamp, ident, source, event, day))
@@ -501,11 +519,106 @@ def _archive_receipt_view(engine, path, expected_hash, _hash):
         out.write(raw)
         out.flush()
         os.fsync(out.fileno())
+    # A recovered hard link retains the old view inode after the canonical
+    # path is replaced. Keep its proven path beside the archive so a rebuilt
+    # SQLite state can still recognize it. The archive bytes stay exact.
+    identity = engine._source_identity(path)
+    aliases = []
+    for source in sorted(getattr(engine, 'receipt_view_sources', ())):
+        if source == relative:
+            continue
+        try:
+            _, resolved = engine._scan_path(source)
+            if engine._source_identity(resolved) == identity:
+                aliases.append({'source': source, 'identity': identity})
+        except (ValueError, OSError):
+            continue
+    if aliases:
+        sidecar = Path(str(filename) + '.provenance.json')
+        provenance = json.dumps({'schema': 1, 'view': relative,
+                                 'archive': Path(filename).name,
+                                 'sha256': expected_hash, 'aliases': aliases},
+                                ensure_ascii=False, sort_keys=True).encode('utf-8')
+        if len(provenance) > 65536:
+            raise ValueError('receipt view alias provenance exceeds size limit')
+        with sidecar.open('xb') as out:
+            out.write(provenance)
+            out.flush()
+            os.fsync(out.fileno())
+    # The file fsync does not persist its name, or the newly created .archive
+    # entry. Required POSIX directory barriers must succeed before destroying
+    # the original. Windows does not expose directory fsync through this API.
+    if os.name != 'nt':
+        for directory in (archive_dir, path.parent):
+            descriptor = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
     # Preserve a concurrent user edit as a conflict; the first bytes remain archived.
     path = engine._path(relative, existing=True)
     if _hash(path.read_bytes()) != expected_hash:
         raise ValueError('receipt view changed after archive')
     return Path(filename)
+
+
+def archived_receipt_view_aliases(engine, warnings):
+    """Recover proven live alias paths from adjacent archive metadata after state loss.
+
+    The sidecar's archive digest is checked before use. A copied vault may
+    change inode numbers, so unchanged alias bytes at the recorded path are
+    also accepted; unrelated equal-content files at other paths are not.
+    """
+    aliases = set()
+    for root in (engine.root / 'knowledge/v3', engine.root / 'daily/v3'):
+        archive_dir = root / '.archive'
+        if archive_dir.is_symlink() or not archive_dir.is_dir():
+            continue
+        try:
+            engine._path((archive_dir / 'probe.md').relative_to(engine.root).as_posix())
+        except (ValueError, OSError):
+            warnings.append({'source': archive_dir.relative_to(engine.root).as_posix(),
+                             'reason': 'receipt view provenance directory unsafe'})
+            continue
+        for sidecar in sorted(archive_dir.glob('*.md.provenance.json')):
+            relative = sidecar.relative_to(engine.root).as_posix()
+            try:
+                if sidecar.is_symlink() or sidecar.stat().st_size > 65536:
+                    raise ValueError('unsafe receipt view provenance')
+                engine._path(relative, existing=True)
+                data = json.loads(sidecar.read_text(encoding='utf-8'))
+                archive = sidecar.with_name(sidecar.name[:-len('.provenance.json')])
+                if (not isinstance(data, dict) or data.get('schema') != 1 or
+                        data.get('archive') != archive.name or
+                        not is_receipt_view_source(data.get('view')) or
+                        data['view'].split('/')[0:2] != list(root.relative_to(engine.root).parts) or
+                        not isinstance(data.get('aliases'), list) or archive.is_symlink()):
+                    raise ValueError('invalid receipt view provenance')
+                engine._path(archive.relative_to(engine.root).as_posix(), existing=True)
+                digest = hashlib.sha256()
+                with archive.open('rb') as handle:
+                    for block in iter(lambda: handle.read(65536), b''):
+                        digest.update(block)
+                if digest.hexdigest() != data.get('sha256'):
+                    raise ValueError('receipt view archive digest mismatch')
+                if any(not isinstance(item, dict) or not isinstance(item.get('source'), str)
+                       for item in data['aliases']):
+                    raise ValueError('invalid receipt view alias')
+                for item in data['aliases']:
+                    source = item['source']
+                    try:
+                        _, resolved = engine._scan_path(source)
+                        # Inode numbers can be recycled after unlink. Even an
+                        # identical recorded identity needs unchanged view bytes.
+                        if hashlib.sha256(resolved.read_bytes()).hexdigest() == data['sha256']:
+                            aliases.add(source)
+                    except (ValueError, OSError):
+                        # One missing or unreadable alias must not discard other
+                        # live aliases recorded beside the same archived view.
+                        continue
+            except (ValueError, OSError, UnicodeError, KeyError, TypeError) as exc:
+                warnings.append({'source': relative, 'reason': 'receipt view provenance unreadable: ' + str(exc)})
+    return aliases
 
 
 def receipt_day(created_at, zone=None):
@@ -523,10 +636,9 @@ def receipt_day(created_at, zone=None):
         return None
 
 
-def project_receipts(engine, db, warnings=None, recover_views=False, recovered=None):
-    _hash, atomic, render = engine.projection_helpers()
-    _record_excluded_dirs(engine, db)
-    db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
+def _receipt_view_contents(engine, db, warnings=None):
+    """Desired views from immutable receipts, without writing files or tracking state."""
+    _hash, _, render = engine.projection_helpers()
     migration = engine.state/'v2-migration.json'
     previous = json.loads(migration.read_text(encoding='utf-8')) if migration.exists() else {}
     historical = set(previous.get('historical_receipts', []))
@@ -554,6 +666,43 @@ def project_receipts(engine, db, warnings=None, recover_views=False, recovered=N
         desired[f'daily/v3/{day}.md'] = render({'generated': True, 'kind': 'receipt-index'}, '# Recorded outcomes\n\nAgent-authored claims, not independently verified facts.\n\n'+'\n'.join(entries))
     if outcomes:
         desired['knowledge/v3/outcomes.md'] = render({'generated': True, 'kind': 'receipt-index'}, '# Outcome source index\n\nThis index links semantic receipts. It is not an automatic knowledge compiler.\n\n'+''.join(outcomes))
+    return desired
+
+
+def quarantine_receipt_view_history(db, sources):
+    """Withhold snapshots through this sync for proven views, without rewriting audit bytes.
+
+    A per-source event cutoff survives view retirement, but does not ban a future
+    ordinary note reusing that source or id after projection provenance is gone.
+    """
+    # Receipt summaries that referred to a claimed view must not become public
+    # merely because that view is retired or an ordinary note reuses its path.
+    # Canonical view paths are also recognizable from immutable receipt refs
+    # after a database reset, when prior tracking rows no longer exist. Keep
+    # this provenance by immutable event id without rewriting receipt files.
+    db.execute('CREATE TABLE IF NOT EXISTS receipt_view_receipts(id TEXT PRIMARY KEY)')
+    for ident, payload in db.execute('SELECT id,payload FROM receipts').fetchall():
+        refs = json.loads(payload).get('refs', [])
+        if isinstance(refs, list) and any(isinstance(ref, str) and
+                                          (ref in sources or is_receipt_view_source(ref)) for ref in refs):
+            db.execute('INSERT OR IGNORE INTO receipt_view_receipts VALUES (?)', (ident,))
+    if not sources:
+        return
+    db.execute('CREATE TABLE IF NOT EXISTS receipt_view_history('
+               'source TEXT PRIMARY KEY, through_sequence INTEGER NOT NULL)')
+    sequence = db.execute('SELECT COALESCE(MAX(sequence), 0) FROM events').fetchone()[0]
+    db.executemany('INSERT INTO receipt_view_history VALUES (?,?) '
+                   'ON CONFLICT(source) DO UPDATE SET through_sequence=excluded.through_sequence '
+                   'WHERE receipt_view_history.through_sequence < excluded.through_sequence',
+                   [(source, sequence) for source in sorted(sources)])
+
+
+def project_receipts(engine, db, warnings=None, recover_views=False, recovered=None, desired=None):
+    _hash, atomic, _ = engine.projection_helpers()
+    _record_excluded_dirs(engine, db)
+    db.execute('CREATE TABLE IF NOT EXISTS receipt_views(path TEXT PRIMARY KEY, hash TEXT NOT NULL)')
+    if desired is None:
+        desired = _receipt_view_contents(engine, db, warnings)
     conflicts = []
     tracked_views = dict(db.execute('SELECT path, hash FROM receipt_views'))
     for relative, content in desired.items():

@@ -304,8 +304,10 @@ def human_result(result, command, installed_version=None):
             lines.append(str(result['undated_omitted']) + ' tarihsiz/eski bicimli kayit atlandi.')
         if result.get('missing_source_omitted'):
             lines.append(str(result['missing_source_omitted']) + ' kaydin makbuz dosyasi artik yok; atlandi.')
-        if result.get('partial'):
+        if result.get('partial') or result.get('source_sync', {}).get('status') == 'degraded':
             lines.append('Uyari: kaynak esitlemesi kismi; ayrinti icin --json kullan.')
+        if any(w.get('kind') == 'receipt_view' for w in result.get('source_sync', {}).get('warnings', [])):
+            lines.append('Uyari: receipt view yerel duzenlemesi korundu; arsivleyip yenilemek icin beyin.py sync --recover-views kullan.')
         return '\n'.join(lines)
     if command == 'companion-compact':
         lines = []

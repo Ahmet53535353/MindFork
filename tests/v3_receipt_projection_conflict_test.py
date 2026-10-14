@@ -83,24 +83,25 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             out.write('\nSynthetic manual annotation to preserve.\n')
         before_bytes = view.read_bytes()
 
-        # Sync detects conflict and preserves file
+        # Sync reports a typed warning and preserves the file
         sync_res = engine.sync()
-        self.assertEqual(sync_res['status'], 'conflict')
-        self.assertEqual(sync_res['conflicts'], [{'source': 'knowledge/v3/outcomes.md', 'reason': 'manual receipt view edit preserved'}])
+        self.assertEqual(sync_res['status'], 'degraded')
+        self.assertEqual(sync_res['conflicts'], [])
+        self.assertEqual(sync_res['warnings'], [{'source': 'knowledge/v3/outcomes.md', 'reason': 'manual receipt view edit preserved', 'kind': 'receipt_view'}])
         self.assertEqual(view.read_bytes(), before_bytes)
 
-        # Second receipt succeeds without ReceiptConflict, reports view_conflicts
+        # Second receipt succeeds without ReceiptConflict, reports source_sync warnings
         second = engine.receipt('second', 'Synthetic second result', ['notes/canary.md'], 'codex', 'isolated-session')
         self.assertEqual(second['status'], 'succeeded')
         self.assertTrue((self.vault / ('receipts/' + hashlib.sha256(b'second').hexdigest() + '.md')).exists())
-        self.assertTrue(any(is_receipt_view_conflict(c) for c in second.get('view_conflicts', [])))
+        self.assertTrue(any(is_receipt_view_conflict(c) for c in second['source_sync']['warnings']))
 
         # Hook delivers healthy canary note to model context despite view conflict
         hook = self._invoke_hook(self.vault, self.state)
         self.assertEqual(hook.returncode, 0)
         self.assertIn('NC-7319', hook.stdout)
         self.assertIn('V3 sync needs attention', hook.stdout)
-        self.assertIn('V3 receipt view conflicted', hook.stdout)
+        self.assertIn('V3 receipt view preserved', hook.stdout)
         self.assertEqual(view.read_bytes(), before_bytes)
 
         # Lifecycle events were acknowledged
@@ -125,9 +126,11 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
         )
 
         sync_res = engine2.sync()
-        self.assertEqual(sync_res['status'], 'conflict')
-        # All conflicts must be diagnosed as untracked view, not manual edit
-        for conf in sync_res['conflicts']:
+        self.assertEqual(sync_res['status'], 'degraded')
+        # All warnings must be diagnosed as untracked view, not manual edit
+        self.assertTrue(sync_res['warnings'])
+        self.assertEqual(sync_res['conflicts'], [])
+        for conf in sync_res['warnings']:
             self.assertEqual(conf['reason'], 'untracked receipt view preserved')
             self.assertTrue(is_receipt_view_conflict(conf))
         self.assertEqual(view.read_bytes(), before_bytes)
@@ -153,10 +156,10 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
         view = self.vault / 'knowledge/v3/outcomes.md'
         view.write_text(view.read_text(encoding='utf-8') + '\nUser hand-crafted note to be archived.\n', encoding='utf-8')
 
-        # Normal sync sees conflict
+        # Normal sync reports a warning
         sync_before = engine.sync()
-        self.assertEqual(sync_before['status'], 'conflict')
-        self.assertEqual(sync_before['conflicts'][0]['reason'], 'manual receipt view edit preserved')
+        self.assertEqual(sync_before['status'], 'degraded')
+        self.assertEqual(sync_before['warnings'][0]['reason'], 'manual receipt view edit preserved')
 
         # Recover views
         sync_recovered = engine.sync(recover_views=True)
@@ -294,10 +297,10 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
         self.assertEqual(context.returncode, 0, context.stderr)
         result = json.loads(context.stdout)
         self.assertTrue(any(row['source'] == 'Paylaşım/Özet.md' for row in result['records']))
-        self.assertEqual(result['view_conflicts'][0]['source'], 'knowledge/v3/outcomes.md')
+        self.assertEqual(result['source_sync']['warnings'][0]['source'], 'knowledge/v3/outcomes.md')
         hook = self._invoke_hook(self.vault, self.state, scripts=self.vault / '.claude/scripts')
         self.assertIn('NC-7319', hook.stdout)
-        self.assertIn('V3 receipt view conflicted', hook.stdout)
+        self.assertIn('V3 receipt view preserved', hook.stdout)
         self.assertEqual(view.read_bytes(), before)
         with SyncEngine(self.vault, self.state).store._connect() as db:
             self.assertIsNotNone(db.execute('SELECT id FROM markdown_sources WHERE source=?', ('Paylaşım/Özet.md',)).fetchone())
@@ -333,7 +336,8 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
         except OSError:
             self.skipTest('symlinks unavailable')
         result = engine.sync(recover_views=True)
-        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(result['status'], 'degraded')
+        self.assertTrue(any(w.get('kind') == 'receipt_view' for w in result['warnings']))
         self.assertEqual(view.read_bytes(), before)
         self.assertEqual(list(outside.iterdir()), [])
         self.assertEqual(result['recovered_views'], [])
@@ -350,7 +354,8 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             view.write_bytes(raw + b'\nConcurrent user annotation')
         with patch('beyin_v3_projections.os.fsync', editing):
             result = engine.sync(recover_views=True)
-        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(result['status'], 'degraded')
+        self.assertTrue(any(w.get('kind') == 'receipt_view' for w in result['warnings']))
         self.assertTrue(view.read_bytes().endswith(b'Concurrent user annotation'))
         self.assertEqual(next((view.parent / '.archive').iterdir()).read_bytes(), raw)
 
@@ -370,7 +375,8 @@ class ReceiptProjectionConflictTest(unittest.TestCase):
             return unlink(path, *args, **kwargs)
         with patch.object(Path, 'unlink', deny):
             result = engine.sync(recover_views=True)
-        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(result['status'], 'degraded')
+        self.assertTrue(any(w.get('kind') == 'receipt_view' for w in result['warnings']))
         self.assertEqual(view.read_bytes(), raw)
         with engine.store._connect() as db:
             self.assertIsNotNone(db.execute('SELECT hash FROM receipt_views WHERE path=?', ('knowledge/v3/outcomes.md',)).fetchone())

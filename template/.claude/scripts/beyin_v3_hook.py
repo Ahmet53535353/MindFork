@@ -546,8 +546,8 @@ def main():
                 if sync.get("status") not in ("ok", "succeeded", "synced"):
                     warning += "V3 sync needs attention; consult current sources and doctor.\n"
                 from beyin_v3_projections import is_receipt_view_conflict
-                if any(is_receipt_view_conflict(c) for c in sync.get('conflicts', [])):
-                    warning += "V3 receipt view conflicted; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
+                if any(is_receipt_view_conflict(c) for c in sync.get('conflicts', []) + sync.get('warnings', [])):
+                    warning += "V3 receipt view preserved; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
@@ -605,7 +605,8 @@ def main():
                 except (ValueError, OSError):
                     pass
                 if not delivered.get("records"):
-                    print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
+                    diagnostic = fit_client(args.harness, (notice + warning)[:limit])
+                    print(json.dumps(output_context(args.harness, event, diagnostic)) if diagnostic else "{}")
                     return
             output = output_context(args.harness, event, fit_client(args.harness, (notice + text)[:limit]))
             print(json.dumps(output))
