@@ -128,6 +128,7 @@ class RulesScopingTest(unittest.TestCase):
     def test_turkish_scope_matching(self):
         text = '- [kapsam: ARŞİV] Kural\n- [scope: backend] Other'
         self.assertIn('Kural', companion.filter_scoped_rules(text, 'arşiv'))
+        self.assertIn('Kural', companion.filter_scoped_rules(text, 'arsiv'))
         self.assertNotIn('Other', companion.filter_scoped_rules(text, 'arşiv'))
 
     def test_path_traversal_project_is_safely_ignored(self):
