@@ -72,10 +72,6 @@ def read_platforms(state=None, vault=None):
     path = None
     if state:
         path = Path(state) / SETTINGS_FILE
-    if (not path or not path.is_file()) and vault:
-        vault_path = Path(vault) / VAULT_SETTINGS_FILE
-        if vault_path.is_file():
-            path = vault_path
     if not path or not path.exists():
         return {"attended": [], "unattended": []}, True
     if path.is_symlink():
@@ -84,6 +80,10 @@ def read_platforms(state=None, vault=None):
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return {"attended": [], "unattended": []}, False
+        for key in ("attended", "unattended"):
+            values = data.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(p, str) or not p.strip() for p in values):
+                return {"attended": [], "unattended": []}, False
         attended = _clean_platforms(data.get("attended", []))
         unattended = _clean_platforms(data.get("unattended", []))
         return {"attended": attended, "unattended": unattended}, True
@@ -112,7 +112,7 @@ def save_platforms(state, attended=None, unattended=None, reset=False):
         if path.exists():
             try:
                 path.unlink()
-            except OSError:
+            except FileNotFoundError:
                 pass
         return {"attended": [], "unattended": [], "effective_unattended": sorted(DEFAULT_UNATTENDED_PLATFORMS)}
 

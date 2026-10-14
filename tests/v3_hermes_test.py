@@ -263,6 +263,24 @@ class HermesHarnessTest(unittest.TestCase):
         self.assertEqual(data_set['hermes_platforms']['attended'], ['slack'])
         self.assertNotIn('slack', data_set['hermes_platforms']['effective_unattended'])
 
+    def test_platform_settings_are_local_and_invalid_shape_is_reported(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.vault / '.beyin-hermes.json').write_text(json.dumps({'attended': ['slack']}))
+        self.assertIn('slack', self.module.resolve_unattended_platforms(self.vault, self.state))
+        path = self.state / 'hermes-platforms.json'
+        path.write_text(json.dumps({'attended': 'slack'}))
+        self.assertFalse(self.module.read_platforms(self.state)[1])
+        self.module.save_platforms(self.state, attended=['slack'])
+        self.module.save_platforms(self.state, reset=True)
+        self.assertIn('slack', self.module.resolve_unattended_platforms(self.vault, self.state))
+
+    def test_platform_reset_reports_write_failure(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        self.module.save_platforms(self.state, attended=['slack'])
+        with patch.object(Path, 'unlink', side_effect=PermissionError('locked')):
+            with self.assertRaises(PermissionError):
+                self.module.save_platforms(self.state, reset=True)
+
 
 if __name__ == '__main__':
     unittest.main()

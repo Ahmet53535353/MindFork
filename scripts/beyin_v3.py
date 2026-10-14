@@ -989,8 +989,9 @@ def main(argv=None, return_result=False):
                     result['hermes_platforms'] = {**h_conf, 'effective_unattended': effective}
                     if not h_valid:
                         result['hermes_platforms_notice'] = 'hermes-platforms.json gecersiz; varsayilan platformlar kullaniliyor.'
-            except Exception:
-                pass
+            except ImportError:
+                if args.hermes_attended_platform or args.hermes_unattended_platform or args.hermes_reset_platforms:
+                    raise ValueError("Hermes platform settings module is unavailable; reinstall the vault")
         elif args.command == "jev":
             laya = {key: value for key, value in (("base_url", args.base_url), ("model", args.model)) if value is not None}
             if args.mode == "status":
