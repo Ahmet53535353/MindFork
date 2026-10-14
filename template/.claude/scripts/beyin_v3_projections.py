@@ -9,6 +9,7 @@ import re
 import sqlite3
 import time
 import tempfile
+import math
 
 
 # metadata row: the folded directory names the last sync kept out of the index, as a JSON list.
@@ -254,22 +255,18 @@ def backfill_edit_at(db, state):
     if not state:
         return 0
     state_dir = Path(state)
-    marker = state_dir / ".edit_at_backfilled"
-    if marker.exists():
+    if db.execute("SELECT 1 FROM metadata WHERE key='edit_at_backfilled'").fetchone():
         return 0
     hook_done = state_dir / "hook-done"
     if not hook_done.is_dir():
         return 0
 
     unfilled = {
-        row[0]: {'harness': row[1], 'turn_at': row[2], 'at': row[3]}
+        (row[1], row[0]): {'harness': row[1], 'turn_at': row[2], 'at': row[3]}
         for row in db.execute("SELECT session, harness, turn_at, at FROM receipt_checkpoints WHERE edit_at IS NULL OR edit_at = 0")
     }
     if not unfilled:
-        try:
-            marker.touch()
-        except OSError:
-            pass
+        db.execute("INSERT OR REPLACE INTO metadata VALUES ('edit_at_backfilled', '1')")
         return 0
 
     edits = {}
@@ -280,11 +277,18 @@ def backfill_edit_at(db, state):
                 data = json.loads(path.read_text(encoding='utf-8'))
             except (OSError, ValueError, UnicodeError):
                 continue
-            sess = data.get('session')
+            if not isinstance(data, dict) or data.get('no_memory'):
+                continue
+            harness, session = data.get('harness'), data.get('session')
+            if not isinstance(harness, str) or not isinstance(session, str):
+                continue
+            sess = (harness, session)
             if sess not in unfilled:
                 continue
             ev = data.get('event')
             ev_at = data.get('at', 0)
+            if type(ev_at) not in (int, float) or not math.isfinite(ev_at) or ev_at <= 0:
+                continue
             if ev in ('UserPromptSubmit', 'SessionStart') and ev_at:
                 prompt_turns.setdefault(sess, []).append(ev_at)
             elif ev == 'PostToolUse' and ev_at:
@@ -307,13 +311,10 @@ def backfill_edit_at(db, state):
                 turn_edit_starts.append(e_at)
         if turn_edit_starts:
             target_edit_at = max(turn_edit_starts)
-            db.execute("UPDATE receipt_checkpoints SET edit_at = MAX(edit_at, ?) WHERE session = ?", (target_edit_at, sess))
+            db.execute("UPDATE receipt_checkpoints SET edit_at = MAX(COALESCE(edit_at, 0), ?) WHERE harness = ? AND session = ?", (target_edit_at, sess[0], sess[1]))
             count += 1
 
-    try:
-        marker.touch()
-    except OSError:
-        pass
+    db.execute("INSERT OR REPLACE INTO metadata VALUES ('edit_at_backfilled', '1')")
     return count
 
 

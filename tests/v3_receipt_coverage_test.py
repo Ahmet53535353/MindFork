@@ -328,7 +328,26 @@ class ReceiptCoverageTest(unittest.TestCase):
             self.assertEqual(row[0], now)
 
         # Marker exists preventing repeated disk scan
-        self.assertTrue((self.state / '.edit_at_backfilled').exists())
+        with engine.store._connect() as db:
+            self.assertTrue(db.execute("SELECT value FROM metadata WHERE key='edit_at_backfilled'").fetchone())
+
+    def test_backfill_preserves_harness_identity_and_rejects_invalid_events(self):
+        engine = SyncEngine(self.vault, self.state)
+        done = self.state / 'hook-done'
+        done.mkdir()
+        with engine.store._connect() as db:
+            _checkpoint_schema(db)
+            for harness in ('claude', 'codex'):
+                db.execute("INSERT INTO receipt_checkpoints(harness,session,at,turn_at,prompt_at,edit_at) VALUES (?, 'shared', 300, 200, 200, 0)", (harness,))
+            events = [[], {'harness': 'claude', 'session': 'shared', 'event': 'PostToolUse', 'at': 'bad'},
+                      {'harness': 'claude', 'session': 'shared', 'event': 'UserPromptSubmit', 'at': 100},
+                      {'harness': 'claude', 'session': 'shared', 'event': 'PostToolUse', 'at': 110},
+                      {'harness': 'codex', 'session': 'shared', 'event': 'PostToolUse', 'at': 120, 'no_memory': True}]
+            for index, event in enumerate(events):
+                (done / f'{index}.json').write_text(json.dumps(event))
+            receipt_coverage(db, now=400, state=self.state)
+            values = dict(db.execute("SELECT harness,edit_at FROM receipt_checkpoints"))
+            self.assertEqual(values, {'claude': 100, 'codex': 0})
 
     def test_coverage_reports_no_observed_edit(self):
         """Doctor coverage reports sessions without observed edits (#212)."""
