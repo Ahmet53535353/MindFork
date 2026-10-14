@@ -518,6 +518,49 @@ def _strict_terms(terms):
     return {t for t in terms if len(t) >= 2 and not (t.isdigit() and len(t) < 3)}
 
 
+def _name_candidates(record):
+    """Candidate names for title-salience matching (#354): title, stem, stripped stem, aliases."""
+    candidates = []
+    title = str(record.get("title", "")).strip()
+    if title:
+        candidates.append(title[:160])
+    source = str(record.get("source", "")).strip()
+    if source:
+        stem = Path(source).stem.replace("-", " ").replace("_", " ").strip()
+        if stem:
+            candidates.append(stem[:160])
+            stripped = re.sub(r"^[0-9]+[ \t\-_]+", "", stem).strip()
+            if stripped and stripped != stem:
+                candidates.append(stripped[:160])
+    aliases = record.get("aliases", [])
+    if isinstance(aliases, list):
+        for a in aliases[:32]:
+            if isinstance(a, str) and a.strip():
+                candidates.append(a.strip()[:160])
+    return candidates
+
+
+NAME_GENERIC_TERMS = _tokens("durum proje projeler not notlar karar kararlar arsiv sablon genel ozet guncel")
+
+
+def _name_match_score(record, terms):
+    """Salience signal when query terms contain all meaningful words of a note's name (#354).
+
+    Returns the number of matching name terms (higher = more specific title match),
+    or 0 if no candidate name is fully covered by the query terms.
+    """
+    if not terms:
+        return 0
+    best_score = 0
+    for cand in _name_candidates(record):
+        cand_tokens = _tokens(cand) - STOPWORDS
+        meaningful = {t for t in cand_tokens if len(t) >= 2}
+        if meaningful and meaningful - NAME_GENERIC_TERMS and meaningful.issubset(terms):
+            if len(meaningful) > best_score:
+                best_score = len(meaningful)
+    return best_score
+
+
 def _path_redirected(path):
     """Symlinks and Windows reparse points require a fresh realpath check."""
     try:
@@ -954,17 +997,32 @@ class MemoryStore:
         weighted.sort(key=lambda item: -item[0])
         return weighted
 
-    def _strict_rank(self, ranked, terms, vocabularies):
+    @staticmethod
+    def _name_candidates(record):
+        return _name_candidates(record)
+
+    @staticmethod
+    def _name_match_score(record, terms):
+        return _name_match_score(record, terms)
+
+    def _strict_rank(self, ranked, terms, vocabularies, name_scores=None):
         """Keep meaningful matches without making one-word queries impossible."""
         min_shared = min(self.STRICT_MIN_SHARED, len(terms))
         min_weight = self.STRICT_SINGLE_TERM_MIN_WEIGHT if len(terms) == 1 else self.STRICT_MIN_WEIGHT
-        return self._by_weight([(weight, record) for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies)
-                                if shared_count >= min_shared and weight >= min_weight])
+        weighted = []
+        for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies):
+            if shared_count >= min_shared and weight >= min_weight:
+                if name_scores and record["id"] in name_scores:
+                    weight += self.NAME_MATCH_STRICT_WEIGHT * name_scores[record["id"]]
+                weighted.append((weight, record))
+        return self._by_weight(weighted)
 
     BM25_K1 = 1.5
     BM25_B = 0.75
+    NAME_MATCH_WEIGHT = 20.0
+    NAME_MATCH_STRICT_WEIGHT = 10.0
 
-    def _weighted_rank(self, ranked, terms, term_counts):
+    def _weighted_rank(self, ranked, terms, term_counts, name_scores=None):
         """Order without dropping anything: Okapi BM25 over stem counts, no thresholds.
 
         A raw shared-term count favours whichever note has the largest vocabulary, so one long
@@ -983,6 +1041,8 @@ class MemoryStore:
             weight = sum(math.log((total - frequency[term] + 0.5) / (frequency[term] + 0.5) + 1) *
                          counts[term] * (self.BM25_K1 + 1) / (counts[term] + norm)
                          for term in terms if counts.get(term))
+            if name_scores and record["id"] in name_scores:
+                weight += self.NAME_MATCH_WEIGHT * name_scores[record["id"]]
             weighted.append((weight, record))
         return self._by_weight(weighted)
 
@@ -1085,6 +1145,7 @@ class MemoryStore:
         ranked = []
         vocabularies = {}
         term_counts = {}
+        name_scores = {}
         for record in eligible:
             if record["id"] in superseded:
                 continue
@@ -1096,19 +1157,23 @@ class MemoryStore:
             aliases = record.get("aliases", [])
             aliases = aliases if isinstance(aliases, list) else []
             alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
-            counts = _token_counts(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text)
+            source_stem = Path(record.get("source", "")).stem.replace("-", " ").replace("_", " ")
+            counts = _token_counts(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text + " " + source_stem)
             for stopword in STOPWORDS & counts.keys():
                 del counts[stopword]
             vocabulary = set(counts)
             vocabularies[record["id"]] = vocabulary
             term_counts[record["id"]] = counts
+            name_score = self._name_match_score(record, terms)
+            if name_score:
+                name_scores[record["id"]] = name_score
             score = len(terms & vocabulary)
-            if score or scoped_listing or snapshot:
+            if score or name_score or scoped_listing or snapshot:
                 ranked.append((score, record))
         if strict and not snapshot:
-            ranked = self._strict_rank(ranked, terms, vocabularies)
+            ranked = self._strict_rank(ranked, terms, vocabularies, name_scores=name_scores)
         else:
-            ranked = self._weighted_rank(ranked, terms, term_counts)
+            ranked = self._weighted_rank(ranked, terms, term_counts, name_scores=name_scores)
         if candidate_only:
             return [record for _, record in ranked[:limit]]
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)
