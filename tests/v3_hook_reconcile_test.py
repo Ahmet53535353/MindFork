@@ -254,11 +254,11 @@ class HookReconcileTest(unittest.TestCase):
     def test_reconciled_vault_uninstalls_cleanly(self):
         # Issue #353: install, simulate stale hook or reconcile, verify uninstall succeeds without conflict
         self.install()
-        stale_posix, stale_win = self.stale_hook_commands()
+        import shutil
+        moved = self.root / 'Moved Vault'
+        shutil.move(str(self.vault), str(moved))
+        self.vault = moved
         path = self.vault / '.claude/settings.local.json'
-        data = json.loads(path.read_text(encoding='utf-8'))
-        data['hooks']['SessionStart'][0]['hooks'][0]['command'] = stale_win if os.name == 'nt' else stale_posix
-        path.write_text(json.dumps(data), encoding='utf-8')
 
         # Reconcile hooks
         res_recon = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'hook-reconcile'],
@@ -277,6 +277,22 @@ class HookReconcileTest(unittest.TestCase):
                                     env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual(res_uninst.returncode, 0, res_uninst.stderr)
         self.assertEqual(json.loads(res_uninst.stdout)['status'], 'uninstalled')
+
+    def test_reconcile_does_not_adopt_user_settings(self):
+        self.install()
+        import shutil
+        moved = self.root / 'Moved Vault'
+        shutil.move(str(self.vault), str(moved))
+        self.vault = moved
+        path = self.vault / '.claude/settings.local.json'
+        data = json.loads(path.read_text())
+        data['user_setting'] = 'preserve me'
+        path.write_text(json.dumps(data))
+        res = subprocess.run([sys.executable, str(self.vault / 'beyin.py'), 'hook-reconcile'], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        uninstall = subprocess.run([sys.executable, str(INSTALLER), '--vault', str(self.vault), '--state', str(self.state), '--uninstall'], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(uninstall.returncode, 0)
+        self.assertEqual(json.loads(path.read_text())['user_setting'], 'preserve me')
 
 
 if __name__ == "__main__":

@@ -475,6 +475,7 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
     reconciled_files = []
     total_reconciled = 0
     all_new_commands = []
+    reconciled_originals = {}
 
     for name in HOOK_FILES:
         path = vault / name
@@ -574,6 +575,7 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
             _local_hook_file(vault, path)
             if path.read_bytes() != original_bytes:
                 raise RuntimeError("Hook configuration changed after backup; preserved")
+            reconciled_originals[name] = original_bytes
             _write_hook_json(path, data)
             reconciled_files.append({
                 "file": name,
@@ -595,7 +597,10 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
                 name = rec["file"]
                 if name in files and isinstance(files[name], dict):
                     file_path = vault / name
-                    if file_path.is_file():
+                    baseline = base64.b64decode(files[name].get("installed_content") or "")
+                    original = reconciled_originals.get(name, b"")
+                    # Never adopt user edits as installer-owned content.
+                    if file_path.is_file() and baseline.replace(b"\r\n", b"\n") == original.replace(b"\r\n", b"\n"):
                         file_bytes = file_path.read_bytes()
                         files[name]["installed_hash"] = hashlib.sha256(file_bytes).hexdigest()
                         files[name]["installed_content"] = base64.b64encode(file_bytes).decode("ascii")

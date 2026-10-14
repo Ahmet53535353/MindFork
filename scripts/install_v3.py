@@ -281,9 +281,8 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             if current is None or digest(current) != item["installed_hash"]:
                 baseline = base64.b64decode(item["installed_content"]) if item.get("installed_content") else None
                 if not line_endings_only(baseline, current):
-                    if not semantic_unchanged(name, baseline, current, manifest.get("commands", []), kept=(), user_excluded=()):
-                        raise ValueError("Uninstall conflict: managed file changed; preserve and reconcile " + name +
-                                         " (" + conflict_case(current) + ")")
+                    raise ValueError("Uninstall conflict: managed file changed; preserve and reconcile " + name +
+                                     " (" + conflict_case(current) + ")")
         for name, item in manifest["files"].items():
             path = vault / name
             if item["original"] is None:
