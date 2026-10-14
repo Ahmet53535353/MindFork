@@ -110,6 +110,21 @@ class RulesScopingTest(unittest.TestCase):
                            'updated_at': '2026-10-12T00:00:00Z'})
         self.assertNotIn('PRIVATE-MARKER', companion.context(self.store, 8000, 's', 'claude', project='alpha'))
 
+    def test_project_symlink_alias_does_not_deliver_another_project_rules(self):
+        self.seed('# Kurallar\n- Global kural\n')
+        target = self.vault / 'projects/beta/Kurallar.md'
+        target.parent.mkdir(parents=True)
+        target.write_text('- BETA-MARKER', encoding='utf-8')
+        self.store.ingest({'id': 'beta-rule', 'kind': 'note', 'status': 'active',
+                           'source': 'projects/beta/Kurallar.md', 'text': '- BETA-MARKER',
+                           'updated_at': '2026-10-12T00:00:00Z'})
+        try:
+            (self.vault / 'projects/alpha').symlink_to(target.parent, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(str(exc))
+        text = companion.context(self.store, 8000, 's', 'claude', project='alpha')
+        self.assertNotIn('[projects/beta/Kurallar.md]', text)
+
     def test_turkish_scope_matching(self):
         text = '- [kapsam: ARŞİV] Kural\n- [scope: backend] Other'
         self.assertIn('Kural', companion.filter_scoped_rules(text, 'arşiv'))
