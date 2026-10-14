@@ -992,10 +992,7 @@ class MemoryStore:
         return _name_candidates(record)
 
     @staticmethod
-    NAME_GENERIC_TERMS = _tokens("durum proje projeler not notlar karar kararlar arsiv sablon genel ozet guncel")
-
-
-def _name_match_score(record, terms):
+    def _name_match_score(record, terms):
         return _name_match_score(record, terms)
 
     def _strict_rank(self, ranked, terms, vocabularies, name_scores=None):
