@@ -44,6 +44,14 @@ class TitleMatchSearchTest(unittest.TestCase):
         res = self.store.retrieve(query, limit=limit, strict=strict)
         return [r["id"] for r in res.get("records", [])]
 
+    def test_generic_titles_do_not_receive_name_boost(self):
+        for title in ('DURUM', 'Proje', 'Notlar', 'Kararlar'):
+            record = {'title': title, 'source': title + '.md'}
+            self.assertEqual(beyin_v3._name_match_score(record, beyin_v3._tokens('projelerin durumu kararlar notlar')), 0)
+        self.ingest('generic', 'projelerin durumu', 'archive/DURUM.md', title='DURUM')
+        self.ingest('current', 'projelerin durumu ' * 8, 'Guncel-Ozet.md', title='Guncel Ozet')
+        self.assertEqual(self.ids('projelerin durumu')[0], 'current')
+
     def test_project_note_outranks_hub_with_frequent_mentions(self):
         """<A>/<A>.md outranks a MOC mentioning <A> and 'projesi' 30+ times (#354)."""
         self.ingest(

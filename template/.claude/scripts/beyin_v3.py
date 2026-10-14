@@ -530,6 +530,9 @@ def _name_candidates(record):
     return candidates
 
 
+NAME_GENERIC_TERMS = _tokens("durum proje projeler not notlar karar kararlar arsiv sablon genel ozet guncel")
+
+
 def _name_match_score(record, terms):
     """Salience signal when query terms contain all meaningful words of a note's name (#354).
 
@@ -542,7 +545,7 @@ def _name_match_score(record, terms):
     for cand in _name_candidates(record):
         cand_tokens = _tokens(cand) - STOPWORDS
         meaningful = {t for t in cand_tokens if len(t) >= 2}
-        if meaningful and meaningful.issubset(terms):
+        if meaningful and meaningful - NAME_GENERIC_TERMS and meaningful.issubset(terms):
             if len(meaningful) > best_score:
                 best_score = len(meaningful)
     return best_score
@@ -989,7 +992,10 @@ class MemoryStore:
         return _name_candidates(record)
 
     @staticmethod
-    def _name_match_score(record, terms):
+    NAME_GENERIC_TERMS = _tokens("durum proje projeler not notlar karar kararlar arsiv sablon genel ozet guncel")
+
+
+def _name_match_score(record, terms):
         return _name_match_score(record, terms)
 
     def _strict_rank(self, ranked, terms, vocabularies, name_scores=None):
