@@ -551,7 +551,12 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
             for folder in ('projects', 'Projeler', 'projeler'):
                 found = False
                 for p_name in ('Kurallar.md', '.rules.md', 'rules.md'):
-                    candidate = (store.vault_root / folder / proj_clean / p_name).resolve()
+                    lexical = store.vault_root / folder / proj_clean / p_name
+                    from beyin_v3 import _path_redirected
+                    if any(_path_redirected(part) for part in (lexical, *lexical.parents)
+                           if part != store.vault_root and part.is_relative_to(store.vault_root)):
+                        continue
+                    candidate = lexical.resolve()
                     try:
                         if candidate.is_relative_to(store.vault_root.resolve()) and candidate.is_file() and not candidate.is_symlink():
                             p_rel = candidate.relative_to(store.vault_root.resolve()).parent.as_posix()
