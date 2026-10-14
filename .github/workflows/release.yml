@@ -75,8 +75,8 @@ jobs:
   verify:
     needs: build
     runs-on: ${{ matrix.os }}
-    # Allow slower Windows runners to finish contracts and package lifecycle checks.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 40 || 15 }}
+    # Windows runs the same suite in 8-14 minutes against 3-4 elsewhere; keep hangs fast to spot there.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 25 || 15 }}
     strategy:
       fail-fast: false
       matrix:
