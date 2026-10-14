@@ -383,6 +383,73 @@ class VendoredHintTest(unittest.TestCase):
             self.assertIn('error', report)
 
 
+class ArchiveHintTest(unittest.TestCase):
+    def test_unretired_notes_under_archive_directories_are_pointed_at(self):
+        records = [
+            {'source': '📦 900-Archive/eski-arac.md'},  # no status -> active
+            {'source': '📦 900-Archive/tamamlanan.md', 'status': 'completed'},  # completed is not retired
+            {'source': '📦 900-Archive/terk-edilen.md', 'status': 'abandoned'},  # abandoned is not retired
+            {'source': '📦 900-Archive/arsivlenmis.md', 'status': 'archived'},  # retired!
+            {'source': '📦 900-Archive/emekli.md', 'status': 'retired'},  # retired!
+            {'source': '📦 900-Archive/sub/derin.md', 'status': 'active'},  # unretired
+            {'source': 'archive/legacy.md', 'status': 'waiting'},  # unretired
+            {'source': 'arsiv/gecmis.md', 'status': 'eski'},  # retired!
+            {'source': 'knowledge/canli.md', 'status': 'active'},  # not in archive dir
+        ]
+        hint = index_settings.archive_hint(records)
+        self.assertEqual(hint, {
+            'notes': 5,
+            'dirs': [{'dir': '📦 900-Archive', 'notes': 4}, {'dir': 'archive', 'notes': 1}],
+            'names': ['archive', '📦 900-Archive'],
+            'truncated': False,
+        })
+
+    def test_all_retired_or_no_archive_notes_returns_none(self):
+        records = [
+            {'source': '📦 900-Archive/bir.md', 'status': 'archived'},
+            {'source': '📦 900-Archive/iki.md', 'status': 'superseded'},
+            {'source': 'knowledge/canli.md', 'status': 'active'},
+        ]
+        self.assertIsNone(index_settings.archive_hint(records))
+        self.assertIsNone(index_settings.archive_hint([]))
+
+    def test_doctor_leaves_out_what_the_list_already_covers(self):
+        with tempfile.TemporaryDirectory(prefix='beyin-index-archive-hint-') as tmp:
+            state = Path(tmp)
+            records = [
+                {'source': '📦 900-Archive/not1.md'},
+                {'source': 'archive/not2.md'},
+            ]
+            report = index_settings.doctor(state, None, records=records)
+            self.assertEqual(report['archive_hint']['names'], ['archive', '📦 900-Archive'])
+            (state / 'index.json').write_bytes(json.dumps({'excluded_dirs': ['📦 900-Archive']}).encode('utf-8'))
+            report = index_settings.doctor(state, None, records=records)
+            self.assertEqual(report['archive_hint']['names'], ['archive'])
+            (state / 'index.json').write_bytes(json.dumps({'excluded_dirs': ['📦 900-Archive', 'archive']}).encode('utf-8'))
+            self.assertNotIn('archive_hint', index_settings.doctor(state, None, records=records))
+
+    def test_doctor_human_formatting_includes_archive_hint(self):
+        entry = load_file('beyin_entry_archive_probe', ROOT / 'scripts/beyin_entry.py')
+        result = {
+            'status': 'observed_metadata',
+            'index_exclusions': {
+                'file': 'index.json',
+                'excluded_dirs': [],
+                'status': 'none',
+                'archive_hint': {
+                    'notes': 4,
+                    'dirs': [{'dir': '📦 900-Archive', 'notes': 4}],
+                    'names': ['📦 900-Archive'],
+                    'truncated': False,
+                }
+            }
+        }
+        human = entry.human_result(result, 'doctor')
+        self.assertIn('Arsiv kapsami (bilgi): arsiv klasorlerinde emekli edilmemis (canli sayilan) 4 not indeksli (📦 900-Archive: 4).', human)
+        self.assertIn('--index-exclude-dir "📦 900-Archive"', human)
+        self.assertIn('status: archived', human)
+
+
 class WordCapTest(unittest.TestCase):
     def test_word_cap_leaves_an_excluded_tree_alone(self):
         hygiene = load_file('beyin_v3_hygiene_exclude_subject', SCRIPTS / 'beyin_v3_hygiene.py')

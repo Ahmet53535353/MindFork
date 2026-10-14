@@ -461,6 +461,18 @@ def human_result(result, command, installed_version=None):
                          '). Senin notun degilse indeks disinda tut: ' + ('py -3' if sys.platform == 'win32' else 'python3') +
                          ' beyin.py preferences ' + ' '.join('--index-exclude-dir ' + plain_text(name)
                                                             for name in hint.get('names') or []))
+        arch_hint = index_scope.get('archive_hint') or {}
+        if arch_hint.get('notes'):
+            more = len(arch_hint.get('dirs') or []) - 3
+            py_cmd = 'py -3' if sys.platform == 'win32' else 'python3'
+            exclude_args = ' '.join('--index-exclude-dir ' + (('"' + plain_text(name) + '"') if ' ' in name else plain_text(name))
+                                    for name in arch_hint.get('names') or [])
+            lines.append('Arsiv kapsami (bilgi): arsiv klasorlerinde emekli edilmemis (canli sayilan) ' + str(arch_hint['notes']) +
+                         ' not indeksli (' + ', '.join(plain_text(entry['dir']) + ': ' + str(entry['notes'])
+                                                       for entry in (arch_hint.get('dirs') or [])[:3]) +
+                         (' ve baska klasorler' if more > 0 or arch_hint.get('truncated') else '') +
+                         '). Baglamdan uzak tutmak icin notlara "status: archived" yaz veya klasoru indeks disinda tut: ' +
+                         py_cmd + ' beyin.py preferences ' + exclude_args)
         lines += state_location_lines(result.get('state_location'))
         lines += receipt_line_endings_lines(result.get('receipt_line_endings'))
         paths = result.get('hook_paths') or {}
