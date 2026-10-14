@@ -62,6 +62,17 @@ class BridgeTest(unittest.TestCase):
         self.assertNotIn(str(self.project), json.dumps(events))
         self.assertNotIn('TRANSCRIPT_CANARY', json.dumps(events))
 
+    def test_utf8_bom_stdin_payload_handled_cleanly(self):
+        bom_input = b'\xef\xbb\xbf' + json.dumps(self.payload).encode('utf-8')
+        command = [sys.executable, str(SCRIPTS / 'beyin_v3_bridge.py'),
+                   '--vault', str(self.vault), '--state', str(self.state), '--harness', 'claude',
+                   '--project-root', str(self.root / 'Projects')]
+        result = subprocess.run(command, input=bom_input, capture_output=True, env=self.env,
+                                cwd=self.project, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertIn('hookSpecificOutput', data)
+
     def test_sensitive_folder_task_cannot_enter_external_project_context(self):
         secret = self.vault / '🔐 Kasa/task.md'
         secret.parent.mkdir()

@@ -603,7 +603,13 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
 
 def read_json(filename: str):
     if filename == "-":
-        return json.load(sys.stdin)
+        if hasattr(sys.stdin, "reconfigure"):
+            try:
+                sys.stdin.reconfigure(encoding="utf-8-sig")
+            except Exception:
+                pass
+        raw = sys.stdin.read()
+        return json.loads(raw.lstrip("\ufeff").strip() or "{}")
     with Path(filename).open(encoding="utf-8-sig") as stream:
         return json.load(stream)
 
@@ -788,7 +794,7 @@ def parser():
 
 def main(argv=None, return_result=False):
     if hasattr(sys.stdin, "reconfigure"):
-        sys.stdin.reconfigure(encoding="utf-8")
+        sys.stdin.reconfigure(encoding="utf-8-sig")
     argument_parser = parser()
     args = argument_parser.parse_args(argv)
     receipt_flags = args.command == "receipt" and any(
