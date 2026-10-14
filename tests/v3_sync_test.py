@@ -852,6 +852,25 @@ class SourceSyncTest(unittest.TestCase):
         self.assertEqual(path.read_bytes(), manual)
         self.assertNotEqual(self.records()[0]['status'], 'waiting')
 
+    def test_utf8_bom_frontmatter_preserves_visibility_and_metadata(self):
+        """BOM-prefixed markdown files parse frontmatter cleanly without leaking private visibility."""
+        source = self.vault / 'private_bom.md'
+        body = 'Nebula calibration secret private content.\n'
+        content = '\ufeff---\nvisibility: private\nid: secret-note\nproject: nebula\n---\n' + body
+        source.write_bytes(content.encode('utf-8'))
+        metadata, parsed_body = self.module.parse(source.read_text(encoding='utf-8'))
+        self.assertEqual(metadata.get('visibility'), 'private')
+        self.assertEqual(metadata.get('id'), 'secret-note')
+        self.assertEqual(parsed_body, body)
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'succeeded')
+        # Private records are not leaked to default internal audience
+        self.assertEqual(len(self.records(audience='internal')), 0)
+        # But are visible when explicitly querying private audience
+        private_records = self.records(audience='private')
+        self.assertEqual(len(private_records), 1)
+        self.assertEqual(private_records[0].get('visibility'), 'private')
+
 
 class ReceiptStateResetTest(unittest.TestCase):
     def setUp(self):

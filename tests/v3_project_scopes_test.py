@@ -302,6 +302,38 @@ class ProjectScopesTest(unittest.TestCase):
         self.assertEqual(removed['status'], 'saved')
         self.assertEqual(removed['folders'], {})
 
+    def test_utf8_bom_project_scopes_resilience(self):
+        """Scope files and JSON files starting with UTF-8 BOM are loaded cleanly without JSONDecodeError."""
+        import importlib.util
+        import beyin_v3_projects as projects
+        scopes_file = self.vault / runtime.PROJECT_SCOPES_FILE
+        (self.vault / 'Projeler/Alpha').mkdir(parents=True, exist_ok=True)
+        raw = '\ufeff{\n  "folders": {"Projeler/Alpha": "alpha"},\n  "shared_unscoped": false\n}'
+        scopes_file.write_bytes(raw.encode('utf-8'))
+
+        read = projects.read_project_scopes(self.vault)
+        self.assertEqual(read['folders'], [('projeler/alpha', 'alpha')])
+
+        checked = projects.check_project_scopes(self.vault)
+        self.assertEqual(checked['status'], 'ok')
+        self.assertEqual(checked['folders'], {'Projeler/Alpha': 'alpha'})
+
+        listed = projects.manage(self.vault, 'list')
+        self.assertEqual(listed['status'], 'ok')
+        self.assertEqual(listed['folders'], {'Projeler/Alpha': 'alpha'})
+
+        (self.vault / 'Projeler/Gamma').mkdir(parents=True, exist_ok=True)
+        added = projects.manage(self.vault, 'add', folder='Projeler/Gamma', project='gamma')
+        self.assertEqual(added['status'], 'saved')
+        self.assertIn('Projeler/Gamma', added['folders'])
+
+        spec = importlib.util.spec_from_file_location('beyin_v3_cli', ROOT / 'scripts' / 'beyin_v3.py')
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        json_file = self.vault / 'bom_sample.json'
+        json_file.write_bytes('\ufeff{"hello": "world"}'.encode('utf-8'))
+        self.assertEqual(cli.read_json(str(json_file)), {'hello': 'world'})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -604,7 +604,7 @@ def hook_reconcile(vault: Path, state: Path, force: bool = False) -> dict:
 def read_json(filename: str):
     if filename == "-":
         return json.load(sys.stdin)
-    with Path(filename).open(encoding="utf-8") as stream:
+    with Path(filename).open(encoding="utf-8-sig") as stream:
         return json.load(stream)
 
 
