@@ -310,3 +310,22 @@ Hariç tutulabilen bileşenler:
 `agents_block`, `adapters`, `adapters/hermes`, `adapters/omp`, `adapters/opencode`, `harnesses/antigravity`, `launchers`, `skills`, `skills/beyin`, `skills/beyin-doktor`, `skills/beyin-guncelle`.
 
 Hariç tutma tercihleri vault kökünde bağımsız `.beyin-exclusions.json` dosyasında saklanır (`.beyin-preferences.json` dosyasını değiştirmez; böylece eski sürümlere rollback 3.4.0 uyumlu kalır). Tercih kaydedildiğinde bir sonraki kurulum veya güncellemede uygulanır (`update` veya `install`). Değiştirilmemiş hariç tutulan dosyalar temizlenir, kullanıcının değiştirdiği dosyalar ise çakışma vermeden korunur. `doctor` çıktısı hem uygulanan hariç tutmaları hem de bekleyen değişiklikleri gösterir.
+
+## Hermes platform tercihi (`hermes-platforms.json`)
+
+Hermes Agent entegrasyonunda varsayılan olarak gözetimsiz (unattended / bot) sayılan kanallar (`a2a`, `cron`, `telegram`, `discord`, `slack`, `whatsapp`, `signal`, `matrix`, `email`, `sms`, `webhook`) için makbuz hatırlatması ve oturum sonu kontrol noktası üretilmez.
+
+Hermes'i Slack gibi bir kanal üzerinden kişisel interaktif asistan olarak kullananlar için bu kanal gözetimli olarak işaretlenebilir:
+
+```bash
+# Slack'i gözetimli/insanlı say:
+python3 beyin.py preferences --hermes-attended-platform slack
+
+# Özel bir bot kanalını gözetimsiz say:
+python3 beyin.py preferences --hermes-unattended-platform custom-bot
+
+# Varsayılanlara dön:
+python3 beyin.py preferences --hermes-reset-platforms
+```
+
+Ayar runtime klasöründeki `hermes-platforms.json` dosyasında tutulur (`{"schema": 1, "attended": ["slack"], "unattended": []}`); `.beyin-preferences.json` şemasına girmez ve rollback güvenlidir.

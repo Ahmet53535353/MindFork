@@ -260,6 +260,16 @@ def human_result(result, command, installed_version=None):
             lines.append('Paralel oturum bildirimi: ' + ('acik' if result['parallel_sessions'] == 'on' else 'kapali'))
         if result.get('parallel_sessions_notice'):
             lines.append(result['parallel_sessions_notice'])
+        hermes_p = result.get('hermes_platforms') or {}
+        if hermes_p.get('attended') or hermes_p.get('unattended'):
+            h_parts = []
+            if hermes_p.get('attended'):
+                h_parts.append('gozetimli: ' + ', '.join(hermes_p['attended']))
+            if hermes_p.get('unattended'):
+                h_parts.append('gozetimsiz: ' + ', '.join(hermes_p['unattended']))
+            lines.append('Hermes platform ayarlari: ' + '; '.join(h_parts))
+        if result.get('hermes_platforms_notice'):
+            lines.append(result['hermes_platforms_notice'])
         if result.get('excluded_components'):
             lines.append('Haric tutulan bilesenler: ' + ', '.join(result['excluded_components']))
         if result.get('exclusion_notice'):

@@ -62,11 +62,29 @@ close, so it is deliberately not bound.
 
 Hermes passes `platform` to `pre_llm_call`. Sessions on platforms nobody sits in front of
 (`a2a`, `cron`, `telegram`, `discord`, `slack`, `whatsapp`, `signal`, `matrix`, `email`,
-`sms`, `webhook`; see `UNATTENDED_PLATFORMS`) still receive context, but their finalize does **not**
+`sms`, `webhook`; see `DEFAULT_UNATTENDED_PLATFORMS`) still receive context, but their finalize does **not**
 queue `SessionEnd`. Those sessions never submit receipts, so counting them as checkpoints would
 make every later interactive start warn about "missing receipts". The platform is remembered
 from the first turn because Hermes reports a generic value at finalize. Unknown or absent
 platforms are tracked normally.
+
+#### Customizing platforms (`state/hermes-platforms.json`)
+
+If Hermes is used with Slack (or another chat channel) as the primary interactive personal assistant,
+that channel can be marked as attended so 15-turn receipt reminders and `SessionEnd` checkpoint tracking are active:
+
+```bash
+# Treat Slack as attended/interactive:
+python3 beyin.py preferences --hermes-attended-platform slack
+
+# Treat a custom bot platform as unattended:
+python3 beyin.py preferences --hermes-unattended-platform custom-bot
+
+# Reset platform overrides to default:
+python3 beyin.py preferences --hermes-reset-platforms
+```
+
+The setting is stored in `state/hermes-platforms.json` (machine-local and rollback-safe; never touches `.beyin-preferences.json`).
 
 ### Receipt reminder
 
