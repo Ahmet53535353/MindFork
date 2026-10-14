@@ -1053,6 +1053,15 @@ class MemoryStore:
         eligible, stale_count = self._eligible(audience, project, records=records)
         superseded = self._superseded_ids(records)
         allowed_statuses = _allowed_statuses(statuses)
+        if strict:
+            try:
+                from beyin_v3_passage import _path_key, settings
+            except ImportError:
+                # Without the exclusion policy, strict fallback must not deliver sources.
+                return [] if candidate_only else pack_context([], limit, budget_chars, stale_count)
+            prefixes = tuple(_path_key(prefix) for prefix in settings(self.state_dir)["exclude"])
+            eligible = [record for record in eligible
+                        if not _path_key(str(record.get("source", ""))).startswith(prefixes)]
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
