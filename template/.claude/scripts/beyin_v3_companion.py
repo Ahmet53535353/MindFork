@@ -390,7 +390,7 @@ SCOPE_TAG = re.compile(r'(?i)(?:\[(?:scope|kapsam):\s*([^\]]+)\]|\b(?:scope|kaps
 
 def scope_key(value):
     # Match Turkish uppercase and dotted/dotless i consistently with source names.
-    return str(value).strip().replace('İ', 'i').replace('I', 'ı').casefold().replace('ı', 'i').replace('\u0307', '')
+    return fold(str(value).strip())
 
 
 def rule_scopes(rule_text):
