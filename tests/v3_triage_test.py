@@ -51,6 +51,22 @@ class TriageTest(unittest.TestCase):
         t = self.now - (days * 86400)
         os.utime(path, (t, t))
 
+    def test_nested_sensitive_private_and_excluded_notes_are_not_reported(self):
+        for folder in ('tasks', 'knowledge'):
+            for suffix, front in (('Şifreler/hidden.md', ''), ('visible/private.md', 'visibility: private\n'), ('vendor/hidden.md', '')):
+                target = self.vault / folder / suffix
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('---\n' + front + 'updated_at: 2026-09-01\n---\n# PRIVATE-MARKER', encoding='utf-8')
+        (self.state / 'index.json').write_text(json.dumps({'schema': 1, 'excluded_dirs': ['vendor']}), encoding='utf-8')
+        tasks = triage_module.scan_stale_tasks(self.vault, self.now, state=self.state)
+        digest = triage_module.scan_knowledge_digest(self.vault, self.now, digest_days=100, state=self.state)
+        self.assertEqual(tasks['open_count'], 0)
+        self.assertEqual(digest['count'], 0)
+
+    def test_timestamp_respects_explicit_offset(self):
+        self.assertEqual(triage_module._parse_timestamp('2026-10-12T15:00:00+03:00'), self.now)
+        self.assertEqual(triage_module._parse_timestamp('2026-10-12T12:00:00Z'), self.now)
+
     def test_inbox_scanning_with_hygiene_report_and_sync_immunity(self):
         # 1. Emoji inbox folder matching generic INBOX_WORDS
         inbox1 = self.vault / '📥 000-Inbox'

@@ -96,7 +96,13 @@ def _parse_timestamp(val: str) -> float | None:
     if not val or not isinstance(val, str):
         return None
     val_str = val.strip()
-    match = DATE_PATTERN.search(val_str)
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?', val_str):
+        try:
+            dt = datetime.fromisoformat(val_str.replace('Z', '+00:00'))
+            return dt.replace(tzinfo=timezone.utc).timestamp() if dt.tzinfo is None else dt.timestamp()
+        except ValueError:
+            return None
+    match = DATE_PATTERN.fullmatch(val_str)
     if not match:
         m_tr = re.search(r'(\d{2})[-/. ](\d{2})[-/. ](\d{4})', val_str)
         if m_tr:
@@ -250,7 +256,29 @@ def scan_inbox(vault: Path, now: float, state: Path | None = None) -> dict:
         }
 
 
-def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
+def _scan_keys(vault, state):
+    if state is None:
+        return frozenset()
+    from beyin_v3_index import exclusions
+    return exclusions(state, vault)[0]
+
+
+def _scan_allowed(path, vault, excluded):
+    from beyin_v3_index import dir_key
+    try:
+        parts = path.relative_to(vault).parts[:-1]
+        if any(sensitive_excluded(part) or dir_key(part) in excluded for part in parts):
+            return False
+        if not _is_safe_file(path):
+            return False
+        with path.open(encoding='utf-8', errors='replace') as handle:
+            values = _front_values(handle.read(4096), ('visibility', 'trust', 'trusted'))
+        return values.get('visibility') != 'private' and values.get('trust') != 'untrusted' and values.get('trusted') != 'false'
+    except (ValueError, OSError):
+        return False
+
+
+def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14, state: Path | None = None) -> dict:
     """Scan open tasks for inactivity.
 
     Follows core sync invariant (beyin_v3.py:637-639: 'file mtime is not a date:
@@ -259,6 +287,7 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
     Open tasks include active, waiting, and blocked tasks.
     """
     vault = Path(vault).resolve()
+    excluded = _scan_keys(vault, state)
     open_tasks = []
     stale_tasks = []
     undated_tasks = []
@@ -293,10 +322,11 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
 
     for folder in task_folders:
         for root, dirs, files in os.walk(folder):
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in CODE_DIRS]
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in CODE_DIRS
+                       and not sensitive_excluded(d) and not (Path(root) / d).is_symlink()]
             for f in files:
                 file_path = Path(root) / f
-                if not _is_safe_file(file_path) or file_path.suffix.lower() != '.md':
+                if not _scan_allowed(file_path, vault, excluded) or file_path.suffix.lower() != '.md':
                     continue
 
                 f_key = _path_key(file_path)
@@ -384,8 +414,9 @@ def scan_stale_tasks(vault: Path, now: float, stale_days: int = 14) -> dict:
     }
 
 
-def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict:
+def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7, state: Path | None = None) -> dict:
     vault = Path(vault).resolve()
+    excluded = _scan_keys(vault, state)
     recent_items = []
     seen_dirs = set()
     knowledge_folders = []
@@ -421,10 +452,11 @@ def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict
 
     for folder in knowledge_folders:
         for root, dirs, files in os.walk(folder):
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in CODE_DIRS]
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in CODE_DIRS
+                       and not sensitive_excluded(d) and not (Path(root) / d).is_symlink()]
             for f in files:
                 file_path = Path(root) / f
-                if not _is_safe_file(file_path) or file_path.suffix.lower() != '.md':
+                if not _scan_allowed(file_path, vault, excluded) or file_path.suffix.lower() != '.md':
                     continue
 
                 f_key = _path_key(file_path)
@@ -467,7 +499,7 @@ def scan_knowledge_digest(vault: Path, now: float, digest_days: int = 7) -> dict
                     })
 
     outcomes_file = vault / 'outcomes.md'
-    if outcomes_file.is_file() and not outcomes_file.is_symlink():
+    if _scan_allowed(outcomes_file, vault, excluded):
         age = _note_age_days(outcomes_file, now, ('updated_at', 'date'))
         if age <= digest_days:
             recent_items.append({
@@ -510,7 +542,7 @@ def scan_companion(vault: Path, state: Path | None = None, now: float | None = N
 
     if comp_dir:
         rules_file = comp_dir / 'Kurallar.md'
-        if rules_file.is_file():
+        if _is_safe_file(rules_file):
             try:
                 text = rules_file.read_text(encoding='utf-8', errors='replace')
                 info['rules_count'] = sum(1 for line in text.splitlines() if re.match(r'^(?:[-*+]|\d+[.)])[ \t]', line.strip()))
@@ -518,7 +550,7 @@ def scan_companion(vault: Path, state: Path | None = None, now: float | None = N
                 pass
 
         threads_file = comp_dir / 'Threads.md'
-        if threads_file.is_file():
+        if _is_safe_file(threads_file):
             try:
                 text = threads_file.read_text(encoding='utf-8', errors='replace')
                 lines = text.splitlines()
@@ -557,7 +589,7 @@ def scan_companion(vault: Path, state: Path | None = None, now: float | None = N
                 pass
 
         session_file = comp_dir / 'Last-Session.md'
-        if session_file.is_file():
+        if _is_safe_file(session_file):
             try:
                 text = session_file.read_text(encoding='utf-8', errors='replace')
                 m = re.search(r'##\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})', text)
@@ -573,6 +605,8 @@ def scan_companion(vault: Path, state: Path | None = None, now: float | None = N
         now_ts = time.time() if now is None else now
         try:
             for p_file in presence_dir.glob('*.json'):
+                if not _is_safe_file(p_file):
+                    continue
                 try:
                     data = json.loads(p_file.read_text(encoding='utf-8'))
                     heartbeat = data.get('heartbeat') or p_file.stat().st_mtime
@@ -630,8 +664,8 @@ def triage(
     now_ts = time.time() if now is None else now
     vault = Path(vault).resolve()
     inbox_report_res = scan_inbox(vault, now_ts, state=state)
-    tasks_report = scan_stale_tasks(vault, now_ts, stale_days=stale_days)
-    digest_report = scan_knowledge_digest(vault, now_ts, digest_days=digest_days)
+    tasks_report = scan_stale_tasks(vault, now_ts, stale_days=stale_days, state=state)
+    digest_report = scan_knowledge_digest(vault, now_ts, digest_days=digest_days, state=state)
     companion_report = scan_companion(vault, state, now=now_ts)
     recs = generate_recommendations(inbox_report_res, tasks_report, digest_report, companion_report)
 
