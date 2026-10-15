@@ -112,6 +112,20 @@ class WindowsPolicyTest(unittest.TestCase):
         same = ('http://example.org/x', 'https://www.example.org/x/', 'https://example.org/x#section')
         self.assertEqual(len(set(map(y.canonical, same))), 1)
 
+    def test_ipv6_hosts_with_ports_stay_distinct(self):
+        self.assertNotEqual(y.canonical('https://[2001:4860:4860::8888]:8443/x'),
+                            y.canonical('https://[2001:4860:4860::8888:8443]/x'))
+
+    def test_windows_link_with_an_attached_picture_stays_a_private_link_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, picture = Path(tmp) / 'vault', Path(tmp) / 'shot.png'
+            vault.mkdir()
+            picture.write_bytes(png())
+            with patch.object(y, 'os', windows_os()):
+                saved = y.capture(vault, url='https://www.youtube.com/watch?v=abcdefghijk', files=[picture])
+            card = y.find_card(vault, saved['id'])
+            self.assertEqual((card['meta']['kaynak_turu'], card['meta']['visibility']), ('youtube', 'private'))
+
     def test_canonical_is_the_same_on_every_system(self):
         for name in ('nt', 'posix'):
             with patch.object(y, 'os', types.SimpleNamespace(**{**vars(os), 'name': name})):

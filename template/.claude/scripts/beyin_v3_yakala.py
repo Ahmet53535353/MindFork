@@ -258,7 +258,8 @@ def canonical(url):
         match = re.search(r'/status/(\d+)', parts.path)
         if match:
             return 'x:' + match.group(1)
-    key = host + (':' + str(port) if not default else '') + parts.path.rstrip('/')
+    shown = '[' + host + ']' if ':' in host else host  # an IPv6 literal keeps its brackets next to a port
+    key = shown + (':' + str(port) if not default else '') + parts.path.rstrip('/')
     key += '?' + parts.query if parts.query else ''
     return key + ('#' + parts.fragment if parts.fragment[:1] in ('/', '!') else '')
 
@@ -509,7 +510,8 @@ def _capture(vault, url=None, text=None, files=(), why='', app=None, title=None,
                     card['meta']['yakalama_idleri'] = identifiers + [capture_id]
                 _write_capture_card(card['path'], card['meta'], body + addition, vault, copied)
                 return {'status': 'mevcut_karta_eklendi', 'id': card['id'], 'path': str(card['path'].relative_to(vault))}
-    kind = kind_of(url, files, app)
+    # Windows: a page/hovered link with an attached picture stays a link card, so `isle` still fetches it.
+    kind = kind_of(url, () if url and os.name == 'nt' else files, app)
     if not title:
         title = (files[0].name if files else None) or (url if url else _first_line(text))
     copied = _capture_files(vault, folder, files)
@@ -517,7 +519,7 @@ def _capture(vault, url=None, text=None, files=(), why='', app=None, title=None,
     path = _unique(folder / (name + '.md'))
     meta = {'tur': 'yakala', 'durum': 'bekliyor', 'kaynak_turu': kind, 'baslik': _first_line(title, 160),
             'url': url, 'yakalandi': stamp.isoformat(timespec='seconds'), 'arac': tool, 'uygulama': app,
-            'visibility': 'private' if kind in ('mail', 'metin', 'dosya') or (os.name == 'nt' and text) else 'internal'}
+            'visibility': 'private' if kind in ('mail', 'metin', 'dosya') or (os.name == 'nt' and (text or files)) else 'internal'}
     body = ['# ' + _first_line(title, 160), '', '## Neden', '', why or '_(not yok)_']
     if url:
         body += ['', '## Kaynak', '', url]
