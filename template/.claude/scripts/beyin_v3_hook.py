@@ -447,8 +447,8 @@ def main():
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
         settings = read(vault)
-# The hygiene scans run before the daily log opens today's file, so the file this
-        # session is about to create cannot show up in the folder questions as a user change.
+# The hygiene scans run before anything this session writes, so a file it is about
+        # to create cannot show up in the folder questions as a user change.
         if event == 'SessionStart' and not args.metadata_only and (state / 'yakala.json').is_file():
             # Opt-in capture queue (beyin.py yakala kur): one directory listing, never a model call.
             try:
@@ -564,8 +564,6 @@ def main():
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
                     warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
-            from beyin_v3_bridge import working_directory
-            project_dir = working_directory(payload, args.harness)
             from beyin_v3_companion import (context as companion_context, relevant, opening_budget, client_budget,
                                             client_rebudget, fit_client)
             # Both budgets stop below a client's own cut-off; past it the client files the text away (#175).
@@ -575,13 +573,11 @@ def main():
             if event == 'SessionStart' or relevant(query):
                 # The opening may carry its own machine-local budget (#140); never a vault preference.
                 limit = client_budget(args.harness, opening_budget(state, settings['context_chars']))
-                text = companion_context(store, limit, session, args.harness, query, receipt, warning,
-                                         cwd=project_dir)
+                text = companion_context(store, limit, session, args.harness, query, receipt, warning)
                 smaller = client_rebudget(args.harness, limit, notice + text)
                 if smaller is not None:
                     limit = smaller
-                    text = companion_context(store, limit, session, args.harness, query, receipt, warning,
-                                         cwd=project_dir)
+                    text = companion_context(store, limit, session, args.harness, query, receipt, warning)
             else:
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
@@ -623,8 +619,8 @@ def main():
                 if not delivered.get("records"):
                     print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
                     return
-# The daily log line rides along inside the client's own limit (#175), not on top of
-            # it, so a Claude Code or Codex cut-off can never be pushed past by the log.
+# The context rides along inside the client's own limit (#175), not on top of
+            # it, so a Claude Code or Codex cut-off can never be pushed past by it.
             output = output_context(args.harness, event,
                                     fit_client(args.harness, (notice + text)[:limit]))
             print(json.dumps(output))

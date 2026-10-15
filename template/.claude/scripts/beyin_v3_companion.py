@@ -28,12 +28,11 @@ STARTERS = {
         '# Tetikleyici — hangi kural, hangi projede\n\n'
         'Bu hatırlatmadır; kural değil. Ayrıntı kendi dosyasında.\n\n'
         '## Derleme yapıyorsan (Gradle projesi)\n\n'
-        '**[Test-Kuralları.md](Test-Kuralları.md)** — 21 madde. Gradle daemon kendiliğinden\n'
+        '**[Test-Kuralları.md](Test-Kuralları.md)** — 22 madde. Gradle daemon kendiliğinden\n'
         'kapanmaz; görev bitince **`./gradlew --stop`**.\n\n'
-        '## Oyun içi ölçüm yapacaksan (Minecraft modu)\n\n'
-        '**[Minecraft-Kuralları.md](Minecraft-Kuralları.md)** — **kural 8:** ölçümden önce\n'
-        'tarayıcıyı ve gradle daemon\'ı kapat, `free -h` ile doğrula. Sayfa yazma olursa\n'
-        '**ölçüm geçersizdir**; raporun başına yaz.\n',
+        '## Ölçüm yapacaksan (her proje)\n\n'
+        '**Madde 22:** ölçümden önce tarayıcıyı ve gradle daemon\'ı kapat, `free -h` ile\n'
+        'doğrula. Sayfa yazma olursa **ölçüm geçersizdir**; raporun başına yaz.\n',
     'Journal.md': '# Journal\n\nOrtak çalışmadan doğan gözlemler, öğrenimler ve açık sorular. Çıkarımları kesin kullanıcı bilgisi olarak sunma.\n',
     'memory-types.md': '---\n{"type": "semantic", "project": "Beyin", "visibility": "internal"}\n---\n# Memory Types\n\nBu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type\'ını tanımlar.\n\n## Type Tanımları\n\n### episodic — Zaman Serisi / Anılar\nBelirli bir zaman diliminde ne oldu.\nÖrnekler: Journal.md, Threads.md, Last-Session.md, daily/v3/*.md\n\n### semantic — Kalıcı Bilgi / Gerçekler / Kimlik\nZamanla değişmeyen, sorgulanabilir gerçekler.\nÖrnekler: Core.md, knowledge/concepts/*.md\n\n### procedural — Nasıl Yapılır / Kurallar / Playbook\'lar\nSüreçler, kurallar, workflow\'lar.\nÖrnekler: Kurallar.md, .agents/skills/*/SKILL.md\n',
 }
@@ -307,62 +306,6 @@ def stamp(header):
     date = re.search(r'\d{4}-\d{2}-\d{2}', header)
     clock = re.search(r'(?<!\d)([01]?\d|2[0-3]):[0-5]\d(?!\d)', header)
     return (date[0], clock[0].rjust(5, '0') if clock else '') if date else None
-
-
-# Oyun ici olcum kurallari (Minecraft-Kurallari kural 8) yalniz Minecraft projesinde
-# gecerlidir. Derleme kurallari (Test-Kurallari madde 21) her Gradle/Maven projesinde
-# gecerli; bu yuzden tetikleyici iki katmanlidir.
-MINECRAFT_MOD_FILES = ('fabric.mod.json', 'quilt.mod.json', 'mods.toml', 'neoforge.mods.toml')
-MINECRAFT_TEXT = re.compile(
-    r'(?i)fabricmc|fabric-loom|com\.mojang:minecraft|minecraft_version|mcVersion'
-    r'|loom_version|mixinbooter|cleanroommc|retrofutura')
-_BUILD_FILES = ('build.gradle', 'build.gradle.kts', 'gradle.properties',
-                'settings.gradle', 'settings.gradle.kts')
-OLCUM_BASLIGI = '\n## Oyun içi ölçüm yapacaksan'
-OLCUM_DISI_GEREKCE = ('\n_(Bu proje bir Minecraft modu değil; oyun içi ölçüm kuralları '
-                      'burada geçerli değil.)_\n')
-
-
-def minecraft_project(cwd):
-    """Bu dizin bir Minecraft modu mu?
-
-    Derleme dosyası tek başına yetmez: ModularUI3- 1.12.2/RetroFuturaGradle kullanıyor ve
-    dosyasında `mcVersion` yazıyor, `minecraft_version` ve `fabricmc` **yazmıyor**; konvansiyon
-    eklentisi (`alias(conventions.plugins.minecraft)`) kullanıyor. Yalnız Fabric sinyallerine
-    bakan bir tespit onu 'Minecraft değil' sayıp oyun içi ölçüm kuralını düşürüyordu.
-    """
-    if cwd is None:
-        return False
-    try:
-        root = Path(cwd)
-        if not root.is_dir():
-            return False
-        resources = root / 'src' / 'main' / 'resources'
-        for name in MINECRAFT_MOD_FILES:
-            if (root / name).is_file() or (resources / name).is_file():
-                return True
-        # *.mixins.json Minecraft mixin sistemine ait; baska ekosistemlerde yok.
-        # Duz `mixins.json` yeterli degil: Node paketleri de oyle adlandirabiliyor.
-        if resources.is_dir() and any(p.name.endswith('.mixins.json') for p in resources.iterdir()):
-            return True
-        for name in _BUILD_FILES:
-            build = root / name
-            if build.is_file() and MINECRAFT_TEXT.search(
-                    build.read_text(encoding='utf-8', errors='replace')):
-                return True
-        return False
-    except OSError:
-        return False
-
-
-def tetikleyici_katman(name, text, cwd):
-    """Tetikleyici.md'yi proje turunun gerektirdigi kadar kisalt; diger dosyalara dokunma."""
-    if name != 'Tetikleyici.md':
-        return excerpt(name, text)
-    if minecraft_project(cwd):
-        return text
-    # Bolumu sessizce atmak ajani "kural yok" sanmaya itiyor; gerekce birakiliyor.
-    return re.sub(r'(?s)' + re.escape(OLCUM_BASLIGI) + r'.*', OLCUM_DISI_GEREKCE, text)
 
 
 def excerpt(name, text):
@@ -649,7 +592,7 @@ def clip_cards(text, budget):
     return preamble + ''.join(kept) + (notice.format(count=dropped) if dropped else '')
 
 
-def context(store, budget, session, harness, query='', receipt='', warning='', cwd=None):
+def context(store, budget, session, harness, query='', receipt='', warning=''):
     """Budget actual displayed text, not repeated JSON metadata; never cut a record header."""
     target = directory(store.vault_root)
     hygiene_line = ''
@@ -664,7 +607,7 @@ def context(store, budget, session, harness, query='', receipt='', warning='', c
         return clip(header + 'Multiple companion directories: read the user-selected identity sources.\n', budget)
     snapshot = store.source_snapshot(NAMES, budget_chars=200000,
                                      source_directory=target.relative_to(store.vault_root).as_posix(),
-                                     text_transform=lambda n, txt: tetikleyici_katman(n, txt, cwd))
+                                     text_transform=excerpt)
     records = snapshot['records']
     notice = ''
     if snapshot['missing_sources']:
