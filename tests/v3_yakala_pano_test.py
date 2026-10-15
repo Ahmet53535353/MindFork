@@ -592,12 +592,15 @@ class PopupWiringTest(ScreenshotFiles, unittest.TestCase):
         fake.font = types.ModuleType('tkinter.font')
         fake.font.Font = lambda **_options: types.SimpleNamespace(measure=lambda text: len(text) * 6)
         environment = {key: value for key, value in os.environ.items() if key != 'BEYIN_YAKALA_SNAPSHOT'}
-        if not windows:
-            environment['BEYIN_YAKALA_SNAPSHOT'] = 'model'  # legacy path; never inspect the real desktop
+        if not windows and os.name == 'nt':
+            # On a Windows host the non-Windows model skips the desktop path this way; never on macOS,
+            # where the variable starts the development screencapture of the (fake) window.
+            environment['BEYIN_YAKALA_SNAPSHOT'] = 'model'
         system = types.SimpleNamespace(**{**vars(os), 'name': 'nt' if windows else os.name})
         with patch.dict(sys.modules, {'tkinter': fake, 'tkinter.font': fake.font}), \
                 patch.dict(os.environ, environment, clear=True), \
                 patch.object(yakala, 'os', system), \
+                patch.object(yakala, '_style_mac'), \
                 patch.object(yakala, '_clipboard', return_value=clip), \
                 patch.object(yakala, '_clipboard_payload', return_value=payload, create=True) as probe, \
                 patch.object(yakala, '_windows_clipboard', return_value={**(payload or {}), 'text': clip, 'sequence': 77}), \
