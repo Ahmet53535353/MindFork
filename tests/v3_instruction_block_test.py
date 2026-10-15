@@ -119,6 +119,16 @@ class InstructionBlockTest(unittest.TestCase):
                 self.assertIn(' '.join(ENGLISH.split()), ' '.join(block.split()))
                 self.assertIn(' '.join(TURKISH.split()), ' '.join(block.split()))
 
+    def test_generated_block_paragraphs_are_single_line_softwrapped(self):
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        block = self.block('AGENTS.md')
+        paragraphs = [p.strip() for p in block.strip().split('\n\n') if p.strip()]
+        for p in paragraphs:
+            if p.startswith('##'):
+                continue
+            self.assertNotIn('\n', p, 'Paragraph in AGENTS.md block contains manual line break')
+
     def test_block_carries_no_machine_path(self):
         # #112: AGENTS.md may be synced between machines; the block must read the same on each.
         self.seed('CLAUDE.md', CLAUDE)
