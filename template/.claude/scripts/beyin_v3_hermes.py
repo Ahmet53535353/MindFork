@@ -41,10 +41,122 @@ LOGGER = logging.getLogger(__name__)
 # their SessionEnd must not be counted as a checkpoint: otherwise every later interactive
 # start warns about "missing receipts" for work that was never receipt-shaped. Hermes
 # reports a generic platform at finalize, so the platform seen on the first turn is kept.
-UNATTENDED_PLATFORMS = frozenset({"cron", "telegram", "discord", "slack", "whatsapp", "signal", "matrix", "email", "sms", "webhook"})
+DEFAULT_UNATTENDED_PLATFORMS = frozenset({"a2a", "cron", "telegram", "discord", "slack", "whatsapp", "signal", "matrix", "email", "sms", "webhook"})
+UNATTENDED_PLATFORMS = DEFAULT_UNATTENDED_PLATFORMS
+SETTINGS_FILE = "hermes-platforms.json"
+VAULT_SETTINGS_FILE = ".beyin-hermes.json"
 # Same cadence as the V2 nudge: remind a long interactive session to write a receipt.
 REMINDER_EVERY = 15
 REMINDER = "[Hafıza] {n}. mesaj. Anlamlı iş bittiyse `beyin.py receipt --harness hermes` ile kaynak bağlantılı makbuz yaz."
+
+
+def _clean_platforms(items):
+    if not isinstance(items, (list, tuple, set)):
+        return []
+    res = []
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            clean = item.strip().lower()
+            if clean not in res:
+                res.append(clean)
+    return sorted(res)
+
+
+def read_platforms(state=None, vault=None):
+    """(settings, valid).
+
+    Returns a dict with 'attended' and 'unattended' lists, and a validity bool.
+    Missing settings file returns empty lists and True.
+    A damaged or invalid JSON file returns empty lists and False (fails open).
+    """
+    path = None
+    if state:
+        path = Path(state) / SETTINGS_FILE
+    if not path or not path.exists():
+        return {"attended": [], "unattended": []}, True
+    if path.is_symlink():
+        return {"attended": [], "unattended": []}, False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"attended": [], "unattended": []}, False
+        for key in ("attended", "unattended"):
+            values = data.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(p, str) or not p.strip() for p in values):
+                return {"attended": [], "unattended": []}, False
+        attended = _clean_platforms(data.get("attended", []))
+        unattended = _clean_platforms(data.get("unattended", []))
+        return {"attended": attended, "unattended": unattended}, True
+    except (ValueError, OSError, TypeError):
+        return {"attended": [], "unattended": []}, False
+
+
+def resolve_unattended_platforms(vault=None, state=None):
+    """Resolve effective set of unattended platforms."""
+    conf, _ = read_platforms(state=state, vault=vault)
+    effective = set(DEFAULT_UNATTENDED_PLATFORMS)
+    effective.difference_update(conf.get("attended", []))
+    effective.update(conf.get("unattended", []))
+    return frozenset(effective)
+
+
+def save_platforms(state, attended=None, unattended=None, reset=False):
+    """Save machine-local platform configuration atomically in state.
+
+    If reset=True, removes the state settings file and returns defaults.
+    """
+    state = Path(state)
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / SETTINGS_FILE
+    if reset:
+        if path.exists():
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        return {"attended": [], "unattended": [], "effective_unattended": sorted(DEFAULT_UNATTENDED_PLATFORMS)}
+
+    current, _ = read_platforms(state=state)
+    new_attended = set(current.get("attended", []))
+    new_unattended = set(current.get("unattended", []))
+
+    if attended:
+        for p in _clean_platforms(attended):
+            new_attended.add(p)
+            new_unattended.discard(p)
+    if unattended:
+        for p in _clean_platforms(unattended):
+            new_unattended.add(p)
+            new_attended.discard(p)
+
+    data = {
+        "schema": 1,
+        "attended": sorted(new_attended),
+        "unattended": sorted(new_unattended),
+    }
+
+    import tempfile
+    fd, temporary = tempfile.mkstemp(prefix=".hermes-platforms-", dir=state)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(data, out, ensure_ascii=False, indent=2)
+            out.write("\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+    effective = (set(DEFAULT_UNATTENDED_PLATFORMS) - new_attended) | new_unattended
+    return {
+        "attended": sorted(new_attended),
+        "unattended": sorted(new_unattended),
+        "effective_unattended": sorted(effective),
+    }
 
 
 def _runtime(vault):
@@ -110,7 +222,8 @@ def make_hooks(vault, state=None, python=None):
         prompt = kw.get("user_message") if isinstance(kw.get("user_message"), str) else ""
         text = run_hook(vault, state, {"hook_event_name": event, "session_id": session_id, "prompt": prompt}, python)
         parts = [text] if text else []
-        if turns % REMINDER_EVERY == 0 and platform not in UNATTENDED_PLATFORMS:
+        unattended = resolve_unattended_platforms(vault, state)
+        if turns % REMINDER_EVERY == 0 and platform not in unattended:
             parts.append(REMINDER.format(n=turns))
         return {"context": "\n\n".join(parts)} if parts else None
 
@@ -120,7 +233,8 @@ def make_hooks(vault, state=None, python=None):
             return None
         with sessions_lock:
             info = sessions.pop(session_id, None)
-        if info and info["platform"] in UNATTENDED_PLATFORMS:
+        unattended = resolve_unattended_platforms(vault, state)
+        if info and info["platform"] in unattended:
             return None
         run_hook(vault, state, {"hook_event_name": "SessionEnd", "session_id": session_id}, python)
         return None

@@ -212,6 +212,37 @@ class SourceSyncTest(unittest.TestCase):
             (self.vault / name).unlink()
         self.assertEqual(self.engine.sync()['status'], 'succeeded')
 
+    def test_turkish_and_nextcloud_sync_copies_are_reported_and_left_out_of_index(self):
+        # #205: Turkish locale Dropbox/OneDrive clash and Nextcloud conflict patterns
+        self.write()
+        copies = [
+            'notes/task (çakışan kopya 2026-10-06).md',
+            'notes/task (cakisan kopya 2026-10-06).md',
+            'notes/task (tekrarlanan kopya).md',
+            'notes/task.sync-conflict-20261006-ABCDEF7.md',
+            'notes/task_conflict-20261006-120000.md',
+        ]
+        for name in copies:
+            self.write(name=name, body='Conflict copy body.\n', id='copy-' + str(len(name)))
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'degraded')
+        self.assertEqual(sorted(w['source'] for w in report['warnings']), sorted(copies))
+        self.assertTrue(all('file sync conflict copy' in w['reason'] for w in report['warnings']))
+        for name in copies:
+            (self.vault / name).unlink()
+        self.assertEqual(self.engine.sync()['status'], 'succeeded')
+
+    def test_state_regression_warning_is_emitted_when_state_timestamp_is_in_future(self):
+        # #205: State regression / foreign state rewind warning
+        import time
+        self.engine.sync()
+        with self.engine.store._connect() as db:
+            future = int(time.time()) + 10000
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('last_sync_time', ?)", (str(future),))
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'degraded')
+        self.assertTrue(any('state regression detected' in w['reason'] for w in report['warnings']))
+
     def test_a_numbered_file_beside_its_name_is_listed_and_both_stay_in_the_index(self):
         # iCloud ("Sezon 2.md") and Drive/Windows ("plan (1).md") number the copy; people name notes like that too.
         self.note('notes/Sezon.md', 'Nebula sezon bir ozeti.\n')
@@ -821,6 +852,25 @@ class SourceSyncTest(unittest.TestCase):
         self.assertEqual(path.read_bytes(), manual)
         self.assertNotEqual(self.records()[0]['status'], 'waiting')
 
+    def test_utf8_bom_frontmatter_preserves_visibility_and_metadata(self):
+        """BOM-prefixed markdown files parse frontmatter cleanly without leaking private visibility."""
+        source = self.vault / 'private_bom.md'
+        body = 'Nebula calibration secret private content.\n'
+        content = '\ufeff---\nvisibility: private\nid: secret-note\nproject: nebula\n---\n' + body
+        source.write_bytes(content.encode('utf-8'))
+        metadata, parsed_body = self.module.parse(source.read_text(encoding='utf-8'))
+        self.assertEqual(metadata.get('visibility'), 'private')
+        self.assertEqual(metadata.get('id'), 'secret-note')
+        self.assertEqual(parsed_body, body)
+        report = self.engine.sync()
+        self.assertEqual(report['status'], 'succeeded')
+        # Private records are not leaked to default internal audience
+        self.assertEqual(len(self.records(audience='internal')), 0)
+        # But are visible when explicitly querying private audience
+        private_records = self.records(audience='private')
+        self.assertEqual(len(private_records), 1)
+        self.assertEqual(private_records[0].get('visibility'), 'private')
+
 
 class ReceiptStateResetTest(unittest.TestCase):
     def setUp(self):
@@ -1092,7 +1142,7 @@ class ReceiptStateResetTest(unittest.TestCase):
         self.assertIn('Second device.', (self.vault / 'knowledge/v3/outcomes.md').read_text(encoding='utf-8'))
 
     def test_receipt_hidden_by_unchanged_directory_mtime_heals_on_next_sync(self):
-        """Where a filesystem keeps the directory mtime, a missed receipt costs one conflicted sync, not a deadlock."""
+        """Where a filesystem keeps the directory mtime, a missed receipt costs one degraded sync, not a deadlock."""
         engine = self.module.SyncEngine(self.vault, self.root / 'state_heal')
         engine.receipt('event-1', 'First device.', ['notes/task.md'], 'codex')
         receipts_dir = self.vault / 'receipts'
@@ -1103,7 +1153,7 @@ class ReceiptStateResetTest(unittest.TestCase):
         self.assertEqual(other.sync()['conflicts'], [])
         self.assertEqual(other.receipt('event-2', 'Second device.', ['notes/task.md'], 'codex')['status'], 'succeeded')
         os.utime(receipts_dir, ns=(past, past))
-        self.assertTrue(engine.sync()['conflicts'])
+        self.assertTrue(any(w.get('kind') == 'receipt_view' for w in engine.sync()['warnings']))
         self.assertEqual(engine.sync()['conflicts'], [])
         self.assertEqual(engine.receipt('event-3', 'Back in step.', ['notes/task.md'], 'codex')['status'], 'succeeded')
 

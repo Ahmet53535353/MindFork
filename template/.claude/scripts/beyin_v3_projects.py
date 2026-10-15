@@ -58,7 +58,7 @@ def read_project_scopes(vault_root):
     if not path.exists():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (ValueError, OSError) as exc:
         raise ValueError("invalid project scopes file; expected JSON") from exc
     if not isinstance(data, dict) or set(data) - {"folders", "shared_unscoped"}:
@@ -104,7 +104,7 @@ def check_project_scopes(vault_root):
                 "folders": {}, "shared_unscoped": False, "missing_folders": [],
                 "duplicate_folders": [], "invalid_entries": [], "warnings": ["symlink_not_allowed"]}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         return {"status": "error", "error": f"invalid JSON: {type(exc).__name__}",
                 "folders": {}, "shared_unscoped": False, "missing_folders": [],
@@ -201,13 +201,14 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
         raise ValueError('project scopes must be a regular vault-local file')
     if path.exists():
         # Never replace malformed user configuration with an empty object.
-        data = json.loads(path.read_text(encoding='utf-8'))
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
         if (not isinstance(data, dict) or set(data) - {'folders', 'shared_unscoped'} or
                 not isinstance(data.get('folders', {}), dict) or
                 not isinstance(data.get('shared_unscoped', False), bool)):
             raise ValueError('invalid project scopes configuration; preserve and repair it first')
         for configured_folder, configured_project in data.get('folders', {}).items():
-            _scope_path(configured_folder)
+            if action != "prune":
+                _scope_path(configured_folder)
             if not isinstance(configured_project, str) or not configured_project.strip():
                 raise ValueError('project scope names must be non-empty strings')
 
@@ -220,7 +221,7 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
         data = {}
         if path.exists():
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
             except Exception as exc:
                 raise ValueError(f"existing {PROJECT_SCOPES_FILE} is invalid JSON: {exc}") from exc
             if not isinstance(data, dict):
@@ -249,7 +250,7 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
         if not path.exists():
             raise ValueError(f"{PROJECT_SCOPES_FILE} does not exist")
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             raise ValueError(f"existing {PROJECT_SCOPES_FILE} is invalid JSON: {exc}") from exc
         folders = data.get("folders", {})
@@ -270,7 +271,7 @@ def manage(vault_root, action, folder=None, project=None, shared_unscoped=None):
         if not path.exists():
             return {"status": "ok", "action": "prune", "pruned": [], "message": f"{PROJECT_SCOPES_FILE} absent", "folders": {}}
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             raise ValueError(f"existing {PROJECT_SCOPES_FILE} is invalid JSON: {exc}") from exc
         folders = data.get("folders", {})

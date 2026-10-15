@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 import unittest
 
@@ -11,6 +12,13 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('v3_runtime_evaluator', ROOT / 'scripts/evaluate_v3.py')
 evaluator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(evaluator)
+
+# The hook runs from this directory, so `import beyin_v3_passage` always resolves in
+# production. Spec-loading the runtime bypasses that, and upstream's strict path now
+# refuses to deliver anything when the passage exclusion policy cannot be imported
+# (#strict fallback) -- so the test must reproduce the real import environment, not a
+# narrower one. Upstream's own strict tests insert the same line.
+sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
 
 
 class Fts5IndexingTest(unittest.TestCase):

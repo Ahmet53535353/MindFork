@@ -39,6 +39,10 @@ Beyni Guncelle.cmd
 .agents/skills/beyin-guncelle/
 .codex/config.toml
 .codex/hooks.json
+.kiro/hooks/beyin-v3.json
+.kiro/skills/beyin/
+.kiro/skills/beyin-doktor/
+.kiro/skills/beyin-guncelle/
 .opencode/plugins/beyin-v3.js
 .omp/hooks/pre/beyin-v3.ts
 # companion-compact süreçler arası kilidi; kalıcıdır ama kullanıcı verisi değildir

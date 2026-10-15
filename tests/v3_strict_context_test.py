@@ -17,6 +17,13 @@ spec = importlib.util.spec_from_file_location('v3_strict_evaluator', ROOT / 'scr
 evaluator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(evaluator)
 
+# The hook runs from this directory, so `import beyin_v3_passage` always resolves in
+# production. Spec-loading the runtime bypasses that, and upstream's strict path now
+# refuses to deliver anything when the passage exclusion policy cannot be imported
+# (#strict fallback) -- so the test must reproduce the real import environment, not a
+# narrower one. Upstream's own strict tests insert the same line.
+sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
+
 LONG_LOG = ('Session log. ' + ' '.join(f'filler{i}' for i in range(400)) +
             ' The team discussed the screenshot problem and the deploy calendar and the budget.')
 SHORT_NOTE = 'Quartz observatory calibration: the GoPlus quota is wasted because every candidate is rescanned.'
@@ -105,8 +112,21 @@ class StrictHookTest(unittest.TestCase):
         return json.loads(result.stdout)
 
     def test_prompt_without_meaningful_match_injects_nothing(self):
-        self.assertEqual(self.invoke('thanks that was great'), {})
-        self.assertEqual(self.invoke('is the budget approved'), {})
+        """No retrieved memory on a turn with no meaningful match.
+
+        Upstream widened what this path prints: `notice + warning` instead of `notice`
+        alone, so a deferred-check or sync-attention diagnostic now reaches the turn that
+        has nothing to deliver. That is worth having -- those warnings are otherwise
+        invisible on exactly the turns where nothing else is injected. So the contract is
+        "no retrieved memory", not "no output": the context block and its record labels
+        must be absent, whatever diagnostic accompanies them.
+        """
+        for prompt in ('thanks that was great', 'is the budget approved'):
+            with self.subTest(prompt=prompt):
+                context = self.invoke(prompt).get('hookSpecificOutput', {}).get('additionalContext', '')
+                self.assertNotIn('V3 source-backed context', context)
+                self.assertNotIn('[knowledge/', context)
+                self.assertNotIn('[receipts/', context)
 
     def test_prompt_with_meaningful_match_injects_source_backed_context(self):
         context = self.invoke('why is the GoPlus quota wasted')['hookSpecificOutput']['additionalContext']

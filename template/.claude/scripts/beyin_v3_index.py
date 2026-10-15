@@ -31,6 +31,11 @@ PROTECTED_DIRS = ('knowledge', 'notes', 'tasks')
 # that merely shares the name (supplier notes under "Vendor") does not.
 VENDORED_HINT_DIRS = frozenset({'3rdparty', 'third_party', 'third-party', 'thirdparty', 'vendor', 'vendored', 'external'})
 UPSTREAM_DOCS = frozenset({'readme.md', 'security.md', 'code_of_conduct.md', 'contributing.md', 'changelog.md', 'license.md'})
+ARCHIVE_HINT_DIRS = frozenset({
+    '📦 900-archive', '900-archive', 'archive', 'archives',
+    '📦 900-arsiv', '900-arsiv', 'arsiv', 'arsivler',
+    '📦 900-arşiv', '900-arşiv', 'arşiv', 'arşivler',
+})
 
 
 def dir_key(name):
@@ -211,19 +216,77 @@ def vendored_hint(sources, limit=5):
             'names': sorted(names.values(), key=dir_key), 'truncated': len(rows) > limit}
 
 
-def doctor(state, vault, sources=()):
-    """Read-only report: the active list, a file that is not applied, and the vendored hint.
+def archive_hint(sources, records=None, limit=5):
+    """Indexed notes under an archive-looking directory that lack a retired status.
+    Information for doctor; None when there is none."""
+    try:
+        from beyin_v3 import RETIRED_STATUSES, _status_word
+    except ImportError:
+        RETIRED_STATUSES = frozenset(("superseded", "retired", "archived", "archive", "deprecated", "obsolete",
+                                      "replaced", "arsiv", "arsivlendi", "eski", "emekli", "gecersiz"))
+        def _status_word(record):
+            value = record.get("status") if isinstance(record, dict) else None
+            if not isinstance(value, str) or not value.strip():
+                return "" if isinstance(record, dict) and record.get("kind") == "task" else "active"
+            import re
+            fold = str.maketrans("ŞşĞğÜüÇçÖöİIı", "SsGgUuCcOoiii")
+            word = re.match(r"[^\W_]+", unicodedata.normalize("NFC", value.strip()).translate(fold).casefold())
+            return word.group(0) if word else ""
+
+    pool = records if records is not None else sources
+    found = {}
+    for item in pool:
+        if isinstance(item, dict):
+            source = item.get("source") or ""
+            is_retired = _status_word(item) in RETIRED_STATUSES
+        elif isinstance(item, (list, tuple)):
+            source = item[0] if item else ""
+            is_retired = bool(item[1]) if len(item) > 1 else False
+        else:
+            source = str(item)
+            is_retired = False
+        if not source or is_retired:
+            continue
+        parts = source.split('/')
+        for depth, part in enumerate(parts[:-1]):
+            if dir_key(part) in ARCHIVE_HINT_DIRS:
+                entry = found.setdefault('/'.join(parts[:depth + 1]), [0, part])
+                entry[0] += 1
+                break
+    rows = sorted(((path, count, name) for path, (count, name) in found.items() if count > 0),
+                  key=lambda row: (-row[1], row[0]))
+    if not rows:
+        return None
+    names = {}
+    for _path, _count, name in rows:
+        names.setdefault(dir_key(name), name)
+    return {'notes': sum(count for _path, count, _name in rows),
+            'dirs': [{'dir': path, 'notes': count} for path, count, _name in rows[:limit]],
+            'names': sorted(names.values(), key=dir_key), 'truncated': len(rows) > limit}
+
+
+def doctor(state, vault, sources=(), records=None):
+    """Read-only report: the active list, a file that is not applied, and vendored & archive hints.
 
     `sources` are the indexed source paths. Notes under an already listed name are left out of
-    the hint: they leave the index with the next sync."""
+    the hints: they leave the index with the next sync."""
     names, error, _present = read(state, vault)
     report = {'file': CONFIG_NAME, 'excluded_dirs': names,
               'status': 'invalid' if error is not None else 'active' if names else 'none'}
     if error is not None:
         report['error'] = error
     keys = {dir_key(name) for name in names}
-    hint = vendored_hint(source for source in sources
-                         if not any(dir_key(part) in keys for part in source.split('/')[:-1]))
+    active_sources = [source for source in sources
+                      if not any(dir_key(part) in keys for part in source.split('/')[:-1])]
+    hint = vendored_hint(active_sources)
     if hint:
         report['vendored_hint'] = hint
+    if records is not None:
+        active_records = [r for r in records
+                          if not any(dir_key(part) in keys for part in (r.get('source', '') if isinstance(r, dict) else str(r)).split('/')[:-1])]
+    else:
+        active_records = active_sources
+    arch_hint = archive_hint(active_sources, records=active_records)
+    if arch_hint:
+        report['archive_hint'] = arch_hint
     return report

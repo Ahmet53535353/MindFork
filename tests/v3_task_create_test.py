@@ -83,4 +83,23 @@ class TaskCreateTest(unittest.TestCase):
         self.assertTrue(self.engine.store.retrieve('Task body')['abstained'])
         self.assertEqual(p.read_text(), original)
 
-if __name__ == '__main__':unittest.main()
+    def test_task_create_auto_populates_timestamps_and_preserves_explicit_dates(self):
+        # Default behavior: no updated_at or created_at passed in metadata
+        task = self.engine.task_create('tasks/auto-date.md', 'Auto dated task body.', self.metadata)
+        self.assertEqual(task['status'], 'active')
+        meta, _ = parse((self.vault / 'tasks/auto-date.md').read_text(encoding='utf-8'))
+        self.assertIn('updated_at', meta)
+        self.assertIn('created_at', meta)
+        self.assertEqual(meta['updated_at'], meta['created_at'])
+
+        # Explicit dates preserved
+        explicit_meta = dict(self.metadata, id='explicit-task', created_at='2026-09-01', updated_at='2026-09-15')
+        task2 = self.engine.task_create('tasks/explicit-date.md', 'Explicit dated task.', explicit_meta)
+        self.assertEqual(task2['status'], 'active')
+        meta2, _ = parse((self.vault / 'tasks/explicit-date.md').read_text(encoding='utf-8'))
+        self.assertEqual(meta2['created_at'], '2026-09-01')
+        self.assertEqual(meta2['updated_at'], '2026-09-15')
+
+
+if __name__ == '__main__':
+    unittest.main()

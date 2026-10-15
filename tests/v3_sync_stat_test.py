@@ -372,7 +372,7 @@ class StatSignatureTest(unittest.TestCase):
             result = self.sync_both()
             self.assertEqual(result['conflicts'], [{'id': 'foreign', 'reason': 'id already owned by another record'}])
 
-    def test_a_manual_receipt_view_edit_stays_a_conflict(self):
+    def test_a_manual_receipt_view_edit_stays_a_typed_warning(self):
         self.write()
         self.settle()
         self.engine.receipt('event-1', 'Calibrated alpha.', ['notes/note.md'], 'codex')
@@ -384,7 +384,8 @@ class StatSignatureTest(unittest.TestCase):
         for _ in range(3):
             with self.later():
                 result = self.engine.sync()
-            self.assertIn({'source': relative, 'reason': 'manual receipt view edit preserved'}, result['conflicts'])
+            self.assertIn({'source': relative, 'reason': 'manual receipt view edit preserved', 'kind': 'receipt_view'}, result['warnings'])
+            self.assertEqual(result['conflicts'], [])
             self.assertTrue(get(view).endswith('Edited by hand.\n'))
 
     def test_outside_vault_symlink_is_rejected_on_every_sync(self):

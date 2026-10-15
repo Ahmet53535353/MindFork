@@ -30,8 +30,9 @@ import tempfile
 import time
 import unicodedata
 
-from beyin_v3 import (HARNESSES, STOPWORDS, _allowed_statuses, _json, _status_allowed, _tokens,
-                      pack_context, record_matches_types, resolve_type_filter)
+from beyin_v3 import (HARNESSES, STOPWORDS, _allowed_statuses, _json, _name_match_score, _status_allowed,
+                      _strict_terms, _tokens, pack_context, record_matches_types,
+                      resolve_type_filter)
 
 # #83 chose 0.15 on one 263-note Turkish vault without a coverage cap. With the cap, on a
 # second 1,285-note vault 0.20 is the lowest floor that keeps everyday and agent-command
@@ -343,6 +344,7 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED, allowed=No
     `allowed` is an optional set of record ids: the type gates filter at search time
     only, so the index, its df statistics and the floor calibration never change.
     """
+    terms = _strict_terms(terms)
     if not terms:
         return []
     # For a one-word query two shared terms are impossible; keep the calibrated weight floor.
@@ -365,6 +367,9 @@ def search(index, terms, limit=5, floor=FLOOR, min_shared=MIN_SHARED, allowed=No
             continue
         rank = _weight(shared, index.source_df, sources_total, size) * coverage
         record = passage[0]
+        name_score = _name_match_score(record, terms)
+        if name_score > 0:
+            rank += 10.0 * name_score
         current = best.get(record["id"])
         if current is None or rank > current[0]:
             best[record["id"]] = (rank, passage)
@@ -419,7 +424,9 @@ def context_for(store, harness, query, project=None, audience="internal", status
                   deadline=time.monotonic() + BUILD_SECONDS)
     if candidates and not index.passages:
         raise RuntimeError("passage index is empty")  # a failure, not an answer: caller falls back
-    terms = _tokens(query) - STOPWORDS - _tokens(project or "")
+    terms = _strict_terms(_tokens(query) - STOPWORDS - _tokens(project or ""))
+    if not terms:
+        return pack_context([], limit, budget_chars, stale_count)
     records = []
     for _rank, (record, head, start, end, _tokens_) in search(index, terms, limit, config["floor"], allowed=allowed):
         body = record["text"][start:end]

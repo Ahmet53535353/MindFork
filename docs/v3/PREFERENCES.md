@@ -327,7 +327,7 @@ Runtime klasöründeki (konumu için bkz. QUICKSTART) isteğe bağlı `retrieval
 ```
 
 - `strict_floor`: 0 ile 2 arası sayı, varsayılan 0,20. Yükseltmek yanlış eklemeyi azaltır, cevabı bulma oranını da düşürür.
-- `strict_exclude`: vault köküne göre en fazla 64 yol öneki. `daily/` ve `receipts/` her zaman dışarıdadır, liste bunlara eklenir. Karşılaştırma büyük/küçük harfe ve Unicode biçimine (NFC/NFD) duyarsızdır, `\` ayırıcısı da kabul edilir. Arşiv ya da oturum dökümü klasörleri için uygundur.
+- `strict_exclude`: vault köküne göre en fazla 64 yol öneki. `daily/` ve `receipts/` her zaman dışarıdadır, liste bunlara eklenir. Karşılaştırma büyük/küçük harfe ve Unicode biçimine (NFC/NFD) duyarsızdır, `\` ayırıcısı da kabul edilir. Arşiv ya da oturum dökümü klasörleri için uygundur. Bu ayar strict arama yollarında, not düzeyi yedek arama dahil, sonuçları eler. `context_mode: session` açılışındaki companion kaynak seçimine uygulanmaz ve açık non-strict geçmiş aramasını engellemez. Arşiv klasörünü indeksten tamamen uzak tutmak için aşağıda anlatılan `--index-exclude-dir` tercih edilmelidir.
 - Dosya bozuksa ya da bir değer geçersizse varsayılanlar kullanılır; hook bozulmaz.
 
 Bu ayar makineye özeldir ve `.beyin-preferences.json` şemasına girmez: eski bir sürüme dönüldüğünde tanımadığı bir tercih alanı yüzünden hook'un durması istenmedi.
@@ -378,7 +378,7 @@ python3 beyin.py sync
 - Dosya bozuksa, sembolik bağsa, 64 KB'ı aşıyorsa ya da tek bir geçersiz giriş içeriyorsa (yol ayırıcı, `.`/`..`, boş ad, korunan ad, bilinmeyen anahtar) listenin **hiçbiri** uygulanmaz: `sync` bozulmaz, her şey indekslenir ve neden `sync` çıktısındaki `index_exclusions.error` alanında ve `doctor`da `index.json gecersiz (...)` satırında görünür. Yarım uygulanmış bir liste yerine görünür bir hata tercih edildi.
 - Bu bir gizlilik sınırı değildir. Bu ayarı tanımayan bir sürüme (3.9.0 ve öncesi) dönüldüğünde dosya yok sayılır ve o klasörler yeniden indekslenir; yeniden güncellendiğinde liste kaldığı yerden uygulanır. Bir kaynağı bağlamdan kesin olarak uzak tutan şey `visibility: private` alanıdır. İndekste olmayan bir dosyanın frontmatter'ı okunmadığı için görünürlüğü de bilinemez. Bu yüzden listedeki bir klasörün altındaki her dosya, bir receipt'e kaynak olarak verildiğinde özel bir kaynak gibi ele alınır: `recap` yolunu göstermez, yalnız sayar; oturum başı bağlamı ve proje köprüsü de o receipt'i göstermez. Klasör listeden çıkarılıp yeniden indekslendiğinde karar yine notun kendi `visibility` alanına döner.
 - Listedeki bir klasörde duran not indekste olmadığı için öbür kurallara da katılmaz: başka bir notu `supersedes` ile emekliye ayırıyorsa o eski not yeniden güncel sayılır, `validity: rejected` taşıyorsa aynı iddianın yeniden önerilmesini artık engellemez. Bir klasörü listeye almadan önce içinde böyle notlar olup olmadığına bak.
-- `retrieval.json` içindeki `strict_exclude` ile farkı: o yalnız tur başı strict aramada sonuçları eler, dosyalar yine taranır, indekslenir ve `context` komutunda çıkar. `index.json` ise taramanın kendisini keser.
+- `retrieval.json` içindeki `strict_exclude` ile farkı: o strict aramada sonuçları eler; dosyalar yine taranır, indekslenir ve açık non-strict aramada bulunabilir. `index.json` ise taramanın kendisini keser.
 - Opt-in kelime tavanı sinyali de listedeki klasörleri atlar. Gelen kutusu raporu, kapalı görev raporu ve bilgi damıtması tarihi diskteki dosyalara bakar, indekse değil; bu liste onları değiştirmez.
 
 ## Bileşen ve skill hariç tutma (susturma)
@@ -392,3 +392,22 @@ Hariç tutulabilen bileşenler:
 `agents_block`, `adapters`, `adapters/hermes`, `adapters/omp`, `adapters/opencode`, `harnesses/antigravity`, `launchers`, `skills`, `skills/beyin`, `skills/beyin-doktor`, `skills/beyin-guncelle`.
 
 Hariç tutma tercihleri vault kökünde bağımsız `.beyin-exclusions.json` dosyasında saklanır (`.beyin-preferences.json` dosyasını değiştirmez; böylece eski sürümlere rollback 3.4.0 uyumlu kalır). Tercih kaydedildiğinde bir sonraki kurulum veya güncellemede uygulanır (`update` veya `install`). Değiştirilmemiş hariç tutulan dosyalar temizlenir, kullanıcının değiştirdiği dosyalar ise çakışma vermeden korunur. `doctor` çıktısı hem uygulanan hariç tutmaları hem de bekleyen değişiklikleri gösterir.
+
+## Hermes platform tercihi (`hermes-platforms.json`)
+
+Hermes Agent entegrasyonunda varsayılan olarak gözetimsiz (unattended / bot) sayılan kanallar (`a2a`, `cron`, `telegram`, `discord`, `slack`, `whatsapp`, `signal`, `matrix`, `email`, `sms`, `webhook`) için makbuz hatırlatması ve oturum sonu kontrol noktası üretilmez.
+
+Hermes'i Slack gibi bir kanal üzerinden kişisel interaktif asistan olarak kullananlar için bu kanal gözetimli olarak işaretlenebilir:
+
+```bash
+# Slack'i gözetimli/insanlı say:
+python3 beyin.py preferences --hermes-attended-platform slack
+
+# Özel bir bot kanalını gözetimsiz say:
+python3 beyin.py preferences --hermes-unattended-platform custom-bot
+
+# Varsayılanlara dön:
+python3 beyin.py preferences --hermes-reset-platforms
+```
+
+Ayar runtime klasöründeki `hermes-platforms.json` dosyasında tutulur (`{"schema": 1, "attended": ["slack"], "unattended": []}`); `.beyin-preferences.json` şemasına girmez ve rollback güvenlidir.

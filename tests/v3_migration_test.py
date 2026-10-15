@@ -417,7 +417,8 @@ class MigrationTest(unittest.TestCase):
         target = self.root / 'knowledge/v3/outcomes.md'
         target.write_text('Manual edit', encoding='utf-8')
         result = engine.sync()
-        self.assertEqual(result['status'], 'conflict')
+        self.assertEqual(result['status'], 'degraded')
+        self.assertTrue(any(w.get('kind') == 'receipt_view' for w in result['warnings']))
         self.assertEqual(target.read_text(), 'Manual edit')
 
     def test_companion_private_metadata_excluded(self):
