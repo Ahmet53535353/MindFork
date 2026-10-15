@@ -85,6 +85,13 @@ Tam pencere `tkinter` ister. Arch tabanlı dağıtımlarda Python'un `tk` paketi
 (`sudo pacman -S tk`), Debian ve Ubuntu'da `sudo apt install python3-tk`. `tkinter` yoksa pencere
 yerine `kdialog`, o da yoksa `zenity` ile yalnız "neden" sorulur; iptal edersen kart yazılmaz.
 Üçü de yoksa hiçbir şey kaydedilmez ve `kur` bunu uyarı olarak söyler.
+Bazı paketli Python/Tk sürümleri yalnız `fixed` yazı tipini görür; Türkçe karakterler ve oklar
+pencerede Unicode kaçışları gibi görünebilir. Linux kısayolu, kendi Python'unun Tk fontlarını
+kontrol eder; uygunsuzsa ve `/usr/bin/python3` kullanılabilir Tk fontlarına sahipse pencereyi
+onunla açar. Sistem Tk yoksa dağıtımının paket yöneticisiyle kur; uygun başka Python da yoksa
+mevcut yorumlayıcı ve `kdialog`/`zenity` geri dönüşleri korunur. Bu denetim kart içeriğini
+başka bir yere göndermez. KDE'nin etkin kısayolu eski `Exec` satırını bellekte tutabildiği için
+`.desktop` dosyasını elle değiştirmenin tek başına düzelme garantisi yoktur.
 
 Doğrulamak için: `python3 beyin.py yakala durum` (`Kisayol dinleyicisi: calisiyor`), KDE'de
 `gdbus call --session -d org.kde.kglobalaccel -o /component/beyne_at_desktop -m org.kde.kglobalaccel.Component.isActive`

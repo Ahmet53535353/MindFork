@@ -2827,6 +2827,31 @@ def _kde_active():
     return code == 0 and 'true' in out
 
 
+def _linux_tk_python():
+    """Prefer the current Python unless its Tk sees no usable desktop fonts.
+
+    Some bundled Tk builds only expose `fixed`: their Canvas prints Unicode as
+    escape sequences even though the widget holds the right text. Probe the
+    distribution Python before using it; it may not have Tk installed at all.
+    """
+    if not sys.platform.startswith('linux'):
+        return sys.executable
+    probe = ('import tkinter as tk, tkinter.font as font; '
+             'root=tk.Tk(); root.withdraw(); '
+             'families=font.families(root=root); root.destroy(); '
+             'raise SystemExit(len(families) <= 1)')
+    for python in (sys.executable, '/usr/bin/python3'):
+        if python != sys.executable and not Path(python).is_file():
+            continue
+        try:
+            result = subprocess.run([python, '-c', probe], capture_output=True, timeout=3)
+            if result.returncode == 0:
+                return python
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return sys.executable
+
+
 def _hand_over(vault, state):
     """The desktop entry starts the copy in the state folder. When the vault has its own module, run that
     one, so an update reaches the window without a second `kur` (the macOS listener does the same)."""
@@ -2834,7 +2859,8 @@ def _hand_over(vault, state):
     current = Path(vault) / '.claude/scripts' / here.name
     if here == (Path(state) / 'yakala' / here.name).resolve() and current.is_file() and current.resolve() != here:
         try:
-            os.execv(sys.executable, [sys.executable, str(current)] + sys.argv[1:])
+            python = _linux_tk_python()
+            os.execv(python, [python, str(current)] + sys.argv[1:])
         except OSError:
             pass  # the copy still opens the window
 

@@ -922,7 +922,8 @@ class YakalaUnitTest(unittest.TestCase):
         runner.parent.mkdir(parents=True)
         runner.write_text('# kopya\n', encoding='utf-8')
         argv = ['x', 'pencere', '--vault', str(self.vault)]
-        with patch.object(yakala.os, 'execv') as execv, patch.object(yakala.sys, 'argv', argv):
+        with patch.object(yakala.os, 'execv') as execv, patch.object(yakala.sys, 'argv', argv), \
+                patch.object(yakala, '_linux_tk_python', return_value=sys.executable, create=True):
             with patch.object(yakala, '__file__', str(runner)):
                 yakala._hand_over(self.vault, state)  # the vault has no module of its own: the copy keeps running
                 execv.assert_not_called()
@@ -937,6 +938,39 @@ class YakalaUnitTest(unittest.TestCase):
                 yakala._hand_over(self.vault, state)  # already the vault module
             yakala._hand_over(self.vault, state)  # run from the package, as these tests do
             execv.assert_not_called()
+
+    def test_linux_tk_font_fallback_hands_over_to_system_python(self):
+        state = Path(self.tmp.name) / 'state'
+        runner = state / 'yakala' / 'beyin_v3_yakala.py'
+        current = self.vault / '.claude/scripts/beyin_v3_yakala.py'
+        runner.parent.mkdir(parents=True)
+        runner.write_text('# state copy\n', encoding='utf-8')
+        current.parent.mkdir(parents=True)
+        current.write_text('# vault copy\n', encoding='utf-8')
+        argv = ['x', 'pencere', '--vault', str(self.vault)]
+        with patch.object(yakala, '__file__', str(runner)), patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'argv', argv), patch.object(yakala.os, 'execv') as execv, \
+                patch.object(yakala, '_linux_tk_python', return_value='/usr/bin/python3', create=True):
+            yakala._hand_over(self.vault, state)
+        execv.assert_called_once_with('/usr/bin/python3', ['/usr/bin/python3', str(current)] + argv[1:])
+
+    def test_linux_tk_python_selects_font_capable_runtime_only(self):
+        from subprocess import CompletedProcess, TimeoutExpired
+        with patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'executable', '/conda/bin/python3'), \
+                patch.object(yakala.Path, 'is_file', return_value=True), \
+                patch.object(yakala.subprocess, 'run', side_effect=[
+                    CompletedProcess([], 1), CompletedProcess([], 0),
+                    CompletedProcess([], 0),
+                    TimeoutExpired([], 3), CompletedProcess([], 1),
+                ]) as probe:
+            self.assertEqual(yakala._linux_tk_python(), '/usr/bin/python3')
+            self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
+            self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
+            self.assertEqual(probe.call_count, 5)
+        with patch.object(yakala.sys, 'platform', 'darwin'), patch.object(yakala.subprocess, 'run') as probe:
+            self.assertEqual(yakala._linux_tk_python(), sys.executable)
+            probe.assert_not_called()
 
     def test_hand_over_only_for_the_linux_hotkey_process(self):
         argv = ['x', 'pencere', '--vault', str(self.vault)]
