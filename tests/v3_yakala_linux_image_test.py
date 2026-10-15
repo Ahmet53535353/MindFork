@@ -12,6 +12,7 @@ import beyin_v3_yakala as yakala  # noqa: E402
 from v3_yakala_pano_test import make_png, picture  # noqa: E402
 
 
+@unittest.skipUnless(sys.platform.startswith('linux'), 'Wayland subprocess fixtures require Linux')
 class WaylandImageTest(unittest.TestCase):
     def _fake_reader(self, folder, data, code=0):
         executable = Path(folder) / 'fake-wl-paste'
