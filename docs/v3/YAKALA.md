@@ -86,12 +86,15 @@ Tam pencere `tkinter` ister. Arch tabanlı dağıtımlarda Python'un `tk` paketi
 yerine `kdialog`, o da yoksa `zenity` ile yalnız "neden" sorulur; iptal edersen kart yazılmaz.
 Üçü de yoksa hiçbir şey kaydedilmez ve `kur` bunu uyarı olarak söyler.
 Bazı paketli Python/Tk sürümleri yalnız `fixed` yazı tipini görür; Türkçe karakterler ve oklar
-pencerede Unicode kaçışları gibi görünebilir. Linux kısayolu, kendi Python'unun Tk fontlarını
-kontrol eder; uygunsuzsa ve `/usr/bin/python3` kullanılabilir Tk fontlarına sahipse pencereyi
-onunla açar. Sistem Tk yoksa dağıtımının paket yöneticisiyle kur; uygun başka Python da yoksa
-mevcut yorumlayıcı ve `kdialog`/`zenity` geri dönüşleri korunur. Bu denetim kart içeriğini
-başka bir yere göndermez. KDE'nin etkin kısayolu eski `Exec` satırını bellekte tutabildiği için
-`.desktop` dosyasını elle değiştirmenin tek başına düzelme garantisi yoktur.
+pencerede Unicode kaçışları gibi görünebilir. Linux kısayolunun durum-kopyası, kendi Python'unun
+Tk fontlarını kontrol eder; uygunsuzsa ve `/usr/bin/python3` kullanılabilir Tk fontlarına sahipse
+pencereyi onunla açar. Sistem Tk yoksa dağıtımının paket yöneticisiyle kur; uygun başka Python da
+yoksa mevcut yorumlayıcı ve `kdialog`/`zenity` geri dönüşleri korunur. Bu denetim kart içeriğini
+başka bir yere göndermez. **Mevcut Yakala kurulumunda motor güncellemesinden sonra** kısayolun
+önceden kopyalanmış kodunu yenilemek için vault kökünde `python3 beyin.py yakala kur` çalıştır.
+Yalnız `yakala durum` veya `.desktop` dosyasını elle değiştirmek kopyayı yenilemez; KDE etkin
+kısayolun eski `Exec` satırını ayrıca bellekte tutabilir. Bu yeniden kurulum eski kartları taşımaz
+veya silmez; kayıtlı kısayol ve seçilmiş klasör kullanılır.
 
 Doğrulamak için: `python3 beyin.py yakala durum` (`Kisayol dinleyicisi: calisiyor`), KDE'de
 `gdbus call --session -d org.kde.kglobalaccel -o /component/beyne_at_desktop -m org.kde.kglobalaccel.Component.isActive`

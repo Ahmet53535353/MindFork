@@ -592,6 +592,18 @@ class YakalaUnitTest(unittest.TestCase):
         # No call can hang the command or reach a shell.
         self.assertTrue(all(options.get('timeout') and not options.get('shell') for options in self.linux_options))
 
+    def test_linux_reinstall_refreshes_existing_state_copy(self):
+        entry, _ = self._linux_env('KDE')
+        state = Path(self.tmp.name) / 'state'
+        runner = state / 'yakala' / 'beyin_v3_yakala.py'
+        runner.parent.mkdir(parents=True)
+        runner.write_text('# eski kopya: font probe yok\n', encoding='utf-8')
+        yakala.install(self.vault, state)
+        source = yakala.__file__
+        assert source is not None
+        self.assertEqual(runner.read_bytes(), Path(source).read_bytes())
+        self.assertEqual(desktop_exec_argv(entry.read_text(encoding='utf-8')), self._linux_argv(state))
+
     def test_linux_install_gnome_keeps_existing_bindings(self):
         entry, calls = self._linux_env('ubuntu:GNOME', "['/org/other/custom0/']")
         state = Path(self.tmp.name) / 'state'
@@ -971,6 +983,15 @@ class YakalaUnitTest(unittest.TestCase):
         with patch.object(yakala.sys, 'platform', 'darwin'), patch.object(yakala.subprocess, 'run') as probe:
             self.assertEqual(yakala._linux_tk_python(), sys.executable)
             probe.assert_not_called()
+
+    def test_linux_tk_python_keeps_current_when_system_tk_missing(self):
+        from subprocess import CompletedProcess
+        with patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'executable', '/conda/bin/python3'), \
+                patch.object(yakala.Path, 'is_file', return_value=False), \
+                patch.object(yakala.subprocess, 'run', return_value=CompletedProcess([], 1)) as probe:
+            self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
+        self.assertEqual(probe.call_count, 1)  # no attempt to run an absent system Python
 
     def test_hand_over_only_for_the_linux_hotkey_process(self):
         argv = ['x', 'pencere', '--vault', str(self.vault)]
