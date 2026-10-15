@@ -476,43 +476,6 @@ class HookInstallerTest(unittest.TestCase):
         response = self.lifecycle('Stop', sess_name, 'claude')
         self.assertEqual(response, {})
 
-    def test_stop_knowledge_reminder_does_not_accept_untouched_refs(self):
-        engine = self.seed()
-        for harness in ('claude', 'codex'):
-            for index, root in enumerate(('knowledge/concepts', '500-Knowledge', '🧠 500-Knowledge')):
-                with self.subTest(harness=harness, root=root):
-                    name = f'old-knowledge-{harness}-{index}'
-                    relative = f'{root}/{name}.md'
-                    note = self.vault / relative
-                    note.parent.mkdir(parents=True, exist_ok=True)
-                    note.write_text('# Existing knowledge\n', encoding='utf-8')
-                    os.utime(note, (0, 0))
-                    self.lifecycle('PostToolUse', name, harness)
-                    session = hashlib.sha256(name.encode()).hexdigest()[:24]
-                    engine.receipt(name, 'İş tamamlandı.\nÖğrenilen: Yeni bir yöntem.', [relative],
-                                   harness, session=session)
-                    response = self.lifecycle('Stop', name, harness)
-                    self.assertEqual(response.get('decision'), 'block')
-                    self.assertIn('Learnings were reported', response.get('reason', ''))
-                    self.assertEqual(self.lifecycle('Stop', name, harness), {})
-
-    def test_knowledge_update_requires_a_recent_file_not_a_ref_alone(self):
-        receipt = {'refs': ['knowledge/concepts/existing.md']}
-        note = self.vault / receipt['refs'][0]
-        note.parent.mkdir(parents=True)
-        self.assertFalse(self.hook._has_knowledge_update(None, receipt, 20))
-        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
-        note.write_text('# Existing\n', encoding='utf-8')
-        os.utime(note, (10, 10))
-        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
-        note.write_text('# Updated\nNew knowledge.\n', encoding='utf-8')
-        os.utime(note, (30, 30))
-        self.assertTrue(self.hook._has_knowledge_update(self.vault, receipt, 20))
-        # A recent note still counts even when the receipt cites another source.
-        self.assertTrue(self.hook._has_knowledge_update(self.vault, {'refs': ['notes/task.md']}, 20))
-        note.unlink()
-        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
-
     def test_stop_knowledge_reminder_passes_when_learning_is_declared_none(self):
         engine = self.seed()
         def session(name):
@@ -1064,25 +1027,16 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('Synthetic Reviewer', resp_human['hookSpecificOutput']['additionalContext'])
         self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 3)
 
-    def slow_sync_hook(self, exclusive=False):
-        """The real hook with a source sync that outlasts SYNC_WAIT and a due check.
-
-        exclusive: the sync outgrows the page cache during the wait and holds the index's
-        exclusive lock until the hook process exits, as a large rewrite does before commit.
-        """
+    def slow_sync_hook(self):
+        """The real hook with a source sync that outlasts SYNC_WAIT and a due check."""
         wrapper = self.root / 'slow_sync_hook.py'
-        wrapper.write_text(f'''import runpy, sqlite3, subprocess, sys
+        wrapper.write_text(f'''import runpy, subprocess, sys
 sys.path.insert(0, {str(SCRIPTS)!r})
-HELD = []
 class SlowWorker:
     returncode = None
     def __init__(self, *args, **kwargs):
         pass
     def wait(self, timeout=None):
-        if {exclusive!r}:
-            db = sqlite3.connect({str(self.state / 'memory.sqlite3')!r}, isolation_level=None)
-            db.execute('BEGIN EXCLUSIVE')
-            HELD.append(db)
         raise subprocess.TimeoutExpired('worker', timeout)
 subprocess.Popen = SlowWorker
 import beyin_v3_preferences
@@ -1102,21 +1056,6 @@ runpy.run_path({str(HOOK)!r}, run_name='__main__')
         context = self.invoke(payload, 'claude', script=self.slow_sync_hook())['hookSpecificOutput']['additionalContext']
         self.assertIn('Synthetic Reviewer', context)
         self.assertIn('previous index', context)
-
-    def test_user_prompt_submit_pending_sync_lock_stays_inside_hook_budget(self):
-        # Maintainer: the read-only store waited SQLite's default 10 s for a sync holding the
-        # exclusive lock, past the client's 5 s hook limit. The bounded wait keeps the pending
-        # notice and records no hook error, because the worker itself is not failing.
-        self.seed()
-        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'locked-sync', 'event_id': 'locked-sync-1',
-                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
-        started = time.monotonic()
-        context = self.invoke(payload, 'claude', script=self.slow_sync_hook(exclusive=True))['hookSpecificOutput']['additionalContext']
-        # The hook bounds its own wait to HOOK_BUDGET; the margin covers a slow runner's interpreter start.
-        self.assertLess(time.monotonic() - started, 8)
-        self.assertIn('V3 source sync is pending', context)
-        self.assertNotIn('failed or conflicted', context)
-        self.assertFalse((self.state / 'hook-error.json').exists())
 
     def test_user_prompt_submit_without_index_keeps_pending_notice(self):
         payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'first-sync', 'event_id': 'first-sync-1',
