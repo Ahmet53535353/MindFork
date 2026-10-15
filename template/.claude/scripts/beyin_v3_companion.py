@@ -6,7 +6,7 @@ import sys
 import unicodedata
 
 NAMES = ('Core.md', 'Soul.md', 'Kurallar.md', 'Last-Session.md', 'Threads.md', 'Journal.md')
-FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .2}
+FLOORS = {'Kurallar.md': .4, 'Last-Session.md': .15, 'Threads.md': .12, 'Core.md': .08}
 # Hygiene limits in characters for the two handoff files that are meant to be rewritten,
 # not appended to (#96). Rules, identity and the Journal accumulate by design and are only
 # measured. 0 turns a limit off; beyin.py preferences changes them.
@@ -290,7 +290,7 @@ def stamp(header):
     return (date[0], clock[0].rjust(5, '0') if clock else '') if date else None
 
 
-def excerpt(name, text):
+def excerpt(name, text, project=None):
     if name == 'Threads.md':
         # Same active headings compaction recognizes (beyin_v3_compact.ACTIVE), so a
         # '## Açık konular' file does not inject its closed threads too (#153).
@@ -327,7 +327,7 @@ def excerpt(name, text):
         if previous:
             return text[:previous.start()]
     if name == 'Kurallar.md':
-        return without_v2_window(text)
+        return filter_scoped_rules(without_v2_window(text), active_project=project)
     return text
 
 
@@ -385,6 +385,67 @@ def without_reasons(text):
 
 RULE = re.compile(r'^(?:[-*+]|\d+[.)])[ \t]')
 FENCE = re.compile(r'[ \t]{0,3}(`{3,}|~{3,})')
+SCOPE_TAG = re.compile(r'(?i)(?:\[(?:scope|kapsam):\s*([^\]]+)\]|\b(?:scope|kapsam):\s*([a-zA-Z0-9_\-]+(?:\s*,\s*[a-zA-Z0-9_\-]+)*))')
+
+
+def scope_key(value):
+    # Match Turkish uppercase and dotted/dotless i consistently with source names.
+    return fold(str(value).strip())
+
+
+def rule_scopes(rule_text):
+    """Set of lower-cased scope names for a rule, or empty set for global."""
+    scopes = set()
+    for match in SCOPE_TAG.finditer(rule_text):
+        raw = match.group(1) or match.group(2)
+        if raw:
+            for item in raw.split(','):
+                cleaned = scope_key(item)
+                if cleaned and cleaned not in ('global', 'genel', 'all', 'herkes'):
+                    scopes.add(cleaned)
+    return scopes
+
+
+def filter_scoped_rules(text, active_project=None):
+    """Keep global rules and rules matching active_project; filter out rules for other projects.
+
+    If active_project is None, all rules are retained for backwards compatibility.
+    """
+    if not active_project or not isinstance(active_project, str):
+        return text
+    active = scope_key(active_project)
+    lines = text.split('\n')
+    filtered_lines = []
+    current_rule = []
+    current_scopes = set()
+    is_rule = False
+
+    def flush():
+        nonlocal current_rule, current_scopes, is_rule
+        if current_rule:
+            if not current_scopes or active in current_scopes:
+                filtered_lines.extend(current_rule)
+            current_rule = []
+            current_scopes = set()
+            is_rule = False
+
+    for line in lines:
+        if RULE.match(line):
+            flush()
+            is_rule = True
+            current_rule.append(line)
+            current_scopes.update(rule_scopes(line))
+        elif is_rule:
+            if line.strip() == '' or line.startswith('#'):
+                flush()
+                filtered_lines.append(line)
+            else:
+                current_rule.append(line)
+                current_scopes.update(rule_scopes(line))
+        else:
+            filtered_lines.append(line)
+    flush()
+    return '\n'.join(filtered_lines)
 
 
 def rule_starts(text):
@@ -460,7 +521,7 @@ def clip(text, budget, tail=False, both=False):
     return marker + text[-keep:] if tail else text[:keep] + marker
 
 
-def context(store, budget, session, harness, query='', receipt='', warning=''):
+def context(store, budget, session, harness, query='', receipt='', warning='', project=None):
     """Budget actual displayed text, not repeated JSON metadata; never cut a record header."""
     target = directory(store.vault_root)
     hygiene_line = ''
@@ -475,7 +536,7 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
         return clip(header + 'Multiple companion directories: read the user-selected identity sources.\n', budget)
     snapshot = store.source_snapshot(NAMES, budget_chars=200000,
                                      source_directory=target.relative_to(store.vault_root).as_posix(),
-                                     text_transform=excerpt)
+                                     text_transform=lambda name, text: excerpt(name, text, project=project))
     records = snapshot['records']
     notice = ''
     if snapshot['missing_sources']:
@@ -484,6 +545,35 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
         notice += 'Changed companion sources excluded; read current files.\n'
     sections = [(f'\n[{r["source"]}]\n', r['text'], Path(r['source']).name)
                 for r in records]
+    if project and isinstance(project, str) and project.strip():
+        proj_clean = project.strip()
+        if not (proj_clean.startswith(('/', '\\')) or '..' in proj_clean.replace('\\', '/').split('/')):
+            for folder in ('projects', 'Projeler', 'projeler'):
+                found = False
+                for p_name in ('Kurallar.md', '.rules.md', 'rules.md'):
+                    lexical = store.vault_root / folder / proj_clean / p_name
+                    from beyin_v3 import _path_redirected
+                    if any(_path_redirected(part) for part in (lexical, *lexical.parents)
+                           if part != store.vault_root and part.is_relative_to(store.vault_root)):
+                        continue
+                    candidate = lexical.resolve()
+                    try:
+                        if candidate.is_relative_to(store.vault_root.resolve()) and candidate.is_file() and not candidate.is_symlink():
+                            p_rel = candidate.relative_to(store.vault_root.resolve()).parent.as_posix()
+                            project_snapshot = store.source_snapshot(
+                                [p_name], source_directory=p_rel, budget_chars=200000,
+                                text_transform=lambda name, text: filter_scoped_rules(
+                                    without_v2_window(text), active_project=project))
+                            for record in project_snapshot['records']:
+                                if record['text'].strip():
+                                    sections.append((f"\n[{record['source']}]\n", record['text'], 'Kurallar.md'))
+                                    found = True
+                            if found:
+                                break
+                    except (ValueError, OSError):
+                        pass
+                if found:
+                    break
     fixed = len(header) + len(notice) + sum(len(label) for label, _, _ in sections)
     if fixed > budget:
         return clip(header + notice + 'Read companion files: ' + ', '.join(r['source'] for r in records), budget)
@@ -537,9 +627,9 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
     retrieval_share = max(0, budget - int(budget * .83) - len(extra))
     if query:
         retrieval_budget = min(remaining, retrieval_share) if companion_clipped else remaining
-        ranked = store.context_for(harness, query, budget_chars=max(0, retrieval_budget - 100))
+        ranked = store.context_for(harness, query, project=project, budget_chars=max(0, retrieval_budget - 100))
     elif not companion_clipped and remaining > 200:
-        ranked = store.snapshot_context(budget_chars=min(1500, max(0, remaining - 100)))
+        ranked = store.snapshot_context(project=project, budget_chars=min(1500, max(0, remaining - 100)))
     else:
         ranked = {'records': []}
     used = {r['source'] for r in records}

@@ -353,7 +353,7 @@ def drain_queue(vault, state):
     except Exception as exc:
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         return {"processed": 0, "failed": len(pending), "pending": len(pending)}
-    atomic(state / "hook-health.json", {"at": time.time(), "sync": result})
+    atomic(state / "hook-health.json", {"at": time.time(), "worker_pid": os.getpid(), "sync": result})
     # A degraded scan is complete but excluded one or more invalid sources. The
     # fresh healthy subset may be injected with an explicit warning. Source
     # conflicts still block acknowledgement because ownership is ambiguous.
@@ -390,11 +390,11 @@ def drain_queue(vault, state):
 def main():
     started = time.monotonic()
     if hasattr(sys.stdin, "reconfigure"):
-        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdin.reconfigure(encoding="utf-8-sig", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
-    parser.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), required=True)
+    parser.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp", "kiro"), required=True)
     parser.add_argument("--event")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--drain-queue", action="store_true")
@@ -422,7 +422,7 @@ def main():
     try:
         # A payload cut at the read limit is not JSON: the handler below answers "{}" and
         # records the error for doctor instead of silently dropping the turn.
-        payload = json.loads(sys.stdin.read(1_000_000) or "{}")
+        payload = json.loads(sys.stdin.read(1_000_000).lstrip("\ufeff").strip() or "{}")
         event = payload.get("hook_event_name", args.event)
         if args.harness == "hermes":
             # Hermes plugin hooks: pre_llm_call (first turn -> SessionStart, later ->
@@ -546,8 +546,8 @@ def main():
                 if sync.get("status") not in ("ok", "succeeded", "synced"):
                     warning += "V3 sync needs attention; consult current sources and doctor.\n"
                 from beyin_v3_projections import is_receipt_view_conflict
-                if any(is_receipt_view_conflict(c) for c in sync.get('conflicts', [])):
-                    warning += "V3 receipt view conflicted; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
+                if any(is_receipt_view_conflict(c) for c in sync.get('conflicts', []) + sync.get('warnings', [])):
+                    warning += "V3 receipt view preserved; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
                 if sync.get('potential_missing_receipts'):
@@ -561,11 +561,11 @@ def main():
             if event == 'SessionStart' or relevant(query):
                 # The opening may carry its own machine-local budget (#140); never a vault preference.
                 limit = client_budget(args.harness, opening_budget(state, settings['context_chars']))
-                text = companion_context(store, limit, session, args.harness, query, receipt, warning)
+                text = companion_context(store, limit, session, args.harness, query, receipt, warning, project=project)
                 smaller = client_rebudget(args.harness, limit, notice + text)
                 if smaller is not None:
                     limit = smaller
-                    text = companion_context(store, limit, session, args.harness, query, receipt, warning)
+                    text = companion_context(store, limit, session, args.harness, query, receipt, warning, project=project)
             else:
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
@@ -605,7 +605,8 @@ def main():
                 except (ValueError, OSError):
                     pass
                 if not delivered.get("records"):
-                    print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
+                    diagnostic = fit_client(args.harness, (notice + warning)[:limit])
+                    print(json.dumps(output_context(args.harness, event, diagnostic)) if diagnostic else "{}")
                     return
             output = output_context(args.harness, event, fit_client(args.harness, (notice + text)[:limit]))
             print(json.dumps(output))

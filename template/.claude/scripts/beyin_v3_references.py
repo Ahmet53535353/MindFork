@@ -31,7 +31,7 @@ def instruction_files(vault):
             files.append(folder / 'Kurallar.md')
     except Exception:
         pass  # a missing companion never hides the other files
-    for root in ('.agents/skills', '.claude/skills'):
+    for root in ('.agents/skills', '.claude/skills', '.kiro/skills'):
         if (vault / root).is_dir():
             files += sorted((vault / root).rglob('*.md'))
     unique = {}
@@ -42,12 +42,16 @@ def instruction_files(vault):
 
 
 def _mirror(vault, path):
-    """A .claude/skills file byte-identical to its .agents/skills twin is reported once, under .agents."""
-    try:
-        twin = vault / '.agents/skills' / path.relative_to(vault / '.claude/skills')
-        return twin.is_file() and twin.read_bytes() == path.read_bytes()
-    except (ValueError, OSError):
-        return False
+    """Identical client mirrors are reported once, under .agents."""
+    for root in ('.claude/skills', '.kiro/skills'):
+        try:
+            twin = vault / '.agents/skills' / path.relative_to(vault / root)
+            return twin.is_file() and twin.read_bytes() == path.read_bytes()
+        except ValueError:
+            continue
+        except OSError:
+            return False
+    return False
 
 
 def _key(text):

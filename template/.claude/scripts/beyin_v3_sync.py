@@ -22,7 +22,10 @@ from beyin_v3 import (HARNESSES, MAX_RECEIPT_LINKS, REJECTED_AT, RETIRED_STATUSE
                       _path_redirected, _plain_link, _rejected_inference, _status_word, rejected_dependents, resolve_supersedes)
 from beyin_v3_index import applied_keys, dir_key, exclusions as index_exclusions, prune as prune_excluded
 from beyin_v3_hygiene import sensitive_excluded, sensitive_source
-from beyin_v3_projections import project_receipts
+from beyin_v3_projections import (is_receipt_view_source, is_receipt_view_conflict, project_receipts,
+                                  quarantine_receipt_view_history, archived_receipt_view_aliases,
+                                  _receipt_view_contents,
+                                  RECEIPT_VIEW_SOURCES_ROW)
 from beyin_v3_preferences import read as read_preferences
 from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
 
@@ -188,7 +191,7 @@ def _mapping_value(sub_key, value):
 def parse(text):
     """JSON frontmatter or deliberately bounded flat scalar/list YAML with single-level mapping."""
     lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != '---':
+    if not lines or lines[0].lstrip('\ufeff').strip() != '---':
         return {}, text
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == '---'), None)
     if end is None:
@@ -282,14 +285,14 @@ TASK_STATUSES = ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled')
 
 
 def _check_task_dates(fields):
-    """Write-path check for due_at/updated_at given to task-create or task-update.
+    """Write-path check for due_at/updated_at/created_at given to task-create or task-update.
 
     Sync does not apply it, so task files written before this check, or edited by
     hand, stay indexed. The explicit grammar (the one rejected_at uses) keeps
     acceptance the same on every Python version; a null due_at clears the date.
     """
-    for field in ('due_at', 'updated_at'):
-        if field not in fields or (field == 'due_at' and fields[field] is None):
+    for field in ('due_at', 'updated_at', 'created_at'):
+        if field not in fields or ((field == 'due_at' or field == 'created_at') and fields[field] is None):
             continue
         value = fields[field]
         try:
@@ -320,8 +323,12 @@ def _has_conflict_markers(text):
 # File-sync services keep both sides of a clash as two files (#205). Some name the copy with
 # their own stamp; nothing a person types looks like it, so such a copy is left out of the
 # index with a warning, and never moved: the user decides which side is right.
-_STAMPED_COPY = re.compile(r'.*\((?:[^()]*\bconflicted copy\b[^()]*|[^()]*\bcase conflict\b[^()]*)\)\.md'
-                           r'|.*\.sync-conflict-\d{8}-\d{6}-[0-9A-Za-z]+\.md', re.IGNORECASE)
+_STAMPED_COPY = re.compile(
+    r'.*\((?:[^()]*\bconflicted copy\b[^()]*|[^()]*\bcase conflict\b[^()]*'
+    r'|[^()]*\bçakışan kopya\b[^()]*|[^()]*\bcakisan kopya\b[^()]*'
+    r'|[^()]*\btekrarlanan kopya\b[^()]*|[^()]*\bçakışma kopyası\b[^()]*|[^()]*\bcakisma kopyasi\b[^()]*)\)\.md'
+    r'|.*\.sync-conflict-\d{8}(?:-\d{6})?-[0-9A-Za-z]+\.md'
+    r'|.*_conflict-\d{8}-\d{6}\.md', re.IGNORECASE)
 # iCloud ("Note 2.md") and Google Drive or Windows ("Note (1).md") number the copy instead. A
 # person names notes like that too ("Sezon 2.md"), so such a file is indexed as usual and only
 # listed, with its sibling and whether the two hold the same bytes.
@@ -564,6 +571,18 @@ class SyncEngine:
             record_redactions(self.state, count)
 
     @staticmethod
+    def _write_diagnostics(output, result):
+        if result.get('status') in ('degraded', 'conflict'):
+            warnings = result.get('warnings', [])
+            conflicts = result.get('conflicts', [])
+            output['source_sync'] = {'status': result['status'], 'warnings': warnings[:20],
+                                     'warning_count': len(warnings), 'truncated': len(warnings) > 20}
+            if conflicts:
+                output['source_sync'].update(conflicts=conflicts[:20], conflict_count=len(conflicts),
+                                             truncated=len(warnings) > 20 or len(conflicts) > 20)
+        return output
+
+    @staticmethod
     def _source_issues(result, source, record_id=None):
         return [item for key in ('warnings', 'conflicts') for item in result.get(key, [])
                 if isinstance(item, dict) and (item.get('source') == source or
@@ -747,11 +766,23 @@ class SyncEngine:
         dead = resolve_supersedes(records)[1]
         return {'dead_count': len(dead), 'dead': dead[:20], 'truncated': len(dead) > 20}
 
-    def _scan(self, cache=None):
+    def _scan(self, cache=None, receipt_views=(), alias_identities=()):
         """Read every source. With sync's signature cache, an unchanged indexed source is not read
         and its value in the returned records is None: sync keeps that record as indexed."""
         records, warnings, conflicts = {}, [], []
         duplicate = set()
+        # Provenance is independent of editable frontmatter. Prove paths before
+        # taking their identities so aliases on case-insensitive volumes are also
+        # excluded, without treating distinct case-sensitive files as the same note.
+        view_paths = self.receipt_view_sources = set(receipt_views)
+        view_identities = set(alias_identities)
+        for relative in view_paths:
+            try:
+                _, resolved = self._scan_path(relative)
+                view_identities.add(self._source_identity(resolved))
+            except (ValueError, OSError):
+                # The walk/projection still reports an unsafe or unreadable path.
+                pass
         self.copy_candidates = []
         # Read once per sync, not per directory: the config cannot change mid-walk.
         excluded, self.index_exclusions = index_exclusions(self.state, self.root)
@@ -781,6 +812,13 @@ class SyncEngine:
                 try:
                     # Path proof first: an outside-vault or symlinked source keeps its rejection reason.
                     path, resolved = self._scan_path(relative)
+                    if (relative in view_paths or
+                            (view_identities and self._source_identity(resolved) in view_identities)):
+                        view_paths.add(relative)  # retain proven aliases for historical cleanup
+                        # Before cache lookup: prior versions may have indexed an
+                        # edited view. Omitting it also retires its owned record and
+                        # signature through sync's normal stale-source cleanup.
+                        continue
                     if cache is not None:
                         st = os.stat(resolved)
                         id = cache.lookup(relative, st)
@@ -951,14 +989,62 @@ class SyncEngine:
         # Serialize recovery, source scan and projection across local processes.
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            state_regression_warnings = []
+            now_sec = int(time.time())
+            stored_sync = db.execute("SELECT value FROM metadata WHERE key='last_sync_time'").fetchone()
+            if stored_sync and stored_sync[0]:
+                try:
+                    prev_sync = int(stored_sync[0])
+                    if prev_sync > now_sec + 180:
+                        state_regression_warnings.append({
+                            'source': 'state',
+                            'reason': 'state regression detected (stored sync timestamp is in the future); '
+                                      'run sync --full to re-verify state consistency'
+                        })
+                except (ValueError, TypeError):
+                    pass
+            db.execute("INSERT OR REPLACE INTO metadata VALUES ('last_sync_time', ?)", (str(now_sec),))
             completed, recovery_conflicts = self._recover(db)
             receipt_warnings, receipt_conflicts = self._scan_receipts(db)
+            desired_views = _receipt_view_contents(self, db, receipt_warnings)
+            view_paths = set(desired_views)
+            # First sync has no tracking table. Keep edited stale views excluded
+            # even when no receipt currently produces them; unexpected tracking
+            # paths are source conflicts, never authority to hide ordinary notes.
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='receipt_views'").fetchone():
+                view_paths.update(row[0] for row in db.execute('SELECT path FROM receipt_views')
+                                  if is_receipt_view_source(row[0]))
+            canonical_view_paths = set(view_paths)
+            # A hard link to an edited view keeps the old inode when recovery
+            # atomically replaces the canonical path. Retain only identities
+            # previously proved while that canonical view still existed.
+            db.execute('CREATE TABLE IF NOT EXISTS receipt_view_aliases('
+                       'source TEXT PRIMARY KEY, identity TEXT NOT NULL)')
+            previous_aliases = dict(db.execute('SELECT source,identity FROM receipt_view_aliases'))
+            alias_identities = set()
+            for source, encoded in previous_aliases.items():
+                try:
+                    evidence = json.loads(encoded)
+                    if not isinstance(evidence, dict):
+                        # Legacy inode-only rows are not proof after inode reuse;
+                        # live canonical paths and validated archives still apply.
+                        continue
+                    identity = evidence.get('identity')
+                    _, resolved = self._scan_path(source)
+                    if (_json(self._source_identity(resolved)) == _json(identity) and
+                            _hash(resolved.read_bytes()) == evidence.get('sha256')):
+                        alias_identities.add(tuple(identity) if isinstance(identity, list) else identity)
+                        view_paths.add(source)
+                except (ValueError, OSError, TypeError):
+                    continue
+            view_paths.update(archived_receipt_view_aliases(self, receipt_warnings))
             old_sources = dict(db.execute('SELECT id, source FROM markdown_sources ORDER BY id'))
             # Match the old covering-ID scan's set construction and deletion event order.
             old_owned = {id for id in old_sources}
             old_payloads = dict(db.execute('SELECT id, payload FROM records'))
             cache = _SignatureCache(db, old_sources, old_payloads, full=full)
-            records, warnings, conflicts = self._scan(cache)
+            records, warnings, conflicts = self._scan(cache, view_paths, alias_identities)
+            warnings.extend(state_regression_warnings)
             warnings.extend(receipt_warnings)
             conflicts.extend(recovery_conflicts + receipt_conflicts)
             deleted = 0
@@ -994,12 +1080,35 @@ class SyncEngine:
                     db.execute('INSERT OR REPLACE INTO markdown_sources VALUES (?,?)', (id, record['source']))
                 indexed[id] = payload
             cache.save(indexed)
+            # Rebind surviving aliases after a rename and retire a path once
+            # it points at a genuinely different file. The canonical path is
+            # governed by desired/tracked projection ownership instead.
+            db.execute('DELETE FROM receipt_view_aliases')
+            for source in sorted(self.receipt_view_sources - canonical_view_paths):
+                try:
+                    _, resolved = self._scan_path(source)
+                    db.execute('INSERT INTO receipt_view_aliases VALUES (?,?)',
+                               (source, _json({'identity': self._source_identity(resolved),
+                                               'sha256': _hash(resolved.read_bytes())})))
+                except (ValueError, OSError):
+                    continue
+            # Include the deletion event just written, and already-deleted snapshots
+            # at these proven paths. Audit payloads remain immutable.
+            quarantine_receipt_view_history(db, self.receipt_view_sources)
+            db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                       (RECEIPT_VIEW_SOURCES_ROW, _json(sorted(self.receipt_view_sources))))
             recovered_views = [] if recover_views else None
-            conflicts.extend(project_receipts(self, db, warnings, recover_views=recover_views, recovered=recovered_views))
+            view_issues = project_receipts(self, db, warnings, recover_views=recover_views,
+                                          recovered=recovered_views, desired=desired_views)
+            for issue in view_issues:
+                if is_receipt_view_conflict(issue):
+                    warnings.append(dict(issue, kind='receipt_view'))
+                else:
+                    conflicts.append(issue)
             # A supersedes value that retires nothing is reported, not a degraded scan: no
             # source was excluded and the hook must not warn on every turn about it.
             dead_supersedes = resolve_supersedes([json.loads(row[0]) for row in db.execute('SELECT payload FROM records ORDER BY id')])[1]
-            if conflicts:
+            if conflicts or view_issues:
                 # A receipt hidden by a directory mtime that did not move surfaces as a view
                 # conflict; the next sync then rescans receipts/ in full.
                 db.execute("DELETE FROM metadata WHERE key='receipt_scan_signature'")
@@ -1104,7 +1213,7 @@ class SyncEngine:
         if result_record['revision'] != expected_revision + 1 or result_record['source_sha256'] != _hash(intended):
             raise RevisionConflict('task source changed before projection readback')
         self._record_redactions(redacted)
-        return dict(result_record, redacted=redacted, secrets_redacted=redacted)
+        return self._write_diagnostics(dict(result_record, redacted=redacted, secrets_redacted=redacted), result)
 
     def note_create(self, source, text, metadata=None):
         if not isinstance(text, str) or not text.strip() or (metadata is not None and not isinstance(metadata, dict)):
@@ -1175,10 +1284,15 @@ class SyncEngine:
         if text.lstrip().startswith('---'):
             raise ValueError('text must be body only; put frontmatter fields in metadata')
         self._refuse_excluded(source)
-        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'completion_contract', 'completion_criterion', 'evidence_refs'}
+        allowed = {'id', 'title', 'kind', 'revision', 'status', 'owner', 'project', 'visibility', 'facts', 'next_action', 'priority', 'due_at', 'updated_at', 'created_at', 'completion_contract', 'completion_criterion', 'evidence_refs'}
         if set(metadata) - allowed:
             raise ValueError('unsupported task metadata')
         metadata = dict(metadata)
+        now_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        if 'updated_at' not in metadata:
+            metadata['updated_at'] = now_date
+        if 'created_at' not in metadata:
+            metadata['created_at'] = metadata['updated_at']
         text, redacted = self._protect(text)
         if not isinstance(metadata.get('id'), str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}', metadata['id']):
             raise ValueError('stable task id required')
@@ -1193,7 +1307,7 @@ class SyncEngine:
             raise ValueError('task kind required')
         if not isinstance(metadata.get('facts', {}), dict) or metadata.get('visibility', 'internal') not in ('internal', 'public', 'private'):
             raise ValueError('invalid task facts or visibility')
-        for field in ('title', 'project', 'next_action', 'updated_at'):
+        for field in ('title', 'project', 'next_action', 'updated_at', 'created_at'):
             if field in metadata and not isinstance(metadata[field], str):
                 raise ValueError('task metadata text fields must be strings')
         metadata, meta_redacted = self._protect_metadata(metadata)
@@ -1303,10 +1417,6 @@ class SyncEngine:
             raise ReceiptConflict('receipt source changed before readback')
         self.store.submit_receipt(event_id, summary, refs, event['harness'], links=links)
         self._record_redactions(redacted)
-        from beyin_v3_projections import is_receipt_view_conflict
-        view_conflicts = [item for item in result.get('conflicts', []) if is_receipt_view_conflict(item)]
         receipt_res = {'id': event_id, 'event_id': event_id, 'status': 'succeeded', 'source': source,
                        'redacted': redacted, 'secrets_redacted': redacted}
-        if view_conflicts:
-            receipt_res['view_conflicts'] = view_conflicts
-        return receipt_res
+        return self._write_diagnostics(receipt_res, result)

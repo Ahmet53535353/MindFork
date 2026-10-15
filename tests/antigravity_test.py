@@ -211,6 +211,15 @@ class AntigravityTest(unittest.TestCase):
             self.assertNotIn("--dangerously-skip-permissions", args)
             self.assertIn("--sandbox", args)
 
+    def test_read_payload_handles_utf8_bom(self) -> None:
+        stream = io.StringIO("\ufeff" + json.dumps({"action": "pre-invocation", "conversationId": "c1"}))
+        payload = hooks._read_payload(stream)
+        self.assertEqual(payload, {"action": "pre-invocation", "conversationId": "c1"})
+
+        bytes_stream = io.BytesIO(b"\xef\xbb\xbf" + json.dumps({"action": "stop"}).encode("utf-8"))
+        payload2 = hooks._read_payload(bytes_stream)
+        self.assertEqual(payload2, {"action": "stop"})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

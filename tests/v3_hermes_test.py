@@ -178,14 +178,17 @@ class HermesHarnessTest(unittest.TestCase):
         with patch.object(self.module, 'run_hook', return_value='') as run:
             hooks['pre_llm_call'](session_id='tg-1', turn_id='1', user_message='selam', is_first_turn=True, platform='telegram')
             hooks['on_session_finalize'](session_id='tg-1', platform='gateway')
+            hooks['pre_llm_call'](session_id='a2a-1', turn_id='1', user_message='task', is_first_turn=True, platform='a2a')
+            hooks['on_session_finalize'](session_id='a2a-1', platform='gateway')
             hooks['pre_llm_call'](session_id='cli-1', turn_id='1', user_message='selam', is_first_turn=True, platform='cli')
             hooks['on_session_finalize'](session_id='cli-1', platform='gateway')
             hooks['on_session_finalize'](session_id='never-seen')
         events = [(c.args[2]['session_id'], c.args[2]['hook_event_name']) for c in run.call_args_list]
         self.assertNotIn(('tg-1', 'SessionEnd'), events, 'Telegram session must not be receipt-tracked')
+        self.assertNotIn(('a2a-1', 'SessionEnd'), events, 'A2A session must not be receipt-tracked')
         self.assertIn(('cli-1', 'SessionEnd'), events, 'Interactive session keeps receipt tracking')
         self.assertIn(('never-seen', 'SessionEnd'), events, 'Unknown platform defaults to tracking')
-        self.assertTrue(self.module.UNATTENDED_PLATFORMS >= {'telegram', 'cron'})
+        self.assertTrue(self.module.UNATTENDED_PLATFORMS >= {'telegram', 'cron', 'a2a'})
 
     def test_receipt_reminder_every_nth_user_turn(self):
         hooks = self.module.make_hooks(self.vault, self.state)
@@ -199,6 +202,87 @@ class HermesHarnessTest(unittest.TestCase):
         with patch.object(self.module, 'run_hook', return_value=''):
             result = hooks['pre_llm_call'](session_id='long', turn_id='x', user_message='devam', is_first_turn=False)
         self.assertIsNone(result, 'No adapter context and no reminder due means no injection')
+
+
+    def test_unattended_platforms_configuration_and_override(self):
+        # 1. Default: slack is unattended
+        default_unattended = self.module.resolve_unattended_platforms(self.vault, self.state)
+        self.assertIn('slack', default_unattended)
+        self.assertIn('a2a', default_unattended)
+
+        # 2. Mark slack as attended (e.g. personal assistant usage, #350)
+        saved = self.module.save_platforms(self.state, attended=['slack'])
+        self.assertEqual(saved['attended'], ['slack'])
+        effective = self.module.resolve_unattended_platforms(self.vault, self.state)
+        self.assertNotIn('slack', effective)
+
+        hooks = self.module.make_hooks(self.vault, self.state)
+        with patch.object(self.module, 'run_hook', return_value='') as run:
+            hooks['pre_llm_call'](session_id='slack-1', turn_id='1', user_message='selam', is_first_turn=True, platform='slack')
+            hooks['on_session_finalize'](session_id='slack-1', platform='gateway')
+        events = [(c.args[2]['session_id'], c.args[2]['hook_event_name']) for c in run.call_args_list]
+        self.assertIn(('slack-1', 'SessionEnd'), events, 'Attended slack session must be receipt-tracked')
+
+        # Receipt reminder on turn 15 for attended slack
+        with patch.object(self.module, 'run_hook', return_value='ctx'):
+            for turn in range(1, self.module.REMINDER_EVERY + 1):
+                turn_res = hooks['pre_llm_call'](session_id='slack-long', turn_id=str(turn),
+                                                user_message='mesaj', is_first_turn=(turn == 1), platform='slack')
+            self.assertIn('[Hafıza]', turn_res['context'])
+
+        # 3. Add custom bot as unattended
+        self.module.save_platforms(self.state, unattended=['custom-bot'])
+        effective = self.module.resolve_unattended_platforms(self.vault, self.state)
+        self.assertIn('custom-bot', effective)
+        self.assertNotIn('slack', effective)
+
+        with patch.object(self.module, 'run_hook', return_value='') as run:
+            hooks['pre_llm_call'](session_id='bot-1', turn_id='1', user_message='is', is_first_turn=True, platform='custom-bot')
+            hooks['on_session_finalize'](session_id='bot-1', platform='gateway')
+        events = [(c.args[2]['session_id'], c.args[2]['hook_event_name']) for c in run.call_args_list]
+        self.assertNotIn(('bot-1', 'SessionEnd'), events, 'Custom unattended bot must not be receipt-tracked')
+
+        # 4. Corrupt state file fails open safely
+        (self.state / 'hermes-platforms.json').write_text('{broken json', encoding='utf-8')
+        conf, valid = self.module.read_platforms(self.state, self.vault)
+        self.assertFalse(valid)
+        self.assertEqual(conf, {'attended': [], 'unattended': []})
+        fallback = self.module.resolve_unattended_platforms(self.vault, self.state)
+        self.assertEqual(fallback, self.module.DEFAULT_UNATTENDED_PLATFORMS)
+
+        # 5. Reset platforms via CLI
+        cli_res = self.cli('preferences', '--hermes-reset-platforms')
+        self.assertEqual(cli_res.returncode, 0, cli_res.stderr)
+        data_reset = json.loads(cli_res.stdout)
+        self.assertEqual(data_reset['status'], 'saved')
+        self.assertEqual(data_reset['hermes_platforms']['attended'], [])
+        self.assertEqual(data_reset['hermes_platforms']['unattended'], [])
+
+        # 6. Set attended platform via CLI
+        cli_set = self.cli('preferences', '--hermes-attended-platform', 'slack')
+        self.assertEqual(cli_set.returncode, 0, cli_set.stderr)
+        data_set = json.loads(cli_set.stdout)
+        self.assertEqual(data_set['status'], 'saved')
+        self.assertEqual(data_set['hermes_platforms']['attended'], ['slack'])
+        self.assertNotIn('slack', data_set['hermes_platforms']['effective_unattended'])
+
+    def test_platform_settings_are_local_and_invalid_shape_is_reported(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.vault / '.beyin-hermes.json').write_text(json.dumps({'attended': ['slack']}))
+        self.assertIn('slack', self.module.resolve_unattended_platforms(self.vault, self.state))
+        path = self.state / 'hermes-platforms.json'
+        path.write_text(json.dumps({'attended': 'slack'}))
+        self.assertFalse(self.module.read_platforms(self.state)[1])
+        self.module.save_platforms(self.state, attended=['slack'])
+        self.module.save_platforms(self.state, reset=True)
+        self.assertIn('slack', self.module.resolve_unattended_platforms(self.vault, self.state))
+
+    def test_platform_reset_reports_write_failure(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        self.module.save_platforms(self.state, attended=['slack'])
+        with patch.object(Path, 'unlink', side_effect=PermissionError('locked')):
+            with self.assertRaises(PermissionError):
+                self.module.save_platforms(self.state, reset=True)
 
 
 if __name__ == '__main__':

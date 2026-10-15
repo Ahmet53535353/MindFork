@@ -9,7 +9,8 @@ Examples: generate --profile day1 --out /tmp/fixture --seed 233
 Timing excludes fixture creation, restoration and scenario preparation. A divergent
 sample covers THREE syncs; lock samples measure acquisition wait inside process two.
 Hook timing includes the installed shell command and its real detached worker. The
-worker is drained before restoration, outside the timed interval. Profiles use only
+worker is drained before restoration, outside the timed interval. On Windows,
+its process exit is also awaited so database handles cannot race temporary cleanup. Profiles use only
 in-process equivalents and are deliberately separate from wall-clock measurements.
 """
 from __future__ import annotations
@@ -320,6 +321,34 @@ def lock_worker(vault, state, coordination, role):
         runpy.run_path(str(vault / '.claude/scripts/beyin_v3_cli.py'), run_name='__main__')
 
 
+def wait_windows_worker(pid, timeout=30, kernel=None):
+    """Wait for the actual worker exit, not its earlier durable queue acknowledgement."""
+    import ctypes
+    from ctypes import wintypes
+    if kernel is None:
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # ERROR_INVALID_PARAMETER: the PID has already exited
+            return
+        raise OSError(error, 'Cannot open benchmark worker process')
+    try:
+        status = kernel.WaitForSingleObject(handle, int(timeout * 1000))
+        if status == 258:  # WAIT_TIMEOUT
+            raise TimeoutError('Benchmark hook worker did not exit after acknowledgement')
+        if status != 0:  # WAIT_OBJECT_0
+            raise OSError('Cannot wait for benchmark worker process')
+    finally:
+        kernel.CloseHandle(handle)
+
+
 class Benchmark:
     def __init__(self, root, profile, seed, scale):
         self.root = Path(root)
@@ -571,6 +600,8 @@ class Benchmark:
                 assert not list((self.state / 'hook-queue').glob('*.json'))
                 health = json.loads((self.state / 'hook-health.json').read_text(encoding='utf-8'))
                 details['worker_sync_status'] = health['sync']['status']
+                if os.name == 'nt':
+                    wait_windows_worker(health['worker_pid'])
             return elapsed, details
         return (time.perf_counter() - started) * 1000, details
 

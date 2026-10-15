@@ -90,8 +90,8 @@ def sync_skills(vault, state, mode=None):
     mode=mode or ('copy' if os.name=='nt' else 'symlink')
     if mode not in ('copy','symlink'):raise ValueError('invalid skill mode')
     state.mkdir(parents=True,exist_ok=True)
-    left=vault/'.agents/skills';right=vault/'.claude/skills'
-    for p in (left,right):
+    roots=(vault/'.agents/skills',vault/'.claude/skills',vault/'.kiro/skills')
+    for p in roots:
         if not p.resolve().is_relative_to(vault):raise ValueError('skill root escapes vault')
         p.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(state/'skills.sqlite3',timeout=10)
@@ -100,50 +100,51 @@ def sync_skills(vault, state, mode=None):
         db.execute('CREATE TABLE IF NOT EXISTS skills(name TEXT PRIMARY KEY, hash TEXT NOT NULL)')
         db.execute('BEGIN IMMEDIATE')
         # Under the lock, so two syncs never race for the same parked folder.
-        relocated=[name for root in (right,left) for name in _relocate_parked(root)]
+        relocated=[name for root in roots for name in _relocate_parked(root)]
         if relocated:result['relocated_backups']=relocated
-        names=sorted({p.name for root in (left,right) for p in root.iterdir() if not p.name.startswith('.')})
+        names=sorted({p.name for root in roots for p in root.iterdir() if not p.name.startswith('.')})
         for name in names:
-            a=left/name;b=right/name
+            paths=[root/name for root in roots]
             try:
-                a_present=a.exists() or a.is_symlink();b_present=b.exists() or b.is_symlink()
-                a_external=a_present and not a.resolve().is_relative_to(vault)
-                b_external=b_present and not b.resolve().is_relative_to(vault)
-                if a_external or b_external:
+                present=[p.exists() or p.is_symlink() for p in paths]
+                external=[exists and not p.resolve().is_relative_to(vault) for p,exists in zip(paths,present)]
+                if any(external):
                     # External project skills are intentionally outside this
                     # vault's ownership. Never traverse, copy, or mirror them.
-                    # Matching dual links and one-sided links remain usable by
+                    # Matching links and one-sided links remain usable by
                     # their host without wedging the V3 source queue.
-                    if ((a_external and b_external and a.resolve() == b.resolve()) or
-                            (a_external and not b_present) or (b_external and not a_present)):
+                    if (not any(exists and not outside for exists,outside in zip(present,external)) and
+                            len({p.resolve() for p,outside in zip(paths,external) if outside}) == 1):
                         result['unmanaged'].append(name)
                         continue
                     raise ValueError('external skill collides with managed skill')
                 old=db.execute('SELECT hash FROM skills WHERE name=?',(name,)).fetchone()
                 previous=old[0] if old else None
-                if not previous and not any((p.is_dir() and (p/'SKILL.md').is_file()) for p in (a,b)):
+                if not previous and not any((p.is_dir() and (p/'SKILL.md').is_file()) for p in paths):
                     # Licenses, shared helper folders and caches live beside skills.
                     # Never owned, so never a conflict; a skill that LOST its
                     # SKILL.md still has a row and stays a conflict below.
                     result['unmanaged'].append(name)
                     continue
-                ah=_tree(a,vault) if a.exists() or a.is_symlink() else None
-                bh=_tree(b,vault) if b.exists() or b.is_symlink() else None
-                if ah and bh and a.resolve()==b.resolve():h=ah
-                elif ah==bh:h=ah
-                elif not ah or not bh:
-                    if previous:raise ValueError('one-sided removal requires review')
-                    source,target=(a,b) if ah else (b,a)
-                    if target==b and mode=='symlink':
+                hashes=[_tree(p,vault) if exists else None for p,exists in zip(paths,present)]
+                if previous and any(h is None for h in hashes[:2]):
+                    raise ValueError('one-sided removal requires review')
+                # Kiro is a derived mirror. Recreate a missing copy from a reviewed
+                # shared source, including after rollback from a Kiro-aware release.
+                changed={h for h in hashes if h and h!=previous}
+                if len(changed)>1:
+                    raise ValueError('multiple skill versions changed')
+                h=next(iter(changed), previous)
+                if not h:
+                    raise ValueError('skill source missing')
+                source=next(p for p,value in zip(paths,hashes) if value==h)
+                for target in paths:
+                    current=_tree(target,vault) if target.exists() or target.is_symlink() else None
+                    if current==h:continue
+                    if current is None and mode=='symlink' and target!=paths[0]:
                         try:target.symlink_to(os.path.relpath(source,target.parent),target_is_directory=True)
                         except OSError:_copy(source,target,None,vault)
-                    else:_copy(source,target,None,vault)
-                    h=ah or bh
-                elif previous==ah and previous!=bh:
-                    _copy(b,a,ah,vault);h=bh
-                elif previous==bh and previous!=ah:
-                    _copy(a,b,bh,vault);h=ah
-                else:raise ValueError('both skill versions changed')
+                    else:_copy(source,target,current,vault)
                 if h:
                     db.execute('INSERT OR REPLACE INTO skills VALUES (?,?)',(name,h));result['synced'].append(name)
             except (ValueError,OSError):result['conflicts'].append(name)
@@ -162,8 +163,9 @@ def import_skill(vault, state, source, name=None, mode=None):
     target=vault/'.agents/skills'/name
     if not target.parent.resolve().is_relative_to(vault):raise ValueError('skill root escapes vault')
     if target.exists() or target.is_symlink():raise ValueError('skill name already exists')
-    other=vault/'.claude/skills'/name
-    if other.exists() or other.is_symlink():raise ValueError('skill name already exists in Claude')
+    for root in ('.claude', '.kiro'):
+        other=vault/root/'skills'/name
+        if other.exists() or other.is_symlink():raise ValueError('skill name already exists in '+root)
     target.parent.mkdir(parents=True,exist_ok=True)
     _copy(source,target,None,vault,source_root=source)
     return sync_skills(vault,state,mode=mode)

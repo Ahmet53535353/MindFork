@@ -20,7 +20,7 @@ import urllib.parse
 
 
 # Every supported client. "manual" is accepted for receipts only.
-HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode", "omp")
+HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode", "omp", "kiro")
 
 # rejected_at grammar: a date, optionally with an RFC 3339-style time.
 REJECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})?)?", re.ASCII)
@@ -508,6 +508,59 @@ def _tokens(text):
 STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel soyle getir bul yok say ignore disregard no")
 
 
+def _strict_terms(terms):
+    """Filter out non-topical terms in strict mode (#358).
+
+    Drops single-character tokens and numeric-only tokens shorter than 3 digits
+    (e.g. '1', '2', '42'). Preserves years ('2026'), 3+ digit numbers ('200'),
+    and alphanumeric identifiers ('722b4dd').
+    """
+    return {t for t in terms if len(t) >= 2 and not (t.isdigit() and len(t) < 3)}
+
+
+def _name_candidates(record):
+    """Candidate names for title-salience matching (#354): title, stem, stripped stem, aliases."""
+    candidates = []
+    title = str(record.get("title", "")).strip()
+    if title:
+        candidates.append(title[:160])
+    source = str(record.get("source", "")).strip()
+    if source:
+        stem = Path(source).stem.replace("-", " ").replace("_", " ").strip()
+        if stem:
+            candidates.append(stem[:160])
+            stripped = re.sub(r"^[0-9]+[ \t\-_]+", "", stem).strip()
+            if stripped and stripped != stem:
+                candidates.append(stripped[:160])
+    aliases = record.get("aliases", [])
+    if isinstance(aliases, list):
+        for a in aliases[:32]:
+            if isinstance(a, str) and a.strip():
+                candidates.append(a.strip()[:160])
+    return candidates
+
+
+NAME_GENERIC_TERMS = _tokens("durum proje projeler not notlar karar kararlar arsiv sablon genel ozet guncel")
+
+
+def _name_match_score(record, terms):
+    """Salience signal when query terms contain all meaningful words of a note's name (#354).
+
+    Returns the number of matching name terms (higher = more specific title match),
+    or 0 if no candidate name is fully covered by the query terms.
+    """
+    if not terms:
+        return 0
+    best_score = 0
+    for cand in _name_candidates(record):
+        cand_tokens = _tokens(cand) - STOPWORDS
+        meaningful = {t for t in cand_tokens if len(t) >= 2}
+        if meaningful and meaningful - NAME_GENERIC_TERMS and meaningful.issubset(terms):
+            if len(meaningful) > best_score:
+                best_score = len(meaningful)
+    return best_score
+
+
 def _path_redirected(path):
     """Symlinks and Windows reparse points require a fresh realpath check."""
     try:
@@ -748,9 +801,16 @@ class MemoryStore:
         with self._connect() as db:
             current = db.execute("SELECT payload FROM records WHERE id=?", (record_id,)).fetchone()
             rows = db.execute("SELECT sequence,event_type,record_id,revision,record FROM events WHERE record_id=? ORDER BY sequence", (record_id,)).fetchall()
+            quarantined = {}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='receipt_view_history'").fetchone():
+                quarantined = dict(db.execute("SELECT source,through_sequence FROM receipt_view_history"))
         if not rows or (not current and rows[-1][1] != "delete"):
             return []
         boundary = json.loads(current[0] if current else rows[-1][4])
+        # A formerly indexed receipt view cannot authorize its own leaked audit
+        # trail. Later clean notes at a retired path have sequences past the cutoff.
+        if rows[-1][0] <= quarantined.get(boundary.get("source"), 0):
+            return []
         if (boundary.get("visibility") not in allowed or boundary.get("trust") == "untrusted" or
                 boundary.get("trusted") is False or boundary.get("status") == "untrusted" or
                 boundary.get("kind") == "untrusted"):
@@ -765,6 +825,7 @@ class MemoryStore:
                 return []
         return [{"sequence": row[0], "event_type": row[1], "record_id": row[2], "revision": row[3], "record": record}
                 for row in rows if (record := json.loads(row[4])).get("visibility") in allowed and
+                row[0] > quarantined.get(record.get("source"), 0) and
                 record.get("trust") != "untrusted" and record.get("trusted") is not False and
                 record.get("status") != "untrusted" and record.get("kind") != "untrusted"]
 
@@ -810,9 +871,9 @@ class MemoryStore:
         return self._retrieve(query, project, audience, statuses, limit, 0,
                               strict=strict, candidate_only=True)
 
-    def snapshot_context(self, audience="internal", budget_chars=6000, limit=5):
+    def snapshot_context(self, audience="internal", budget_chars=6000, limit=5, project=None):
         """Explicit bounded current-state snapshot; normal empty queries abstain."""
-        return self._retrieve("", audience=audience, statuses=("active", "waiting"),
+        return self._retrieve("", project=project, audience=audience, statuses=("active", "waiting"),
                               limit=limit, budget_chars=budget_chars, snapshot=True)
 
     def source_snapshot(self, source_names, audience="internal", budget_chars=3000, source_directory=None, text_transform=None):
@@ -944,17 +1005,32 @@ class MemoryStore:
         weighted.sort(key=lambda item: -item[0])
         return weighted
 
-    def _strict_rank(self, ranked, terms, vocabularies):
+    @staticmethod
+    def _name_candidates(record):
+        return _name_candidates(record)
+
+    @staticmethod
+    def _name_match_score(record, terms):
+        return _name_match_score(record, terms)
+
+    def _strict_rank(self, ranked, terms, vocabularies, name_scores=None):
         """Keep meaningful matches without making one-word queries impossible."""
         min_shared = min(self.STRICT_MIN_SHARED, len(terms))
         min_weight = self.STRICT_SINGLE_TERM_MIN_WEIGHT if len(terms) == 1 else self.STRICT_MIN_WEIGHT
-        return self._by_weight([(weight, record) for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies)
-                                if shared_count >= min_shared and weight >= min_weight])
+        weighted = []
+        for weight, shared_count, record in self._lexical_weights(ranked, terms, vocabularies):
+            if shared_count >= min_shared and weight >= min_weight:
+                if name_scores and record["id"] in name_scores:
+                    weight += self.NAME_MATCH_STRICT_WEIGHT * name_scores[record["id"]]
+                weighted.append((weight, record))
+        return self._by_weight(weighted)
 
     BM25_K1 = 1.5
     BM25_B = 0.75
+    NAME_MATCH_WEIGHT = 20.0
+    NAME_MATCH_STRICT_WEIGHT = 10.0
 
-    def _weighted_rank(self, ranked, terms, term_counts):
+    def _weighted_rank(self, ranked, terms, term_counts, name_scores=None):
         """Order without dropping anything: Okapi BM25 over stem counts, no thresholds.
 
         A raw shared-term count favours whichever note has the largest vocabulary, so one long
@@ -973,6 +1049,8 @@ class MemoryStore:
             weight = sum(math.log((total - frequency[term] + 0.5) / (frequency[term] + 0.5) + 1) *
                          counts[term] * (self.BM25_K1 + 1) / (counts[term] + norm)
                          for term in terms if counts.get(term))
+            if name_scores and record["id"] in name_scores:
+                weight += self.NAME_MATCH_WEIGHT * name_scores[record["id"]]
             weighted.append((weight, record))
         return self._by_weight(weighted)
 
@@ -1053,13 +1131,29 @@ class MemoryStore:
         eligible, stale_count = self._eligible(audience, project, records=records)
         superseded = self._superseded_ids(records)
         allowed_statuses = _allowed_statuses(statuses)
+        if strict:
+            try:
+                from beyin_v3_passage import _path_key, settings
+            except ImportError:
+                # Without the exclusion policy, strict fallback must not deliver sources.
+                return [] if candidate_only else pack_context([], limit, budget_chars, stale_count)
+            prefixes = tuple(_path_key(prefix) for prefix in settings(self.state_dir)["exclude"])
+            eligible = [record for record in eligible
+                        if not _path_key(str(record.get("source", ""))).startswith(prefixes)]
         query_tokens = _tokens(query)
         project_tokens = _tokens(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
+        if strict:
+            terms = _strict_terms(terms)
+            if not terms and not scoped_listing and not snapshot:
+                if candidate_only:
+                    return []
+                return pack_context([], limit, budget_chars, stale_count)
         ranked = []
         vocabularies = {}
         term_counts = {}
+        name_scores = {}
         for record in eligible:
             if record["id"] in superseded:
                 continue
@@ -1071,19 +1165,26 @@ class MemoryStore:
             aliases = record.get("aliases", [])
             aliases = aliases if isinstance(aliases, list) else []
             alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
-            counts = _token_counts(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text)
+            name_score = self._name_match_score(record, terms)
+            # A filename is a salience signal only for an actual topical name match.
+            # Unrelated/generic stems must not widen candidates or dilute BM25 lengths.
+            source_stem = (Path(record.get("source", "")).stem.replace("-", " ").replace("_", " ")
+                           if name_score else "")
+            counts = _token_counts(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text + " " + source_stem)
             for stopword in STOPWORDS & counts.keys():
                 del counts[stopword]
             vocabulary = set(counts)
             vocabularies[record["id"]] = vocabulary
             term_counts[record["id"]] = counts
+            if name_score:
+                name_scores[record["id"]] = name_score
             score = len(terms & vocabulary)
-            if score or scoped_listing or snapshot:
+            if score or name_score or scoped_listing or snapshot:
                 ranked.append((score, record))
         if strict and not snapshot:
-            ranked = self._strict_rank(ranked, terms, vocabularies)
+            ranked = self._strict_rank(ranked, terms, vocabularies, name_scores=name_scores)
         else:
-            ranked = self._weighted_rank(ranked, terms, term_counts)
+            ranked = self._weighted_rank(ranked, terms, term_counts, name_scores=name_scores)
         if candidate_only:
             return [record for _, record in ranked[:limit]]
         return pack_context([record for _, record in ranked], limit, budget_chars, stale_count)

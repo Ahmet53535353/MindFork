@@ -23,7 +23,7 @@ değil, kurumsal dolgu yok. Kullanıcı: {{USER_NAME}}. Bağlam: {{USER_BIO}}
 | Geçmiş oturum kaydı | `daily/YYYY-MM-DD.md` |
 | Araç, kişi, kaynak | `🛠️ 600-Arsenal/` |
 | Hafıza ve süreklilik | `🔮 850-Companion/` |
-| Biten, park edilen | `📦 900-Archive/` |
+| Biten, park edilen | `📦 900-Archive/` (taşırken frontmatter'a `status: archived` yaz) |
 | Yeni not | `📋 Templates/Note.md`, frontmatter: title, created, modified, type, status, tags |
 | Kişi notu | `notes/kisiler/<ad-soyad>.md`, `kind: person`, şablon `📋 Templates/Kisi.md` (beyin skill'i, Kişi notları) |
 | Sağlık kontrolü, geçmiş aktarımı | `beyin-doktor`, `gecmis-import` skill'leri |

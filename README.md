@@ -1,6 +1,6 @@
 # 🧠 avenoxbeyin V3
 
-Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci beyin. Notların Markdown dosyalarında kalır; bir istemcide kaydettiğin kaynak ve iş sonucu diğerinde de bulunabilir. Obsidian ile açabilir, normal bir metin editörüyle düzenleyebilirsin.
+Claude Code, Codex, Google Antigravity veya Kiro ile kullanabileceğin yerel ikinci beyin. Notların Markdown dosyalarında kalır; bir istemcide kaydettiğin kaynak ve iş sonucu diğerinde de bulunabilir. Obsidian ile açabilir, normal bir metin editörüyle düzenleyebilirsin.
 
 Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya sürekli açık sunucu gerekmez. Kullandığın AI istemcisinin kendi kurulumu ve hesabı ayrı olarak gerekir.
 
@@ -9,7 +9,7 @@ Python **3.11 veya üzeri** yeterli. Git, pip, Mem0 hesabı, API anahtarı veya 
 ## En kolay kurulum: bir klasör, bir mesaj
 
 1. Obsidian'da yeni bir vault oluştur veya mevcut vault klasörünü seç.
-2. Bu klasörü Codex, Claude Code veya Antigravity ile aç.
+2. Bu klasörü desteklenen AI istemcilerinden biriyle aç.
 3. Aşağıdaki mesajı yapıştır:
 
 > https://avenox.lol/beyin.md adresini oku. Bu klasöre ikinci beynimi kur. Mevcut kurulum varsa notlarımı koruyarak güncelle. Gerekli indirme ve kurulum adımlarını sen yap. Sonunda örnek bir bilgiyi kaydedip yeni oturumda geri okuyarak birlikte doğrulayalım.
@@ -36,7 +36,7 @@ Windows:
 py -3 scripts/install_v3.py --vault "C:\Notlar\Beynim"
 ```
 
-Kurulum üç istemci için proje bağlantılarını, ortak motoru, üç başlangıç skill'ini ve güncelleme kısayolunu kurar. Bundan sonra paket klasörünü açık tutman gerekmez.
+Kurulum istemciler için proje bağlantılarını, ortak motoru, üç başlangıç skill'ini ve güncelleme kısayolunu kurar. Bundan sonra paket klasörünü açık tutman gerekmez.
 
 Hermes Agent kullanıyorsan aynı motor bir Hermes eklentisi üzerinden bağlanır; installer eklenti dosyalarını vault içine yazar, ama profil bazlı bağlantı ve `hermes plugins enable beyin-v3` adımını sen yaparsın. Adımlar: [docs/v3/HERMES.md](docs/v3/HERMES.md). Bu destek V3.1.0 ve sonraki paketlere dahildir.
 
@@ -45,6 +45,8 @@ Vault klasörünü kullandığın AI istemcisinde açıp **yeni bir oturum başl
 OpenCode için ek adım yok: installer vault içine eklentisini yazar, OpenCode vault klasöründe açılınca aynı motora bağlanır. Aynı eklenti OpenCode 1.x (1.3.4 ve sonrası) ve 2.x ile çalışır. OpenCode 2.x eklentileri istemci kapansa da çalışan arka plan servisinde yükler; bu yüzden orada `SessionEnd` yalnız oturum silinince veya servis durunca gelir, tur sonu senkronizasyonu `Stop` ile her turda sürer. Adımlar: [docs/v3/OPENCODE.md](docs/v3/OPENCODE.md).
 
 OMP (Oh My Pi) için ek adım yok: installer vault içine `.omp/hooks/pre/beyin-v3.ts` yazar, OMP vault klasöründe açılınca aynı motora bağlanır. Dosyayı global agentDir'e kopyalama; vault dışında işe yaramaz. Adımlar: [docs/v3/OMP.md](docs/v3/OMP.md).
+
+Kiro IDE 1.x ve CLI V3 için bu kaynak checkout'u `.kiro/hooks/beyin-v3.json` ve `.kiro/skills/` kurar. Kiro'da vault'u açıp hook'ları inceleyerek yeni oturum başlat. Eski ZIP paketlerinde bu dosyalar bulunmayabilir; kaynak kurulum adımları ve istemci sınırları: [docs/v3/KIRO.md](docs/v3/KIRO.md).
 
 ## İlk konuşma
 
@@ -66,7 +68,7 @@ Kurulu üç skill:
 | **beyin-doktor** | Bir not bulunamıyorsa, bağlantı veya kayıt sorunu varsa |
 | **beyin-guncelle** | Kurulu sistemi kontrol etmek, güncellemek veya geri almak |
 
-Bunlar `.agents/skills` altında bulunur; istemciler aynı kaynakları kullanır. Eklemek istediğin kişisel skill'leri ayrıca içe alabilirsin. Aynı adlı farklı içerik sessizce ezilmez.
+Bunlar `.agents/skills` altında bulunur; Claude ve Kiro kendi proje skill kopyalarını kullanır. Eklemek istediğin kişisel skill'leri ayrıca içe alabilirsin. Aynı adlı farklı içerik sessizce ezilmez.
 
 ## Günlük kullanım
 

@@ -144,6 +144,9 @@ kullanici notlarina dokunma. Kurulum vault kokundeki `AGENTS.md` dosyasina
 `CLAUDE.md` yoksa yalniz `@AGENTS.md` import satiriyla olusturulur. `AGENTS.md`'yi zaten
 import eden `CLAUDE.md`'ye bolum ikinci kez eklenmez; import etmeyen `CLAUDE.md`'ye ayni
 bolum eklenir. Kullaniciya verdigin ozette neyin eklendigini yaz.
+Kiro destegi iceren bir paket kullaniyorsan `.kiro/hooks/beyin-v3.json` ve
+`.kiro/skills/beyin/SKILL.md` dosyalarini da kontrol et; eski paketlerde bu
+dosyalar bulunmayabilir.
 
 Kurulum vault kokune yalniz ilgili platformun guncelleme kisayolunu birakir: macOS'ta
 `Beyni Güncelle.command`, Windows'ta `Beyni Guncelle.cmd`, Linux'ta `Beyni Güncelle.sh`
@@ -159,6 +162,8 @@ yuklenir. Hermes Agent kullaniliyorsa installer eklenti dosyalarini vault icine 
 ancak baglanti icin `hermes plugins enable beyin-v3` ve yeniden baslatma adimlari
 kullaniciya aittir; adimlar
 `https://github.com/avenoxai/avenoxbeyin/blob/main/docs/v3/HERMES.md` icindedir.
+Kiro IDE 1.x veya CLI V3 kullaniliyorsa vault'u ac, Agent Hooks panelinde veya
+CLI `/hooks` ekraninda Beyin tanimlarini incele ve yeni oturum baslat.
 Ardindan yeni bir istemci oturumu acilmasini iste. Codex Desktop otomatik hook baglami
 gorunmezse bu bir kurulum basarisi iddiasi degildir; kurulu `beyin.py context` ve `sync`
 komutlariyla dogrudan tazeleme kullanilabilir.
