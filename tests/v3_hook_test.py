@@ -1027,6 +1027,42 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('Synthetic Reviewer', resp_human['hookSpecificOutput']['additionalContext'])
         self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 3)
 
+    def slow_sync_hook(self):
+        """The real hook with a source sync that outlasts SYNC_WAIT and a due check."""
+        wrapper = self.root / 'slow_sync_hook.py'
+        wrapper.write_text(f'''import runpy, subprocess, sys
+sys.path.insert(0, {str(SCRIPTS)!r})
+class SlowWorker:
+    returncode = None
+    def __init__(self, *args, **kwargs):
+        pass
+    def wait(self, timeout=None):
+        raise subprocess.TimeoutExpired('worker', timeout)
+subprocess.Popen = SlowWorker
+import beyin_v3_preferences
+beyin_v3_preferences.claim_check = lambda *args, **kwargs: True
+sys.argv[0] = {str(HOOK)!r}
+runpy.run_path({str(HOOK)!r}, run_name='__main__')
+''', encoding='utf-8')
+        self.env.pop('BEYIN_V3_NO_SPAWN')
+        return wrapper
+
+    def test_user_prompt_submit_reads_previous_index_while_sync_is_pending(self):
+        # A sync slower than SYNC_WAIT used to inject only a pending notice, so a large vault
+        # never received prompt retrieval at all. The last committed index still answers.
+        self.seed()
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'slow-sync', 'event_id': 'slow-sync-1',
+                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
+        context = self.invoke(payload, 'claude', script=self.slow_sync_hook())['hookSpecificOutput']['additionalContext']
+        self.assertIn('Synthetic Reviewer', context)
+        self.assertIn('previous index', context)
+
+    def test_user_prompt_submit_without_index_keeps_pending_notice(self):
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'first-sync', 'event_id': 'first-sync-1',
+                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
+        context = self.invoke(payload, 'claude', script=self.slow_sync_hook())['hookSpecificOutput']['additionalContext']
+        self.assertIn('V3 source sync is pending', context)
+
     def test_user_prompt_submit_synthetic_filter_honours_opt_out_env(self):
         self.seed()
         self.env['BEYIN_V3_FILTER_HARNESS_TURNS'] = '0'

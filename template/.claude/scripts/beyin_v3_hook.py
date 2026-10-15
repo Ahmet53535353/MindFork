@@ -15,6 +15,7 @@ import uuid
 
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
+SYNC_WAIT = 1.5  # seconds the prompt hook waits for the source sync before reading the last index
 RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
     'python3 beyin.py receipt --harness {harness} --session {session} --event-id EVENT_ID --summary "Work result" --ref PATH. '
@@ -522,24 +523,35 @@ def main():
             if not due and not disabled:
                 print(json.dumps(output_context(args.harness, event, notice + 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
                 return
+            pending = False
             try:
                 if process is not None:
-                    process.wait(timeout=1.5)
+                    process.wait(timeout=SYNC_WAIT)
             except subprocess.TimeoutExpired:
-                print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
-                return
-            if process is not None and process.returncode:
+                pending = True
+            if process is not None and not pending and process.returncode:
                 raise RuntimeError("Source sync failed; metadata remains queued")
             # Context only reads the store. SyncEngine adds the Markdown journal and the
             # markdown_sources table, which the sync worker creates and every reader tolerates
             # missing, so the foreground skips importing the sync engine.
             from beyin_v3 import MemoryStore
-            store = MemoryStore(state, vault)
+            if pending:
+                # A sync slower than SYNC_WAIT keeps running in the background. Retrieval reads the
+                # index the previous sync committed, read-only so it never contends for the
+                # worker's write lock; only a store that does not exist yet injects nothing.
+                try:
+                    store = MemoryStore(state, vault, read_only=True)
+                except ValueError:
+                    print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+                    return
+            else:
+                store = MemoryStore(state, vault)
             query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
-            warning = ''
+            warning = ('V3 source sync is still running; this context comes from the previous index. '
+                       'Verify current Markdown sources before relying on it.\n') if pending else ''
             health = state / "hook-health.json"
             if health.exists():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
