@@ -18,12 +18,20 @@ import urllib.parse
 import urllib.request
 sys.dont_write_bytecode = True
 
-OFFICIAL = 'https://api.github.com/repos/avenoxai/avenoxbeyin/releases/latest'
-WEB = 'https://github.com/avenoxai/avenoxbeyin/releases/'
-# Exact official repository slugs. A GitHub rename (avenoxai/avenoxbeyin -> avenoxai/beyin)
-# keeps the old API URL working through a redirect, but the API then reports asset URLs under
-# the new name. Both names are accepted, nothing broader: the old name must never be recreated.
-OFFICIAL_WEBS = tuple('https://github.com/' + slug + '/releases/' for slug in ('avenoxai/avenoxbeyin', 'avenoxai/beyin'))
+# This fork is the release channel for builds cut from feat/memory-consolidation (Ahmet's
+# decision, 2026-10-14): 3.11.0 and later live here, not on upstream, which this account
+# cannot publish to. Two separate things, deliberately not merged: OFFICIAL decides *which
+# repository answers "what is the newest release"* and check() reads it; OFFICIAL_WEBS decides
+# *whose asset URLs are trusted* and the download validates against it. Adding the fork only
+# to OFFICIAL_WEBS would change nothing for check(), which would keep reading upstream.
+OFFICIAL = 'https://api.github.com/repos/Ahmet53535353/MindFork/releases/latest'
+WEB = 'https://github.com/Ahmet53535353/MindFork/releases/'
+# Exact repository slugs. Upstream's two names stay accepted because the rename contract
+# (avenoxai/avenoxbeyin -> avenoxai/beyin) is a property of the release format, not of who
+# publishes; nothing broader: the old name must never be recreated, and no neighbouring name
+# of this fork is a channel either.
+OFFICIAL_WEBS = tuple('https://github.com/' + slug + '/releases/' for slug in
+                       ('avenoxai/avenoxbeyin', 'avenoxai/beyin', 'Ahmet53535353/MindFork'))
 MAX_PACKAGE = 32 * 1024 * 1024
 DAY = 86400
 FRESH = 7 * DAY

@@ -16,7 +16,10 @@ import time
 import urllib.request
 import zipfile
 
-OFFICIAL = 'https://api.github.com/repos/avenoxai/avenoxbeyin/releases/latest'
+# Mirrors beyin_v3_releases.OFFICIAL: the fork this build is cut from is the
+# release channel (Ahmet's decision, 2026-10-14); see that module for why the
+# endpoint and the trusted-asset list are two separate constants.
+OFFICIAL = 'https://api.github.com/repos/Ahmet53535353/MindFork/releases/latest'
 MAX_PACKAGE = 32 * 1024 * 1024
 # The installer mirrors each starter skill into both roots, so a package may carry an
 # exemption for either copy. Mirrors install_v3.MANAGED_SKILL_PATHS.

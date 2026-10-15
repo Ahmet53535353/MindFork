@@ -93,6 +93,37 @@ class ReleasesTest(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(releases.ReleaseError): releases.safe_url(url)
         self.assertEqual(releases.safe_url('https://release-assets.githubusercontent.com/a'), 'https://release-assets.githubusercontent.com/a')
 
+    def test_this_fork_is_the_release_channel_and_stays_exact(self):
+        # Bu dagdan kurulan vault'un updater'i bu fork'un release'lerini gorur (Ahmet karari,
+        # 2026-10-14). Iki ayri sey vardir ve karistirilmamalidir:
+        #   OFFICIAL      -> "en yeni surum hangi depoda aranir" ; check() bunu okur
+        #   OFFICIAL_WEBS -> "hangi depolarin asset URL'leri guvenilir" ; indirme bunu dogrular
+        # Yalnizca listeye eklemek yetmezdi: check() yine upstream'in surumunu gorurdu.
+        self.assertIn('Ahmet53535353/MindFork', releases.OFFICIAL,
+                      "bu build upstream'e bakmaya devam ediyor, fork'taki surumu gormez")
+        fork = 'https://github.com/Ahmet53535353/MindFork/releases/'
+        self.assertIn(fork, releases.OFFICIAL_WEBS, "fork'un asset URL'leri dogrulanmiyor")
+        self.assertTrue(releases.OFFICIAL.endswith('/Ahmet53535353/MindFork/releases/latest'))
+        # Upstream'in iki adi kalsin: yeniden yonlendirme ve asset dogrulama sozlesmesi degismesin.
+        for slug in ('avenoxai/avenoxbeyin', 'avenoxai/beyin'):
+            self.assertIn('https://github.com/' + slug + '/releases/', releases.OFFICIAL_WEBS)
+
+        def with_checksum(base):
+            raw = fixture(); asset = raw['assets'][0]
+            asset['browser_download_url'] = asset['browser_download_url'].replace(releases.WEB, base)
+            raw['assets'].append(dict(asset, id=457, name=asset['name'] + '.sha256',
+                                      browser_download_url=asset['browser_download_url'] + '.sha256'))
+            return raw
+
+        metadata = releases.release_metadata(with_checksum(fork))
+        self.assertEqual(metadata['asset_url'], fork + 'download/v3.1.0/beyin-v3-3.1.0.zip')
+        # Genisletme bir davetsizlik olmamali: fork'un komsu adlari ve upstream disindaki
+        # her depo reddedilmeye devam etmeli.
+        for slug in ('Ahmet53535353/MindFork2', 'Ahmet53535353/mindfork',
+                     'ahmet53535353/MindFork', 'someone/MindFork', 'Ahmet53535353/avenoxbeyin'):
+            with self.subTest(slug=slug), self.assertRaisesRegex(releases.ReleaseError, 'invalid_asset'):
+                releases.release_metadata(with_checksum('https://github.com/' + slug + '/releases/'))
+
     def test_both_official_repository_names_are_accepted_and_nothing_broader(self):
         # After a rename avenoxai/avenoxbeyin -> avenoxai/beyin the old API URL redirects and the
         # API reports asset URLs under the new name; older installs must keep updating.
