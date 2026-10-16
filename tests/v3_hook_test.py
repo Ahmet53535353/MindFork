@@ -496,6 +496,27 @@ class HookInstallerTest(unittest.TestCase):
                     self.assertIn('Learnings were reported', response.get('reason', ''))
                     self.assertEqual(self.lifecycle('Stop', name, harness), {})
 
+    def test_stop_knowledge_reminder_accepts_note_written_before_the_window_opened(self):
+        # Maintainer: the editor write of a note precedes the PostToolUse that opens the window,
+        # so a window whose first edit is the knowledge note itself fails the mtime test. The
+        # editor tool's own path is the evidence (Claude file_path, Codex apply_patch header).
+        engine = self.seed()
+        for harness in ('claude', 'codex'):
+            with self.subTest(harness=harness):
+                name = f'first-edit-knowledge-{harness}'
+                relative = f'🧠 500-Knowledge/Öğrenim-{harness}.md'
+                note = self.vault / relative
+                note.parent.mkdir(parents=True, exist_ok=True)
+                note.write_text('# Şükrü onayı\n\nMüşteri arşivi onaysız kapanmaz.\n', encoding='utf-8')
+                before = time.time() - 5
+                os.utime(note, (before, before))
+                tool_input = ({'file_path': str(note)} if harness == 'claude' else
+                              {'command': f'*** Begin Patch\n*** Add File: {relative}\n+# Şükrü\n*** End Patch\n'})
+                self.lifecycle('PostToolUse', name, harness, tool_input=tool_input, cwd=str(self.vault))
+                session = hashlib.sha256(name.encode()).hexdigest()[:24]
+                engine.receipt(name, 'İş tamamlandı.\nÖğrenilen: Onay kuralı.', [relative], harness, session=session)
+                self.assertEqual(self.lifecycle('Stop', name, harness), {})
+
     def test_knowledge_update_requires_a_recent_file_not_a_ref_alone(self):
         receipt = {'refs': ['knowledge/concepts/existing.md']}
         note = self.vault / receipt['refs'][0]
