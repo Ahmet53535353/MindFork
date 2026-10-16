@@ -2836,7 +2836,10 @@ def _linux_tk_python():
     """
     if not sys.platform.startswith('linux'):
         return sys.executable
-    probe = ('import tkinter as tk, tkinter.font as font; '
+    # The engine needs Python 3.11+: an older system Python (Ubuntu 22.04 ships 3.10) must not take
+    # over the window. -I keeps the probe from importing a tkinter.py out of the current folder.
+    probe = ('import sys; sys.exit(1) if sys.version_info < (3, 11) else None; '
+             'import tkinter as tk, tkinter.font as font; '
              'root=tk.Tk(); root.withdraw(); '
              'families=font.families(root=root); root.destroy(); '
              'raise SystemExit(len(families) <= 1)')
@@ -2844,7 +2847,7 @@ def _linux_tk_python():
         if python != sys.executable and not Path(python).is_file():
             continue
         try:
-            result = subprocess.run([python, '-c', probe], capture_output=True, timeout=3)
+            result = subprocess.run([python, '-I', '-c', probe], capture_output=True, timeout=3)
             if result.returncode == 0:
                 return python
         except (OSError, subprocess.TimeoutExpired):

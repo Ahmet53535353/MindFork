@@ -993,6 +993,22 @@ class YakalaUnitTest(unittest.TestCase):
             self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
         self.assertEqual(probe.call_count, 1)  # no attempt to run an absent system Python
 
+    def test_linux_tk_probe_is_isolated_and_rejects_an_older_python(self):
+        from subprocess import CompletedProcess
+        with patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'executable', '/conda/bin/python3'), \
+                patch.object(yakala.Path, 'is_file', return_value=True), \
+                patch.object(yakala.subprocess, 'run', return_value=CompletedProcess([], 1)) as probe:
+            yakala._linux_tk_python()
+        command = probe.call_args_list[-1].args[0]
+        self.assertEqual(command[:3], ['/usr/bin/python3', '-I', '-c'])
+        guard = command[3].split('import tkinter')[0]  # the version check runs before any Tk import
+        with patch.object(sys, 'version_info', (3, 10, 12)):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(guard, {})
+        self.assertEqual(stopped.exception.code, 1)
+        exec(guard, {})  # this interpreter (3.11+) passes
+
     def test_hand_over_only_for_the_linux_hotkey_process(self):
         argv = ['x', 'pencere', '--vault', str(self.vault)]
         with patch.object(yakala, '_hand_over') as hand, patch.object(yakala, 'gather_context', return_value={}), \
