@@ -1520,9 +1520,53 @@ def _win_clipboard_payload(limit=IMAGE_LIMIT, tries=6):
     return found
 
 
+def _linux_image_payload(limit=IMAGE_LIMIT):
+    """Read at most `limit` Wayland PNG bytes; stop a stalled or oversized clipboard owner."""
+    import selectors
+    import time
+    tool = _which('wl-paste') if os.environ.get('WAYLAND_DISPLAY') else None
+    if not tool:
+        return None
+    process = None
+    try:
+        process = subprocess.Popen([tool, '--no-newline', '--type', 'image/png'],
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        deadline = time.monotonic() + CLIP_TIMEOUT
+        chunks, size = [], 0
+        with selectors.DefaultSelector() as ready:
+            ready.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not ready.select(remaining):
+                    return None
+                chunk = os.read(process.stdout.fileno(), min(65536, limit - size + 1))
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > limit:
+                    return None
+                chunks.append(chunk)
+        if process.wait(timeout=max(0.001, deadline - time.monotonic())) != 0:
+            return None
+        png = b''.join(chunks)
+        return {'image': True, 'png': png, 'dib': None} if png_info(png) else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdout.close()
+
+
 def _clipboard_payload():
-    """Raw image bytes on the system clipboard. Only Windows has a reader; everywhere else nothing changes."""
-    return _win_clipboard_payload() if os.name == 'nt' else None
+    """Raw image bytes on the system clipboard; unsupported sessions change nothing."""
+    if os.name == 'nt':
+        return _win_clipboard_payload()
+    if sys.platform.startswith('linux'):
+        return _linux_image_payload()
+    return None
 
 
 def clipboard_image(clip, context, at=None):
