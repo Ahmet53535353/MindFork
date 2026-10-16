@@ -2570,6 +2570,17 @@ def _clipboard(root):
     return repair_mojibake(value) if isinstance(value, str) else ''
 
 
+def _clipboard_warning():
+    """Wayland's native clipboard needs wl-paste; Tk's XWayland fallback may be empty (#278)."""
+    if sys.platform.startswith('linux') and os.environ.get('WAYLAND_DISPLAY') and not _which('wl-paste'):
+        return 'Wayland panosu icin wl-paste yok; baglanti/metin gelmeyebilir. wl-clipboard kur.'
+    return None
+
+
+def _empty_capture_hint(vault, state=None):
+    return 'Pano icin wl-paste yok (wl-clipboard kur)' if _clipboard_warning() else _hotkey_hint(vault, state)
+
+
 def _hotkey_hint(vault, state=None):
     try:
         label = json.loads(_state_path(state or resolve_state(Path(vault))).read_text(encoding='utf-8')).get('kisayol')
@@ -2735,7 +2746,9 @@ def popup(vault, context=None, state=None, root=None, session=None):
     y += 8
     footer_y = y + 14
     status = canvas.create_text(pad, footer_y, anchor='w', fill=P['muted'], font=_font(12),
-                                text='Tab: panoyu ekle' if clip_text and (url or files) else _hotkey_hint(vault, state))
+                                text='Tab: panoyu ekle' if clip_text and (url or files) else
+                                _hotkey_hint(vault, state) if (url or files or clip_text or image) else
+                                _empty_capture_hint(vault, state))
     right = W - pad
 
     def keycap(x_right, key, label):
@@ -4759,6 +4772,34 @@ def _kde_active():
     return code == 0 and 'true' in out
 
 
+def _linux_tk_python():
+    """Prefer the current Python unless its Tk sees no usable desktop fonts.
+
+    Some bundled Tk builds only expose `fixed`: their Canvas prints Unicode as
+    escape sequences even though the widget holds the right text. Probe the
+    distribution Python before using it; it may not have Tk installed at all.
+    """
+    if not sys.platform.startswith('linux'):
+        return sys.executable
+    # The engine needs Python 3.11+: an older system Python (Ubuntu 22.04 ships 3.10) must not take
+    # over the window. -I keeps the probe from importing a tkinter.py out of the current folder.
+    probe = ('import sys; sys.exit(1) if sys.version_info < (3, 11) else None; '
+             'import tkinter as tk, tkinter.font as font; '
+             'root=tk.Tk(); root.withdraw(); '
+             'families=font.families(root=root); root.destroy(); '
+             'raise SystemExit(len(families) <= 1)')
+    for python in (sys.executable, '/usr/bin/python3'):
+        if python != sys.executable and not Path(python).is_file():
+            continue
+        try:
+            result = subprocess.run([python, '-I', '-c', probe], capture_output=True, timeout=3)
+            if result.returncode == 0:
+                return python
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return sys.executable
+
+
 def _hand_over(vault, state):
     """The desktop entry starts the copy in the state folder. When the vault has its own module, run that
     one, so an update reaches the window without a second `kur` (the macOS listener does the same)."""
@@ -4766,7 +4807,8 @@ def _hand_over(vault, state):
     current = Path(vault) / '.claude/scripts' / here.name
     if here == (Path(state) / 'yakala' / here.name).resolve() and current.is_file() and current.resolve() != here:
         try:
-            os.execv(sys.executable, [sys.executable, str(current)] + sys.argv[1:])
+            python = _linux_tk_python()
+            os.execv(python, [python, str(current)] + sys.argv[1:])
         except OSError:
             pass  # the copy still opens the window
 
@@ -4922,6 +4964,7 @@ def install(vault, state, hotkey=True, spec=None, folder_spec=None):
                                               'klasor': inbox_rel, **({'vault': str(vault)} if os.name == 'nt' else {})}, ensure_ascii=False) + '\n',
                                   encoding='utf-8')
     done['araclar'] = {name: bool(path) for name, path in tools().items()}
+    done['pano_uyarisi'] = _clipboard_warning()
     return done
 
 
@@ -5010,6 +5053,7 @@ def status(vault, state):
             running = GNOME_PATH in (_gnome_list() or [])
     return {'status': 'tamam', 'kurulu': installed, 'dinleyici_calisiyor': running,
             'bekleyen': pending(vault, state), 'klasor': find_inbox(vault, state),
+            'pano_uyarisi': _clipboard_warning(),
             'araclar': {name: bool(path) for name, path in tools().items()}}
 
 
@@ -5066,6 +5110,8 @@ def human(result, command):
             lines.append(result['ipucu'])
         if result.get('uyari'):
             lines.append('UYARI: ' + result['uyari'])
+        if result.get('pano_uyarisi'):
+            lines.append('UYARI: ' + result['pano_uyarisi'])
         if command == 'kisayol':
             return '\n'.join(lines)
         if result.get('onceki_klasorde_kalan'):
@@ -5086,6 +5132,7 @@ def human(result, command):
                 ('' if result['dinleyici_calisiyor'] is None else '\nKisayol dinleyicisi: ' +
                  ('calisiyor' if result['dinleyici_calisiyor'] else 'durmus (baslatmak icin: beyin.py yakala kur)')) +
                 '\nBekleyen kaynak: ' + str(result['bekleyen']) +
+                ('\nUYARI: ' + result['pano_uyarisi'] if result.get('pano_uyarisi') else '') +
                 '\nAraclar: ' + ', '.join(n + ('=var' if ok else '=yok') for n, ok in result['araclar'].items()))
     if result.get('status') == 'islendi':
         return 'Kart islendi olarak isaretlendi: ' + result['id']
