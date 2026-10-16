@@ -882,7 +882,13 @@ class HumanMonthE2ETest(unittest.TestCase):
 
         store.semantic_searcher = searcher
         fused = [r['source'] for r in store._retrieve(query, limit=5)['records']]
-        self.assertEqual(sorted(seen['candidates']), sorted(lexical_only), 'aday havuzu lexikal sonuclardan farkli')
+        # The plug sees the *untruncated* lexical pool: _retrieve builds
+        # candidate_records from `ranked` and only applies `limit` after fusion
+        # (beyin_v3.py, `ranked[:limit]`). So candidates == top-`limit` can only
+        # hold while the pool happens to be smaller than limit. The invariant the
+        # docstring states — the plug cannot *add* a candidate — is a subset claim.
+        pool = {r['source'] for r in store._retrieve(query, limit=500)['records']}
+        self.assertTrue(set(seen['candidates']) <= pool, 'aday havuzu leksikal havuzun disina cikti')
         self.assertTrue(fused, 'birlestirilmis sira bos dondu')
         self.assertEqual(sorted(fused), sorted(lexical_only), 'RRF yalniz sirayi degistirmeli, kumesi degil')
 
