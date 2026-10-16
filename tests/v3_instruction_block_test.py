@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 from v3_package_helpers import inherited_env
@@ -22,6 +23,31 @@ NOTE = '\nKullanıcının kendi notu: bu paragraf blok dışında ve korunmalı.
 RULES = '# Kurallarım\nUSER_RULE_SENTINEL: yalnız AGENTS.md içinde yaşar.\n'
 CLAUDE = '# Claude kuralları\nBu dosya kendi talimatlarını taşır.\n'
 IMPORT = b'@AGENTS.md\n'
+STARTER_TEXTS = ('template/.agents/skills/beyin/SKILL.md', 'template/.agents/skills/beyin-doktor/SKILL.md',
+                 'template/.agents/skills/beyin-guncelle/SKILL.md', 'template/CLAUDE.md')
+
+
+def hard_wrapped_lines(text):
+    """Lines that continue the paragraph or list item above them (#361); fences and tables are skipped."""
+    if text.startswith('---\n'):
+        text = text.split('\n---\n', 1)[1]
+    found, chunk, fence = [], [], False
+
+    def flush():
+        if chunk and not chunk[0].startswith(('#', '|')):
+            starts = re.compile(r'(?:[-*] |\d+\. |\*\*)') if re.match(r'(?:[-*] |\d+\. |\*\*)', chunk[0]) else None
+            found.extend(line for line in chunk[1:] if starts is None or not starts.match(line))
+        chunk.clear()
+    for line in text.split('\n'):
+        if line.startswith('```'):
+            flush()
+            fence = not fence
+        elif not fence and line.strip():
+            chunk.append(line)
+        else:
+            flush()
+    flush()
+    return found
 
 
 class InstructionBlockTest(unittest.TestCase):
@@ -128,6 +154,39 @@ class InstructionBlockTest(unittest.TestCase):
             if p.startswith('##'):
                 continue
             self.assertNotIn('\n', p, 'Paragraph in AGENTS.md block contains manual line break')
+
+    def test_starter_skills_and_router_template_keep_paragraphs_on_one_line(self):
+        # #361: a paragraph wrapped by hand near 80 columns splits a sentence in agent context.
+        for name in STARTER_TEXTS:
+            with self.subTest(file=name):
+                self.assertEqual(hard_wrapped_lines((ROOT / name).read_text(encoding='utf-8')), [])
+
+    def test_update_replaces_hard_wrapped_block_installed_by_older_release(self):
+        # #361: releases up to 3.10.0 wrapped the block near 80 columns. An update finds the block
+        # by its markers and swaps that text for the single-line one; it must not add a second block.
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        fresh = {name: self.block(name) for name in ('AGENTS.md', 'CLAUDE.md')}
+        manifest_path = self.state / 'v3-install.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        for name, block in fresh.items():
+            wrapped = '\n\n'.join(part if part.lstrip().startswith('##') else
+                                  textwrap.fill(part, 80, break_long_words=False, break_on_hyphens=False)
+                                  for part in block.split('\n\n'))
+            self.assertNotEqual(wrapped, block)
+            path = self.vault / name
+            data = path.read_text(encoding='utf-8').replace(block, wrapped).encode()
+            manifest['files'][name] = dict(manifest['files'][name], installed_hash=hashlib.sha256(data).hexdigest(),
+                                           installed_content=base64.b64encode(data).decode())
+            path.write_bytes(data + (NOTE.encode() if name == 'AGENTS.md' else b''))
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        self.update()
+        for name, block in fresh.items():
+            with self.subTest(file=name):
+                text = (self.vault / name).read_text(encoding='utf-8')
+                self.assertEqual((text.count(START), text.count(END)), (1, 1))
+                self.assertEqual(self.block(name), block)
+        self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
 
     def test_block_carries_no_machine_path(self):
         # #112: AGENTS.md may be synced between machines; the block must read the same on each.
