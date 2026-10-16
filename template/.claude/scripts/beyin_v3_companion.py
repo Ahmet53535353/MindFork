@@ -44,7 +44,61 @@ STARTERS = {
         '**Madde 22:** ölçümden önce tarayıcıyı ve gradle daemon\'ı kapat, `free -h` ile\n'
         'doğrula. Sayfa yazma olursa **ölçüm geçersizdir**; raporun başına yaz.\n',
     'Journal.md': '# Journal\n\nOrtak çalışmadan doğan gözlemler, öğrenimler ve açık sorular. Çıkarımları kesin kullanıcı bilgisi olarak sunma.\n',
-    'memory-types.md': '---\n{"type": "semantic", "project": "Beyin", "visibility": "internal"}\n---\n# Memory Types\n\nBu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type\'ını tanımlar.\n\n## Type Tanımları\n\n### episodic — Zaman Serisi / Anılar\nBelirli bir zaman diliminde ne oldu.\nÖrnekler: Journal.md, Threads.md, Last-Session.md, daily/v3/*.md\n\n### semantic — Kalıcı Bilgi / Gerçekler / Kimlik\nZamanla değişmeyen, sorgulanabilir gerçekler.\nÖrnekler: Core.md, knowledge/concepts/*.md\n\n### procedural — Nasıl Yapılır / Kurallar / Playbook\'lar\nSüreçler, kurallar, workflow\'lar.\nÖrnekler: Kurallar.md, .agents/skills/*/SKILL.md\n',
+    'memory-types.md': ('---\n{"type": "semantic", "project": "Beyin", "visibility": \"internal\"}\n---\n'
+        '# Memory Types\n'
+        '\n'
+        "Bu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type'ını tanımlar. Her not, görev veya kayıt **tek bir** type alır: `episodic`, `semantic`, veya `procedural`.\n"
+        '\n'
+        '## Type Tanımları\n'
+        '\n'
+        '### episodic — Zaman Serisi / Anılar\n'
+        '**Ne:** Belirli bir zaman diliminde ne oldu, kim ne yaptı, hangi karar alındı.\n'
+        '**Örnekler:**\n'
+        '- `Journal.md` — ortak çalışma gözlemleri, öğrenimler\n'
+        '- `Threads.md` — aktif/kapalı konular, süregelen işler\n'
+        '- `Last-Session.md` — son oturum sonucu, açık adımlar\n'
+        '- `tasks/` ve `notes/` altındaki tarihli kayıtlar\n'
+        '\n'
+        '**Retrieval filtresi:** *"dün", "oturum", "kaldık", "önceki", "geçen gün"*\n'
+        '\n'
+        '### semantic — Kalıcı Bilgi / Gerçekler / Kimlik\n'
+        '**Ne:** Zamanla değişmeyen veya nadiren değişen, sorgulanabilir gerçekler, kimlik, tercihler.\n'
+        '**Örnekler:**\n'
+        '- `Core.md` — companion kimliği, kullanıcı adı, hitap, çalışma alanı\n'
+        '- `knowledge/decisions/` — kararlar ve gerekçeleri\n'
+        '- `knowledge/index.md` — kavram indeksi\n'
+        '- Proje yapılandırması, mimari kararlar\n'
+        '\n'
+        '**Retrieval filtresi:** *"karar", "mimari", "tanım", "kavram", "neden", "fark"*\n'
+        '\n'
+        "### procedural — Nasıl Yapılır / Kurallar / Playbook'lar\n"
+        '**Ne:** Süreçler, kurallar, workflow\'lar, "nasıl" talimatları.\n'
+        '**Örnekler:**\n'
+        '- `knowledge/concepts/` — yöntem notları: bunların çoğunluğu prosedüreldir\n'
+        '- `Kurallar.md`, `Test-Kuralları.md` — kullanıcı düzeltmeleri ve çalışma kuralları\n'
+        '- `.agents/skills/*/SKILL.md` — skill talimatları\n'
+        "- CI/CD kuralları, code review checklist'leri\n"
+        '\n'
+        '**Retrieval filtresi:** *"nasıl", "adım", "kural", "kurallar", "prosedür", "checklist", "kurulum"*\n'
+        '\n'
+        '## Kullanım Kuralları\n'
+        '\n'
+        '1. **Tek type per dosya** — Bir dosya hem `semantic` hem `procedural` olmaz. Karma içerik ayrı dosyalara bölünür.\n'
+        '2. **`type` önerilir, zorunlu değildir** — `note-create` ve `task-create` çağrılarında kaydın taşıdığı bellek türünü biliyorsan `metadata.type` alanını yaz; bilmiyorsan boş bırak. Boş bırakılan kayıtlar tiplendirilmemiş sayılır ve sezgisel filtreleme bunları asla elmez; yazıldığında ise geçerli bir değer olmalıdır.\n'
+        "3. **Retrieval'da filtre** — Sorgu ipuçlarından **tek bir** tür çıkarılırsa, o türle eşleşmeyen kayıtlar elenir. Sıfır veya iki tür eşleşirse filtre kurulmaz: kararsızlık yanlış filtreden yeğerdir, çünkü yanlış filtre doğru notu gizler.\n"
+        '\n'
+        '## Tuzak: belge örneğini kanıt sanma\n'
+        '\n'
+        'Bir kaydı sınıflandırmak için bu belgeye bakma — kaydın **hangi sorgularda göründüğünü ölç**\n'
+        '(`beyin.py context "<sorgu>"`). Belgede yazan, belgenin hâlâ yürürlük olduğunu kanıtlamaz.\n'
+        '\n'
+        '**İpucu kümeleri içeriğin gerçek dağılımıyla uyuşmazsa filtre ayıklama değil gizleme yapar.** Yöntem\n'
+        'notları concept klasöründe çoğunluktaysa onları `semantic` saymak, "neden", "kavram", "fark" gibi\n'
+        'soruları yanlış yere daraltır.\n'
+        '\n'
+        '**Bir kayda tip yazmak, onu hangi soru ailelerinden çıkaracağını değiştirir.** Düzeltmeden önce hem\n'
+        'kazanan hem kaybeden aileyi ölç. Sadece "belgede böyle yazıyor" diye tip yazma.\n'
+    ),
 }
 
 

@@ -22,7 +22,7 @@ Bu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type'ını ta
 **Ne:** Zamanla değişmeyen veya nadiren değişen, sorgulanabilir gerçekler, kimlik, tercihler.
 **Örnekler:**
 - `Core.md` — companion kimliği, kullanıcı ismi, hitap, çalışma alanı
-- `knowledge/concepts/*.md` — kavram tanımları, teknik kararlar
+- `knowledge/decisions/` — kararlar ve gerekçeleri
 - `knowledge/index.md` — kavram indeksi
 - Proje yapılandırması, mimari kararlar
 
@@ -31,9 +31,10 @@ Bu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type'ını ta
 ### procedural — Nasıl Yapılır / Kurallar / Playbook'lar
 **Ne:** Süreçler, kurallar, workflow'lar, "nasıl" talimatları.
 **Örnekler:**
+- `knowledge/concepts/` — yöntem notları: bunların çoğunluğu prosedüreldir
 - `Kurallar.md` — kullanıcı düzeltmeleri, çalışma kuralları
 - `.agents/skills/*/SKILL.md` — skill talimatları
-- `knowledge/playbooks/*.md` — tekrar eden işlemlerin adım adım rehberi
+- `knowledge/playbooks/` — tekrar eden işlemlerin adım adım rehberi
 - CI/CD pipeline kuralları, code review checklist'leri
 
 **Retrieval filtresi:** `"Not nasıl alınır?", "Receipt formatı nedir?", "Bu skill nasıl kullanılır?"`
@@ -42,8 +43,10 @@ Bu belge Beyin v3 hafıza sisteminde kullanılan üç temel memory type'ını ta
 
 1. **Tek type per dosya** — Bir dosya hem `semantic` hem `procedural` olmaz. Karma içerik ayrı dosyalara bölünür.
 2. **`type` önerilir, zorunlu değildir** — `note-create` ve `task-create` çağrılarında kaydın taşıdığı bellek türünü biliyorsan `metadata.type` alanını yaz; bilmiyorsan boş bırak. Boş bırakılan kayıtlar tiplendirilmemiş sayılır ve sezgisel filtreleme bunları asla elmez; yazıldığında ise geçerli bir değer olmalıdır.
-3. **Retrieval'da filtre** — Context sorgularında `type` filtresiyle ilgili kayıtlar hızlı bulunur.
-4. **Consolidation stratejisi** — AutoDream-lite consolidation her type için farklı prune/merge kuralları uygular:
+3. **Retrieval'da filtre** — Context sorgularında `type` filtresiyle ilgili kayıtlar hızlı bulunur. Sorgu ipuçlarından **tek bir** tür çıkarılırsa, o türle eşleşmeyen kayıtlar elenir; sıfır veya iki tür eşleşirse filtre kurulmaz.
+4. **Belge örneğini kanıt sanma** — Bir kaydı sınıflandırmak için bu belgeye bakma, kaydın **hangi sorgularda göründüğünü ölç** (`beyin.py context "<sorgu>"`). Belgede yazan, belgenin hâlâ yürürlük olduğunu kanıtlamaz.
+5. **Tip yazmak daraltır** — Bir kayda tip yazmak, onu hangi soru ailelerinden çıkaracağını değiştirir. Düzeltmeden önce hem kazanan hem kaybeden aileyi ölç; sadece "belgede böyle yazıyor" diye tip yazma.
+6. **Consolidation stratejisi** — AutoDream-lite consolidation her type için farklı prune/merge kuralları uygular:
    - `episodic`: Eski oturumlar özetlenir, detaylar arşivlenir
    - `semantic`: Çelişkiler çözülür, güncel gerçekler korunur
    - `procedural`: Eskimiş workflow'lar güncellenir, best practice'ler birleştirilir
