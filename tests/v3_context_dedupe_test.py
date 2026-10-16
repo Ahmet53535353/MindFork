@@ -207,6 +207,18 @@ class ContextDedupeHookTest(unittest.TestCase):
         res = self.invoke('UserPromptSubmit', session_id='damaged-session', prompt='why is the GoPlus quota wasted')
         self.assertIn('knowledge/goplus-quota.md', res.get('hookSpecificOutput', {}).get('additionalContext', ''))
 
+    def test_all_duplicate_turn_keeps_the_continuity_anchor(self):
+        # Maintainer change: a turn whose records were all held back still anchors the topic, so a
+        # vague follow-up after compaction can inherit it instead of losing the thread.
+        self.cli('preferences', '--context-dedupe', 'on')
+        from beyin_v3 import MemoryStore
+        from beyin_v3_continuity import _path
+        anchor = _path(MemoryStore(self.state, self.vault), 'claude', 'test-session')
+        self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted')
+        self.assertTrue(anchor.is_file())
+        self.assertEqual(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'), {})
+        self.assertTrue(anchor.is_file(), 'an all-duplicate turn must not erase the topic anchor')
+
     def test_missing_session_id_never_dedupes(self):
         self.cli('preferences', '--context-dedupe', 'on')
         for _ in range(2):

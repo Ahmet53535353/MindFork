@@ -227,6 +227,7 @@ python3 beyin.py preferences --context-dedupe on
 - Bir istemde hiç yeni not kalmazsa kanca boş ek bağlam (`{}`) döner; gereksiz token tüketimi ve dikkat dağınıklığı önlenir.
 - **Sıkıştırma (Compaction):** Model bağlamı sıkıştırdığında (`PreCompact` veya Claude Code `SessionStart` olayında `source: compact`), eski notlar pencereden düştüğü için teslimat defteri otomatik sıfırlanır.
 - `SessionEnd` oturumun teslimat defterini temizler. Dosya diskte düzenlenirse `source_sha256` değiştiği için not yeni sayılır ve tekrar teslim edilir.
+- Tümü tekrar sayılan bir istem süreklilik çapasını (`topic-refs`) silmez; sıkıştırmadan sonra gelen kısa bir devam mesajı konuyu kaybetmez.
 - Defter oturum başına en çok 512 kayıt ve kayıt başına 8 pencere tutar (en eskisi düşer). Her yazımda 24 saatten eski defterler silinir ve en fazla 128 defter tutulur.
 - Ayar, rollback güvenliği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `context-dedupe.json` dosyasında tutulur (varsayılan kapalı). Kapatmak için `--context-dedupe off`.
 

@@ -622,7 +622,10 @@ def main():
                     except Exception:
                         pass
                 try:
-                    remember(store, args.harness, topic_session, query, delivered, inherited=inherited)
+                    # Records held back as already delivered this session still anchor the topic (#363).
+                    remember(store, args.harness, topic_session, query,
+                             dict(delivered, records=list(delivered.get("records", [])) + duplicates) if duplicates else delivered,
+                             inherited=inherited)
                 except (ValueError, OSError):
                     pass
                 if not delivered.get("records"):
