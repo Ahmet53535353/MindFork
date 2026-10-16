@@ -584,7 +584,7 @@ def main():
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
-warning = ''
+            warning = ''
             if pending:
                 # Retrieval read the index the previous sync committed (#365): say so, because
                 # the Markdown files on disk may be newer than what is being recalled.
