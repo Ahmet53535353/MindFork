@@ -307,10 +307,10 @@ class WindowsCaptureModelTest(unittest.TestCase):
         for url in ('http://localhost:3000', 'http://192.168.1.20', 'https://örnek.com', 'file:///C:/secret'):
             self.assertIsNone(yakala.tab_url(url))
 
-    def test_opera_uses_the_omnibox_class_never_generic_edit_fields(self):
+    def test_opera_uses_the_verified_document_reader_never_generic_edit_fields(self):
         with patch.object(yakala, '_windows_read', return_value={'value': None}) as read:
             self.assertIsNone(yakala.windows_browser_url(42, 'opera'))
-        self.assertEqual(read.call_args.args[1]['class'], 'OmniboxViewViews')
+        self.assertEqual(read.call_args.args[0:2], ('opera', {'hwnd': 42}))
 
     def test_legacy_context_must_match_foreground_title(self):
         user = Mock()

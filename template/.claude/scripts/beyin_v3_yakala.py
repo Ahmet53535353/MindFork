@@ -1472,8 +1472,10 @@ def _uia_address_bar(window, class_name):
             ctypes.windll.ole32.CoUninitialize()
 
 
-def _uia_link_at_cursor(window, at=None, limit=4000):
+def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
     """The link under the mouse pointer inside `window` as {'value': href, 'name': text}, else None.
+
+    `root` optionally scopes UIA to a validated renderer child; pointer ownership stays top-level.
 
     A hovered YouTube card plays its preview above the link, so the element at the point is not the
     link itself: every Hyperlink of the window is asked for its bounding rectangle instead and the
@@ -1530,7 +1532,7 @@ def _uia_link_at_cursor(window, at=None, limit=4000):
     try:
         ctypes.oledll.ole32.CoCreateInstance(ctypes.byref(guid('ff48dba4-60ef-4201-aa87-54103eef594e')), None, 1,
                                              ctypes.byref(guid('30cbe57d-d9d0-452a-ab13-7ac5ac4825ee')), ctypes.byref(uia))
-        _com_call(uia, 6, wintypes.HWND(window), ctypes.byref(element), argtypes=(wintypes.HWND, out))  # ElementFromHandle
+        _com_call(uia, 6, wintypes.HWND(root or window), ctypes.byref(element), argtypes=(wintypes.HWND, out))  # ElementFromHandle
         link_type = VARIANT(vt=3, v1=50005)  # VT_I4, UIA_HyperlinkControlTypeId
         _com_call(uia, 23, 30003, link_type, ctypes.byref(condition),  # CreatePropertyCondition, ControlType
                   argtypes=(ctypes.c_int, VARIANT, out))
@@ -1585,6 +1587,166 @@ def _uia_link_at_cursor(window, at=None, limit=4000):
         ctypes.windll.ole32.CoUninitialize()
 
 
+
+def _opera_renderer(window):
+    """One visible renderer owned by this foreground Opera window; ambiguity yields nothing."""
+    import ctypes as C
+    from ctypes import wintypes as W
+    user = C.WinDLL('user32')
+    user.GetForegroundWindow.restype = C.c_void_p
+    user.IsWindow.argtypes, user.IsWindow.restype = [C.c_void_p], W.BOOL
+    user.IsWindowVisible.argtypes, user.IsWindowVisible.restype = [C.c_void_p], W.BOOL
+    user.IsHungAppWindow.argtypes, user.IsHungAppWindow.restype = [C.c_void_p], W.BOOL
+    user.IsChild.argtypes, user.IsChild.restype = [C.c_void_p, C.c_void_p], W.BOOL
+    user.GetAncestor.argtypes, user.GetAncestor.restype = [C.c_void_p, C.c_uint], C.c_void_p
+    user.GetClassNameW.argtypes = [C.c_void_p, C.c_wchar_p, C.c_int]
+    user.GetWindowThreadProcessId.argtypes = [C.c_void_p, C.POINTER(W.DWORD)]
+    if not window or not user.IsWindow(window) or user.GetForegroundWindow() != window or user.IsHungAppWindow(window):
+        return None
+    owner = W.DWORD()
+    if not user.GetWindowThreadProcessId(window, C.byref(owner)) or not owner.value:
+        return None
+    found, invalid = [], []
+    callback_type = C.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+
+    def visit(child, _):
+        if not user.IsWindowVisible(child):
+            return True
+        name = C.create_unicode_buffer(256)
+        user.GetClassNameW(child, name, len(name))
+        if name.value != 'Chrome_RenderWidgetHostHWND':
+            return True
+        pid = W.DWORD()
+        user.GetWindowThreadProcessId(child, C.byref(pid))
+        if not user.IsChild(window, child) or user.GetAncestor(child, 2) != window or pid.value != owner.value:
+            invalid.append(True)
+        else:
+            found.append(int(child))
+        return True
+
+    callback = callback_type(visit)
+    user.EnumChildWindows.argtypes = [W.HWND, callback_type, W.LPARAM]
+    user.EnumChildWindows(window, callback, 0)
+    if invalid or len(found) != 1 or user.GetForegroundWindow() != window:
+        return None
+    return found[0], owner.value
+
+
+
+def _opera_url(value):
+    """Opera's document/link provider must supply an explicit public HTTP(S) URL."""
+    if not isinstance(value, str) or not re.match(r'https?://', value, re.I):
+        return None
+    try:
+        return _safe_source_url(value)
+    except ValueError:
+        return None
+
+
+def _msaa_document(window):
+    """Committed renderer document only: MSAA CHILDID_SELF, never editable address text.
+
+    IAccessible inherits IDispatch: get_accName=10, get_accValue=11,
+    get_accRole=13 and get_accState=14 (Windows SDK oleacc.h).
+    """
+    import ctypes as C
+    import uuid
+    from ctypes import wintypes as W
+
+    class GUID(C.Structure):
+        _fields_ = [('a', C.c_uint32), ('b', C.c_uint16), ('c', C.c_uint16), ('d', C.c_ubyte * 8)]
+
+    class VARIANT(C.Structure):
+        _fields_ = [('vt', C.c_ushort), ('r1', C.c_ushort), ('r2', C.c_ushort), ('r3', C.c_ushort),
+                    ('v1', C.c_void_p), ('v2', C.c_void_p)]
+
+    uid = uuid.UUID('618736e0-3c3d-11cf-810c-00aa00389b71')
+    iid = GUID(uid.time_low, uid.time_mid, uid.time_hi_version, (C.c_ubyte * 8)(*uid.bytes[8:]))
+    out = C.POINTER(C.c_void_p)
+    ole, auto, access = C.windll.ole32, C.windll.oleaut32, C.windll.oleacc
+    ole.CoInitializeEx.argtypes, ole.CoInitializeEx.restype = [C.c_void_p, C.c_ulong], C.c_int32
+    auto.VariantClear.argtypes = [C.c_void_p]
+    auto.SysFreeString.argtypes = [C.c_void_p]
+    access.AccessibleObjectFromWindow.argtypes = [W.HWND, W.DWORD, C.POINTER(GUID), out]
+    access.AccessibleObjectFromWindow.restype = C.c_int32
+    started = ole.CoInitializeEx(None, 0)
+    if started < 0:
+        return {}
+    obj = C.c_void_p()
+    child = VARIANT(vt=3, v1=0)  # VT_I4, CHILDID_SELF
+
+    def integer(slot):
+        value = VARIANT()
+        try:
+            hr = _com_call(obj, slot, child, C.byref(value), argtypes=(VARIANT, C.POINTER(VARIANT)))
+            return int(value.v1 or 0) & 0xffffffff if hr >= 0 and value.vt == 3 else None
+        finally:
+            auto.VariantClear(C.byref(value))
+
+    def text(slot):
+        value = C.c_void_p()
+        try:
+            hr = _com_call(obj, slot, child, C.byref(value), argtypes=(VARIANT, out))
+            return C.wstring_at(value) if hr >= 0 and value else ''
+        finally:
+            if value:
+                auto.SysFreeString(value)
+
+    try:
+        hr = access.AccessibleObjectFromWindow(window, W.DWORD(0xfffffffc), C.byref(iid), C.byref(obj))  # OBJID_CLIENT
+        if hr < 0 or not obj:
+            return {}
+        role, state = integer(13), integer(14)
+        if role != 15 or state is None or state & (0x8000 | 0x10000):  # DOCUMENT; INVISIBLE or OFFSCREEN
+            return {}
+        value = _opera_url(text(11))
+        if not value:
+            return {}
+        return {'value': value, 'name': re.sub(r'\s+', ' ', text(10)).strip()}
+    finally:
+        try:
+            if obj:
+                _com_call(obj, 2)
+        finally:
+            ole.CoUninitialize()
+
+
+def _opera_snapshot(window, at=None):
+    """Page and hovered link from one stable foreground renderer, inside the timed reader."""
+    identity = _opera_renderer(window)
+    if not identity:
+        return {}
+    first = _msaa_document(identity[0])
+    if not first.get('value'):
+        return {}
+    try:
+        hovered = _uia_link_at_cursor(window, at, root=identity[0]) or {}
+        # A same-title navigation can reuse its renderer HWND. Keep a link only when
+        # the provider returns the same link twice, bracketed by stable document reads.
+        if hovered and _uia_link_at_cursor(window, at, root=identity[0]) != hovered:
+            hovered = {}
+    except Exception:
+        hovered = {}
+    second = _msaa_document(identity[0])
+    if second != first or _opera_renderer(window) != identity:
+        return {}
+    result = dict(first)
+    value = _opera_url(hovered.get('value'))
+    if value:
+        result['hover_value'] = value
+        result['hover_name'] = re.sub(r'\s+', ' ', str(hovered.get('name') or '')).strip()
+    return result
+
+
+def _windows_opera_snapshot(window, at=None, timeout=ADDRESS_TIMEOUT, cancel=None):
+    if not window:
+        return {}
+    request = {'hwnd': int(window)}
+    if at is not None:
+        request['at'] = [int(at[0]), int(at[1])]
+    return _windows_read('opera', request, timeout, cancel)
+
+
 def tab_url(value):
     """A Chromium address bar value as a link. Chromium hides the scheme, so a bare host/path gains https://.
 
@@ -1603,7 +1765,7 @@ def tab_url(value):
 
 
 def windows_browser_url(window, app, timeout=ADDRESS_TIMEOUT, cancel=None):
-    """Only an unfocused, stable, explicit address; a fresh helper owns each COM apartment."""
+    """A committed page URL: an unfocused omnibox, or Opera's stable renderer document."""
     name = WIN_CHROMIUM.get((app or '').lower())
     if not name or not window:
         return None
@@ -1615,6 +1777,8 @@ def windows_browser_url(window, app, timeout=ADDRESS_TIMEOUT, cancel=None):
             return None
     except AttributeError:
         pass
+    if (app or '').lower() == 'opera':
+        return _opera_url(_windows_opera_snapshot(window, timeout=timeout, cancel=cancel).get('value'))
     result = _windows_read('uia', {'hwnd': int(window), 'class': name}, timeout, cancel)
     return tab_url(result.get('value'))
 
@@ -1626,11 +1790,15 @@ def windows_hovered_link(window, app, at=None, timeout=ADDRESS_TIMEOUT, cancel=N
     """
     if not WIN_CHROMIUM.get((app or '').lower()) or not window:
         return None, None
-    request = {'hwnd': int(window)}
-    if at is not None:
-        request['at'] = [int(at[0]), int(at[1])]
-    result = _windows_read('uia_link', request, timeout, cancel)
-    url = tab_url(result.get('value'))
+    if (app or '').lower() == 'opera':
+        snapshot = _windows_opera_snapshot(window, at, timeout, cancel)
+        result = {'value': snapshot.get('hover_value'), 'name': snapshot.get('hover_name')}
+    else:
+        request = {'hwnd': int(window)}
+        if at is not None:
+            request['at'] = [int(at[0]), int(at[1])]
+        result = _windows_read('uia_link', request, timeout, cancel)
+    url = (_opera_url if (app or '').lower() == 'opera' else tab_url)(result.get('value'))
     text = re.sub(r'\s+', ' ', str(result.get('name') or '')).strip()
     return (url, text or None) if url else (None, None)
 
@@ -1703,12 +1871,20 @@ def windows_enrich(context, cancel=None):
     if context.get('dosyalar') or not _win_browser(app):
         return context
     title = _win_page_title(context.get('pencere'), app, context.get('profil'))
-    if not context.get('url'):
-        context['url'] = windows_browser_url(hwnd, app, cancel=cancel)
-    try:
-        hovered, hovered_title = windows_hovered_link(hwnd, app, context.get('imlec'), cancel=cancel)
-    except Exception:
-        hovered = hovered_title = None
+    if (app or '').lower() == 'opera':
+        for key in ('url_imlec', 'baslik_imlec', 'baslik'):
+            context.pop(key, None)
+        snapshot = _windows_opera_snapshot(hwnd, context.get('imlec'), cancel=cancel)
+        context['url'] = _opera_url(snapshot.get('value'))
+        hovered = _opera_url(snapshot.get('hover_value'))
+        hovered_title = re.sub(r'\s+', ' ', str(snapshot.get('hover_name') or '')).strip() or None
+    else:
+        if not context.get('url'):
+            context['url'] = windows_browser_url(hwnd, app, cancel=cancel)
+        try:
+            hovered, hovered_title = windows_hovered_link(hwnd, app, context.get('imlec'), cancel=cancel)
+        except Exception:
+            hovered = hovered_title = None
     if hovered and hovered != context.get('url'):
         context['url_imlec'], context['baslik_imlec'] = hovered, hovered_title
     if context.get('url') or context.get('url_imlec'):
@@ -3653,6 +3829,13 @@ def _windows_reader_main(kind):
             if type(hwnd) is not int or hwnd <= 0 or name not in set(WIN_CHROMIUM.values()):
                 raise ValueError('request-uia')
             result = {'value': _uia_address_bar(hwnd, name)}
+        elif kind == 'opera':
+            hwnd, at = request.get('hwnd'), request.get('at')
+            if type(hwnd) is not int or hwnd <= 0:
+                raise ValueError('request-window')
+            if at is not None and not (isinstance(at, list) and len(at) == 2 and all(type(v) is int for v in at)):
+                raise ValueError('request-point')
+            result = _opera_snapshot(hwnd, at)
         elif kind == 'uia_link':
             hwnd = request.get('hwnd')
             if type(hwnd) is not int or hwnd <= 0:
