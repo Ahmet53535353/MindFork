@@ -190,13 +190,11 @@ class KnowledgeDistillationTest(unittest.TestCase):
                 hook_counts = hook._has_knowledge_update(vault, {'refs': []}, 0)
                 self.assertEqual((doctor_counts, hook_counts), (counted, counted))
 
-    def test_stop_hook_receipt_refs_use_the_shared_filter(self):
-        """Receipt refs skip the *.md glob, so the filter alone decides which refs count."""
+    def test_stop_hook_receipt_refs_need_a_recent_file_and_the_shared_filter(self):
+        """A citation alone is not a write; real recent files still use the shared filter."""
         spec = importlib.util.spec_from_file_location('v3_distillation_hook_refs', ROOT / 'template/.claude/scripts/beyin_v3_hook.py')
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
-        empty = Path(self.tmp.name) / 'empty-vault'
-        empty.mkdir()
         cases = {
             'knowledge/concepts/a.md': True,
             '🧠 500-Knowledge/b.md': True,
@@ -205,9 +203,19 @@ class KnowledgeDistillationTest(unittest.TestCase):
             'knowledge/log.md': False,
             '📥 000-Inbox/e.md': False,
         }
-        for ref, counted in cases.items():
+        for index, (ref, counted) in enumerate(cases.items()):
             with self.subTest(ref=ref):
-                self.assertEqual(hook._has_knowledge_update(empty, {'refs': [ref]}, time.time() + 3600), counted)
+                vault = Path(self.tmp.name) / f'ref-vault-{index}'
+                vault.mkdir()
+                receipt = {'refs': [ref]}
+                self.assertFalse(hook._has_knowledge_update(vault, receipt, 20))
+                note = vault / ref
+                note.parent.mkdir(parents=True, exist_ok=True)
+                note.write_text('# Knowledge\n', encoding='utf-8')
+                os.utime(note, (10, 10))
+                self.assertFalse(hook._has_knowledge_update(vault, receipt, 20))
+                os.utime(note, (30, 30))
+                self.assertEqual(hook._has_knowledge_update(vault, receipt, 20), counted)
 
     def test_doctor_renders_unavailable_freshness_as_unmeasured(self):
         text = beyin_entry.human_result(

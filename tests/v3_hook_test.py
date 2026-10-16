@@ -476,6 +476,43 @@ class HookInstallerTest(unittest.TestCase):
         response = self.lifecycle('Stop', sess_name, 'claude')
         self.assertEqual(response, {})
 
+    def test_stop_knowledge_reminder_does_not_accept_untouched_refs(self):
+        engine = self.seed()
+        for harness in ('claude', 'codex'):
+            for index, root in enumerate(('knowledge/concepts', '500-Knowledge', '🧠 500-Knowledge')):
+                with self.subTest(harness=harness, root=root):
+                    name = f'old-knowledge-{harness}-{index}'
+                    relative = f'{root}/{name}.md'
+                    note = self.vault / relative
+                    note.parent.mkdir(parents=True, exist_ok=True)
+                    note.write_text('# Existing knowledge\n', encoding='utf-8')
+                    os.utime(note, (0, 0))
+                    self.lifecycle('PostToolUse', name, harness)
+                    session = hashlib.sha256(name.encode()).hexdigest()[:24]
+                    engine.receipt(name, 'İş tamamlandı.\nÖğrenilen: Yeni bir yöntem.', [relative],
+                                   harness, session=session)
+                    response = self.lifecycle('Stop', name, harness)
+                    self.assertEqual(response.get('decision'), 'block')
+                    self.assertIn('Learnings were reported', response.get('reason', ''))
+                    self.assertEqual(self.lifecycle('Stop', name, harness), {})
+
+    def test_knowledge_update_requires_a_recent_file_not_a_ref_alone(self):
+        receipt = {'refs': ['knowledge/concepts/existing.md']}
+        note = self.vault / receipt['refs'][0]
+        note.parent.mkdir(parents=True)
+        self.assertFalse(self.hook._has_knowledge_update(None, receipt, 20))
+        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
+        note.write_text('# Existing\n', encoding='utf-8')
+        os.utime(note, (10, 10))
+        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
+        note.write_text('# Updated\nNew knowledge.\n', encoding='utf-8')
+        os.utime(note, (30, 30))
+        self.assertTrue(self.hook._has_knowledge_update(self.vault, receipt, 20))
+        # A recent note still counts even when the receipt cites another source.
+        self.assertTrue(self.hook._has_knowledge_update(self.vault, {'refs': ['notes/task.md']}, 20))
+        note.unlink()
+        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
+
     def test_stop_knowledge_reminder_passes_when_learning_is_declared_none(self):
         engine = self.seed()
         def session(name):
