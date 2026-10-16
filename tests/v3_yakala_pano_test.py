@@ -327,10 +327,12 @@ class ImageOfferTest(ScreenshotFiles, unittest.TestCase):
         self.assertFalse(Path(made[0]).exists())
 
     @unittest.skipIf(os.name == 'nt', 'Windows has the reader')
-    def test_other_systems_never_get_an_image(self):
-        self.assertIsNone(yakala._clipboard_payload())
-        self.assertIsNone(yakala.clipboard_image('', {}))
-        self.assertIsNone(yakala.clipboard_image(REPORTED, {}))
+    def test_unsupported_systems_never_get_an_image(self):
+        # Do not inspect a real Linux clipboard while running synthetic tests.
+        with patch.object(yakala.sys, 'platform', 'darwin'):
+            self.assertIsNone(yakala._clipboard_payload())
+            self.assertIsNone(yakala.clipboard_image('', {}))
+            self.assertIsNone(yakala.clipboard_image(REPORTED, {}))
 
     def test_age_words(self):
         self.assertEqual([yakala._ago(seconds) for seconds in (0, 59, 60, 3599, 3600, 172799, 172800)],
@@ -831,7 +833,8 @@ class StandaloneCopyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='v3-yakala-tek-') as folder:
             copy = Path(folder) / 'beyin_v3_yakala.py'
             copy.write_bytes((SCRIPTS / 'beyin_v3_yakala.py').read_bytes())
-            code = ('import beyin_v3_yakala as y, os; '
+            code = ('import beyin_v3_yakala as y, os; from unittest.mock import patch; '
+                    'with_no_helper = patch.object(y, "_which", return_value=None); with_no_helper.start(); '
                     'print(y.png_info(b"") is None, y.clipboard_image("bir not", {}) is None, '
                     'os.name == "nt" or y.clipboard_image("", {}) is None)')
             result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, encoding='utf-8',

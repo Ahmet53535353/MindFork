@@ -77,8 +77,11 @@ kurduktan sonra `yakala durum` ile uyarının kaybolduğunu kontrol et; Yakala'y
 X11'de tam pencere metni kendisi okur; kopyalanan dosyalar ve `kdialog`/`zenity` yolu için `xclip`
 ya da `xsel` gerekir. Panoda tek bir bağlantı varsa bağlantı, dosya
 yöneticisinden kopyalanan dosyalar (`file://` listesi) varsa dosyalar, başka metin varsa metin
-yakalanır. Yalnız görsel kopyalandıysa pano boş sayılır; bu araçlarla okunan metnin en fazla 1 MB'ı
-alınır ve kartta kesildiği yazar.
+yakalanır. Wayland'da yalnız bir PNG görsel kopyalandıysa tam pencerede küçük önizlemesi görünür;
+başlangıçta eklenmez, `Tab` veya karta tıklama ile seçilip PNG dosya kartı olarak kaydedilebilir.
+Metin ya da bağlantı varsa öncelik onlardadır. Görsel okunamıyorsa veya `wl-paste` yoksa mevcut
+metin akışı değişmez. X11 pano görseli bu sürümde desteklenmez. Pano metninin en fazla 1 MB'ı,
+görselin en fazla 64 MB'ı okunur; metin kesilirse kartta belirtilir.
 Kopyalanan dosyaların yakalanması gerçek masaüstünde denenmedi, yalnız birim testleri var.
 
 Tam pencere `tkinter` ister. Arch tabanlı dağıtımlarda Python'un `tk` paketi ayrıdır
