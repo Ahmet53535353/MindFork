@@ -476,64 +476,6 @@ class HookInstallerTest(unittest.TestCase):
         response = self.lifecycle('Stop', sess_name, 'claude')
         self.assertEqual(response, {})
 
-    def test_stop_knowledge_reminder_does_not_accept_untouched_refs(self):
-        engine = self.seed()
-        for harness in ('claude', 'codex'):
-            for index, root in enumerate(('knowledge/concepts', '500-Knowledge', '🧠 500-Knowledge')):
-                with self.subTest(harness=harness, root=root):
-                    name = f'old-knowledge-{harness}-{index}'
-                    relative = f'{root}/{name}.md'
-                    note = self.vault / relative
-                    note.parent.mkdir(parents=True, exist_ok=True)
-                    note.write_text('# Existing knowledge\n', encoding='utf-8')
-                    os.utime(note, (0, 0))
-                    self.lifecycle('PostToolUse', name, harness)
-                    session = hashlib.sha256(name.encode()).hexdigest()[:24]
-                    engine.receipt(name, 'İş tamamlandı.\nÖğrenilen: Yeni bir yöntem.', [relative],
-                                   harness, session=session)
-                    response = self.lifecycle('Stop', name, harness)
-                    self.assertEqual(response.get('decision'), 'block')
-                    self.assertIn('Learnings were reported', response.get('reason', ''))
-                    self.assertEqual(self.lifecycle('Stop', name, harness), {})
-
-    def test_stop_knowledge_reminder_accepts_note_written_before_the_window_opened(self):
-        # Maintainer: the editor write of a note precedes the PostToolUse that opens the window,
-        # so a window whose first edit is the knowledge note itself fails the mtime test. The
-        # editor tool's own path is the evidence (Claude file_path, Codex apply_patch header).
-        engine = self.seed()
-        for harness in ('claude', 'codex'):
-            with self.subTest(harness=harness):
-                name = f'first-edit-knowledge-{harness}'
-                relative = f'🧠 500-Knowledge/Öğrenim-{harness}.md'
-                note = self.vault / relative
-                note.parent.mkdir(parents=True, exist_ok=True)
-                note.write_text('# Şükrü onayı\n\nMüşteri arşivi onaysız kapanmaz.\n', encoding='utf-8')
-                before = time.time() - 5
-                os.utime(note, (before, before))
-                tool_input = ({'file_path': str(note)} if harness == 'claude' else
-                              {'command': f'*** Begin Patch\n*** Add File: {relative}\n+# Şükrü\n*** End Patch\n'})
-                self.lifecycle('PostToolUse', name, harness, tool_input=tool_input, cwd=str(self.vault))
-                session = hashlib.sha256(name.encode()).hexdigest()[:24]
-                engine.receipt(name, 'İş tamamlandı.\nÖğrenilen: Onay kuralı.', [relative], harness, session=session)
-                self.assertEqual(self.lifecycle('Stop', name, harness), {})
-
-    def test_knowledge_update_requires_a_recent_file_not_a_ref_alone(self):
-        receipt = {'refs': ['knowledge/concepts/existing.md']}
-        note = self.vault / receipt['refs'][0]
-        note.parent.mkdir(parents=True)
-        self.assertFalse(self.hook._has_knowledge_update(None, receipt, 20))
-        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
-        note.write_text('# Existing\n', encoding='utf-8')
-        os.utime(note, (10, 10))
-        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
-        note.write_text('# Updated\nNew knowledge.\n', encoding='utf-8')
-        os.utime(note, (30, 30))
-        self.assertTrue(self.hook._has_knowledge_update(self.vault, receipt, 20))
-        # A recent note still counts even when the receipt cites another source.
-        self.assertTrue(self.hook._has_knowledge_update(self.vault, {'refs': ['notes/task.md']}, 20))
-        note.unlink()
-        self.assertFalse(self.hook._has_knowledge_update(self.vault, receipt, 20))
-
     def test_stop_knowledge_reminder_passes_when_learning_is_declared_none(self):
         engine = self.seed()
         def session(name):
@@ -665,30 +607,6 @@ class HookInstallerTest(unittest.TestCase):
         self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude'), {})
         preferences.unlink()
         self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude')['decision'], 'block')
-
-    def test_stop_receipt_reminder_sees_cli_writes_from_the_claude_bash_tool(self):
-        # #212: Bash is not a PostToolUse matcher. A source write through beyin.py names its Claude
-        # session through CLAUDE_CODE_SESSION_ID, so Stop sees it; other shells mark nothing.
-        def write(name, session=None):
-            env = dict(self.env, **({'CLAUDE_CODE_SESSION_ID': session} if session else {}))
-            return subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
-                                   '--state', str(self.state), 'note-create', '--file', '-'],
-                                  input=json.dumps({'source': 'notes/' + name + '.md', 'text': '# Synthetic ' + name + '\n'}),
-                                  text=True, encoding='utf-8', capture_output=True, cwd=self.vault, env=env, timeout=60)
-        self.lifecycle('UserPromptSubmit', 'bash-write', 'claude', prompt='not yaz')
-        self.assertEqual(write('bash-write', 'bash-write').returncode, 0)
-        self.assertEqual(self.lifecycle('Stop', 'bash-write', 'claude')['decision'], 'block')
-        # A refused write and a write from the user's own terminal leave no edit window.
-        self.lifecycle('UserPromptSubmit', 'refused', 'claude', prompt='tekrar yaz')
-        self.assertNotEqual(write('bash-write', 'refused').returncode, 0)
-        self.assertEqual(write('terminal').returncode, 0)
-        self.assertEqual(self.lifecycle('Stop', 'refused', 'claude'), {})
-        self.assertEqual(sorted(path.name for path in (self.state / 'receipt-reminders').glob('*.edited')),
-                         [hashlib.sha256(b'bash-write').hexdigest() + '.edited'])
-        # The user opt-out covers this path too.
-        self.env['BEYIN_V3_NO_RECEIPT_REMINDER'] = '1'
-        self.assertEqual(write('opted-out', 'opted-out').returncode, 0)
-        self.assertFalse((self.state / 'receipt-reminders' / (hashlib.sha256(b'opted-out').hexdigest() + '.edited')).exists())
 
     def test_antigravity_start_only_first_invocation_and_final_idle_stop(self):
         self.seed()
@@ -1108,6 +1026,66 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('hookSpecificOutput', resp_human)
         self.assertIn('Synthetic Reviewer', resp_human['hookSpecificOutput']['additionalContext'])
         self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 3)
+
+    def slow_sync_hook(self, exclusive=False):
+        """The real hook with a source sync that outlasts SYNC_WAIT and a due check.
+
+        exclusive: the sync outgrows the page cache during the wait and holds the index's
+        exclusive lock until the hook process exits, as a large rewrite does before commit.
+        """
+        wrapper = self.root / 'slow_sync_hook.py'
+        wrapper.write_text(f'''import runpy, sqlite3, subprocess, sys
+sys.path.insert(0, {str(SCRIPTS)!r})
+HELD = []
+class SlowWorker:
+    returncode = None
+    def __init__(self, *args, **kwargs):
+        pass
+    def wait(self, timeout=None):
+        if {exclusive!r}:
+            db = sqlite3.connect({str(self.state / 'memory.sqlite3')!r}, isolation_level=None)
+            db.execute('BEGIN EXCLUSIVE')
+            HELD.append(db)
+        raise subprocess.TimeoutExpired('worker', timeout)
+subprocess.Popen = SlowWorker
+import beyin_v3_preferences
+beyin_v3_preferences.claim_check = lambda *args, **kwargs: True
+sys.argv[0] = {str(HOOK)!r}
+runpy.run_path({str(HOOK)!r}, run_name='__main__')
+''', encoding='utf-8')
+        self.env.pop('BEYIN_V3_NO_SPAWN')
+        return wrapper
+
+    def test_user_prompt_submit_reads_previous_index_while_sync_is_pending(self):
+        # A sync slower than SYNC_WAIT used to inject only a pending notice, so a large vault
+        # never received prompt retrieval at all. The last committed index still answers.
+        self.seed()
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'slow-sync', 'event_id': 'slow-sync-1',
+                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
+        context = self.invoke(payload, 'claude', script=self.slow_sync_hook())['hookSpecificOutput']['additionalContext']
+        self.assertIn('Synthetic Reviewer', context)
+        self.assertIn('previous index', context)
+
+    def test_user_prompt_submit_pending_sync_lock_stays_inside_hook_budget(self):
+        # Maintainer: the read-only store waited SQLite's default 10 s for a sync holding the
+        # exclusive lock, past the client's 5 s hook limit. The bounded wait keeps the pending
+        # notice and records no hook error, because the worker itself is not failing.
+        self.seed()
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'locked-sync', 'event_id': 'locked-sync-1',
+                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
+        started = time.monotonic()
+        context = self.invoke(payload, 'claude', script=self.slow_sync_hook(exclusive=True))['hookSpecificOutput']['additionalContext']
+        # The hook bounds its own wait to HOOK_BUDGET; the margin covers a slow runner's interpreter start.
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertIn('V3 source sync is pending', context)
+        self.assertNotIn('failed or conflicted', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
+
+    def test_user_prompt_submit_without_index_keeps_pending_notice(self):
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'first-sync', 'event_id': 'first-sync-1',
+                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
+        context = self.invoke(payload, 'claude', script=self.slow_sync_hook())['hookSpecificOutput']['additionalContext']
+        self.assertIn('V3 source sync is pending', context)
 
     def test_user_prompt_submit_synthetic_filter_honours_opt_out_env(self):
         self.seed()

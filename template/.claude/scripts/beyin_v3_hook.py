@@ -566,7 +566,20 @@ def main():
             # markdown_sources table, which the sync worker creates and every reader tolerates
             # missing, so the foreground skips importing the sync engine.
             from beyin_v3 import MemoryStore
-            store = MemoryStore(state, vault)
+            if pending:
+                # A sync slower than SYNC_WAIT keeps running in the background. Retrieval reads the
+                # index the previous sync committed, read-only so it never contends for the
+                # worker's write lock; only a store that does not exist yet injects nothing.
+                # A sync that outgrows SQLite's page cache holds the exclusive lock until it commits;
+                # waiting the store's default 10 s would outlive the client's 5 s hook limit.
+                try:
+                    store = MemoryStore(state, vault, read_only=True,
+                                        busy_timeout=max(0.1, HOOK_BUDGET - 1.0 - (time.monotonic() - started)))
+                except ValueError:
+                    print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+                    return
+            else:
+                store = MemoryStore(state, vault)
             query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
@@ -654,6 +667,11 @@ def main():
         else:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}")))
     except Exception as exc:
+        if locals().get("pending") is True and type(exc).__module__ == "sqlite3":
+            # The previous index stayed locked by the running sync past the hook budget: the
+            # worker is not failing, so keep the pending notice and record no hook error.
+            print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+            return
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if not args.metadata_only and locals().get("event") in ("SessionStart", "UserPromptSubmit"):
             print(json.dumps(output_context(args.harness, event, notice + "V3 source sync failed or conflicted; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))
