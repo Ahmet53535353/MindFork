@@ -215,11 +215,10 @@ def _has_declared_learning(summary):
 
 
 def _has_knowledge_update(vault, receipt, since):
+    """A knowledge ref is a citation, not evidence of a write in this edit window."""
     if not receipt:
         return False
     from beyin_v3_projections import DISTILLATION_ROOTS, is_distilled_note
-    if any(isinstance(ref, str) and is_distilled_note(ref) for ref in receipt.get("refs", [])):
-        return True
     if not vault:
         return False
     for root in DISTILLATION_ROOTS:
@@ -233,6 +232,26 @@ def _has_knowledge_update(vault, receipt, since):
                     return True
             except (ValueError, OSError):
                 continue
+    return False
+
+
+def _edits_knowledge(vault, payload):
+    """True when this PostToolUse wrote a distilled note through an editor tool.
+
+    The note's own mtime precedes the hook that opens the edit window, so a window whose
+    first edit is the knowledge note keeps that evidence here instead of in the mtime scan.
+    """
+    from beyin_v3_hygiene import edited_paths
+    from beyin_v3_projections import is_distilled_note
+    root = Path(vault).resolve()
+    for path in edited_paths(payload):
+        try:
+            if path.is_symlink():
+                continue
+            if is_distilled_note(path.resolve().relative_to(root).as_posix()):
+                return True
+        except (ValueError, OSError):
+            continue
     return False
 
 
@@ -269,10 +288,15 @@ def receipt_reminder(payload, state, harness, event, vault=None):
         if event == "PostToolUse":
             if not edited.exists():
                 atomic(edited, {"at": time.time()})
+            if vault is not None and _edits_knowledge(vault, payload):
+                marker = json.loads(edited.read_text(encoding="utf-8"))
+                if marker.get("knowledge") is not True:
+                    atomic(edited, dict(marker, knowledge=True))
             return None
         if payload.get("stop_hook_active") is True or not edited.exists():
             return None
-        since = float(json.loads(edited.read_text(encoding="utf-8"))["at"])
+        marker = json.loads(edited.read_text(encoding="utf-8"))
+        since = float(marker["at"])
         session = digest[:24]  # the queued checkpoint's session value
         db_path = Path(state) / "memory.sqlite3"
         receipt = _get_session_receipt(db_path, harness, session, since)
@@ -287,7 +311,8 @@ def receipt_reminder(payload, state, harness, event, vault=None):
             return None
 
         # Receipt exists! Check if receipt declared learning but knowledge/ was not updated.
-        if not kdone.exists() and _has_declared_learning(receipt.get("summary", "")) and not _has_knowledge_update(vault, receipt, since):
+        if (not kdone.exists() and _has_declared_learning(receipt.get("summary", "")) and
+                marker.get("knowledge") is not True and not _has_knowledge_update(vault, receipt, since)):
             folder.mkdir(parents=True, exist_ok=True)
             try:
                 with kdone.open("x", encoding="utf-8"):
