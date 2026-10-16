@@ -608,6 +608,30 @@ class HookInstallerTest(unittest.TestCase):
         preferences.unlink()
         self.assertEqual(self.lifecycle('Stop', 'quiet', 'claude')['decision'], 'block')
 
+    def test_stop_receipt_reminder_sees_cli_writes_from_the_claude_bash_tool(self):
+        # #212: Bash is not a PostToolUse matcher. A source write through beyin.py names its Claude
+        # session through CLAUDE_CODE_SESSION_ID, so Stop sees it; other shells mark nothing.
+        def write(name, session=None):
+            env = dict(self.env, **({'CLAUDE_CODE_SESSION_ID': session} if session else {}))
+            return subprocess.run([sys.executable, str(ROOT / 'scripts/beyin_v3.py'), '--vault', str(self.vault),
+                                   '--state', str(self.state), 'note-create', '--file', '-'],
+                                  input=json.dumps({'source': 'notes/' + name + '.md', 'text': '# Synthetic ' + name + '\n'}),
+                                  text=True, encoding='utf-8', capture_output=True, cwd=self.vault, env=env, timeout=60)
+        self.lifecycle('UserPromptSubmit', 'bash-write', 'claude', prompt='not yaz')
+        self.assertEqual(write('bash-write', 'bash-write').returncode, 0)
+        self.assertEqual(self.lifecycle('Stop', 'bash-write', 'claude')['decision'], 'block')
+        # A refused write and a write from the user's own terminal leave no edit window.
+        self.lifecycle('UserPromptSubmit', 'refused', 'claude', prompt='tekrar yaz')
+        self.assertNotEqual(write('bash-write', 'refused').returncode, 0)
+        self.assertEqual(write('terminal').returncode, 0)
+        self.assertEqual(self.lifecycle('Stop', 'refused', 'claude'), {})
+        self.assertEqual(sorted(path.name for path in (self.state / 'receipt-reminders').glob('*.edited')),
+                         [hashlib.sha256(b'bash-write').hexdigest() + '.edited'])
+        # The user opt-out covers this path too.
+        self.env['BEYIN_V3_NO_RECEIPT_REMINDER'] = '1'
+        self.assertEqual(write('opted-out', 'opted-out').returncode, 0)
+        self.assertFalse((self.state / 'receipt-reminders' / (hashlib.sha256(b'opted-out').hexdigest() + '.edited')).exists())
+
     def test_antigravity_start_only_first_invocation_and_final_idle_stop(self):
         self.seed()
         payload = {'hook_event_name': 'PreInvocation', 'conversationId': 'synthetic-agy',
