@@ -15,6 +15,7 @@ import uuid
 
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
+SYNC_WAIT = 1.5  # seconds the prompt hook waits for the source sync before reading the last index
 RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
     'python3 beyin.py receipt --harness {harness} --session {session} --event-id EVENT_ID --summary "Work result" --ref PATH. '
@@ -214,11 +215,10 @@ def _has_declared_learning(summary):
 
 
 def _has_knowledge_update(vault, receipt, since):
+    """A knowledge ref is a citation, not evidence of a write in this edit window."""
     if not receipt:
         return False
     from beyin_v3_projections import DISTILLATION_ROOTS, is_distilled_note
-    if any(isinstance(ref, str) and is_distilled_note(ref) for ref in receipt.get("refs", [])):
-        return True
     if not vault:
         return False
     for root in DISTILLATION_ROOTS:
@@ -232,6 +232,26 @@ def _has_knowledge_update(vault, receipt, since):
                     return True
             except (ValueError, OSError):
                 continue
+    return False
+
+
+def _edits_knowledge(vault, payload):
+    """True when this PostToolUse wrote a distilled note through an editor tool.
+
+    The note's own mtime precedes the hook that opens the edit window, so a window whose
+    first edit is the knowledge note keeps that evidence here instead of in the mtime scan.
+    """
+    from beyin_v3_hygiene import edited_paths
+    from beyin_v3_projections import is_distilled_note
+    root = Path(vault).resolve()
+    for path in edited_paths(payload):
+        try:
+            if path.is_symlink():
+                continue
+            if is_distilled_note(path.resolve().relative_to(root).as_posix()):
+                return True
+        except (ValueError, OSError):
+            continue
     return False
 
 
@@ -268,10 +288,15 @@ def receipt_reminder(payload, state, harness, event, vault=None):
         if event == "PostToolUse":
             if not edited.exists():
                 atomic(edited, {"at": time.time()})
+            if vault is not None and _edits_knowledge(vault, payload):
+                marker = json.loads(edited.read_text(encoding="utf-8"))
+                if marker.get("knowledge") is not True:
+                    atomic(edited, dict(marker, knowledge=True))
             return None
         if payload.get("stop_hook_active") is True or not edited.exists():
             return None
-        since = float(json.loads(edited.read_text(encoding="utf-8"))["at"])
+        marker = json.loads(edited.read_text(encoding="utf-8"))
+        since = float(marker["at"])
         session = digest[:24]  # the queued checkpoint's session value
         db_path = Path(state) / "memory.sqlite3"
         receipt = _get_session_receipt(db_path, harness, session, since)
@@ -286,7 +311,8 @@ def receipt_reminder(payload, state, harness, event, vault=None):
             return None
 
         # Receipt exists! Check if receipt declared learning but knowledge/ was not updated.
-        if not kdone.exists() and _has_declared_learning(receipt.get("summary", "")) and not _has_knowledge_update(vault, receipt, since):
+        if (not kdone.exists() and _has_declared_learning(receipt.get("summary", "")) and
+                marker.get("knowledge") is not True and not _has_knowledge_update(vault, receipt, since)):
             folder.mkdir(parents=True, exist_ok=True)
             try:
                 with kdone.open("x", encoding="utf-8"):
@@ -522,24 +548,38 @@ def main():
             if not due and not disabled:
                 print(json.dumps(output_context(args.harness, event, notice + 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
                 return
+            pending = False
             try:
                 if process is not None:
-                    process.wait(timeout=1.5)
+                    process.wait(timeout=SYNC_WAIT)
             except subprocess.TimeoutExpired:
-                print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
-                return
-            if process is not None and process.returncode:
+                pending = True
+            if process is not None and not pending and process.returncode:
                 raise RuntimeError("Source sync failed; metadata remains queued")
             # Context only reads the store. SyncEngine adds the Markdown journal and the
             # markdown_sources table, which the sync worker creates and every reader tolerates
             # missing, so the foreground skips importing the sync engine.
             from beyin_v3 import MemoryStore
-            store = MemoryStore(state, vault)
+            if pending:
+                # A sync slower than SYNC_WAIT keeps running in the background. Retrieval reads the
+                # index the previous sync committed, read-only so it never contends for the
+                # worker's write lock; only a store that does not exist yet injects nothing.
+                # A sync that outgrows SQLite's page cache holds the exclusive lock until it commits;
+                # waiting the store's default 10 s would outlive the client's 5 s hook limit.
+                try:
+                    store = MemoryStore(state, vault, read_only=True,
+                                        busy_timeout=max(0.1, HOOK_BUDGET - 1.0 - (time.monotonic() - started)))
+                except ValueError:
+                    print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+                    return
+            else:
+                store = MemoryStore(state, vault)
             query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
             session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
-            warning = ''
+            warning = ('V3 source sync is still running; this context comes from the previous index. '
+                       'Verify current Markdown sources before relying on it.\n') if pending else ''
             health = state / "hook-health.json"
             if health.exists():
                 sync = json.loads(health.read_text(encoding="utf-8")).get("sync", {})
@@ -613,6 +653,11 @@ def main():
         else:
             print(json.dumps(reminder) if reminder else (json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == "antigravity" else "{}")))
     except Exception as exc:
+        if locals().get("pending") is True and type(exc).__module__ == "sqlite3":
+            # The previous index stayed locked by the running sync past the hook budget: the
+            # worker is not failing, so keep the pending notice and record no hook error.
+            print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+            return
         atomic(state / "hook-error.json", {"at": time.time(), "error": type(exc).__name__})
         if not args.metadata_only and locals().get("event") in ("SessionStart", "UserPromptSubmit"):
             print(json.dumps(output_context(args.harness, event, notice + "V3 source sync failed or conflicted; metadata remains queued. Run the local CLI doctor and verify current Markdown sources.")))

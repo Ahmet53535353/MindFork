@@ -243,8 +243,9 @@ makes no model call, writes nothing and does not change the doctor status.
 
 Hooks enqueue only event metadata, never raw prompts or transcripts. They start
 an opportunistic detached Python worker. Startup waits at most 1.5 seconds for
-source synchronization before context; a slow sync reports pending instead of
-presenting stale context as fresh. Stop and edit hooks return promptly. If a
+source synchronization before context; a slower sync keeps running and the turn
+reads the previous index, labeled as such, never as fresh context. Before the
+first index exists the hook reports pending only. Stop and edit hooks return promptly. If a
 worker fails, metadata stays queued and the next event retries. Explicit repeated
 `event_id` values deduplicate queue acknowledgement; client events without an ID
 receive new local IDs. This is not a blanket exactly-once transport guarantee. There is no
