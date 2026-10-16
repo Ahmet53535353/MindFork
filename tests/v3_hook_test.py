@@ -1027,16 +1027,25 @@ class HookInstallerTest(unittest.TestCase):
         self.assertIn('Synthetic Reviewer', resp_human['hookSpecificOutput']['additionalContext'])
         self.assertEqual(len(list((self.state / 'hook-queue').glob('*.json'))), before + 3)
 
-    def slow_sync_hook(self):
-        """The real hook with a source sync that outlasts SYNC_WAIT and a due check."""
+    def slow_sync_hook(self, exclusive=False):
+        """The real hook with a source sync that outlasts SYNC_WAIT and a due check.
+
+        exclusive: the sync outgrows the page cache during the wait and holds the index's
+        exclusive lock until the hook process exits, as a large rewrite does before commit.
+        """
         wrapper = self.root / 'slow_sync_hook.py'
-        wrapper.write_text(f'''import runpy, subprocess, sys
+        wrapper.write_text(f'''import runpy, sqlite3, subprocess, sys
 sys.path.insert(0, {str(SCRIPTS)!r})
+HELD = []
 class SlowWorker:
     returncode = None
     def __init__(self, *args, **kwargs):
         pass
     def wait(self, timeout=None):
+        if {exclusive!r}:
+            db = sqlite3.connect({str(self.state / 'memory.sqlite3')!r}, isolation_level=None)
+            db.execute('BEGIN EXCLUSIVE')
+            HELD.append(db)
         raise subprocess.TimeoutExpired('worker', timeout)
 subprocess.Popen = SlowWorker
 import beyin_v3_preferences
@@ -1056,6 +1065,21 @@ runpy.run_path({str(HOOK)!r}, run_name='__main__')
         context = self.invoke(payload, 'claude', script=self.slow_sync_hook())['hookSpecificOutput']['additionalContext']
         self.assertIn('Synthetic Reviewer', context)
         self.assertIn('previous index', context)
+
+    def test_user_prompt_submit_pending_sync_lock_stays_inside_hook_budget(self):
+        # Maintainer: the read-only store waited SQLite's default 10 s for a sync holding the
+        # exclusive lock, past the client's 5 s hook limit. The bounded wait keeps the pending
+        # notice and records no hook error, because the worker itself is not failing.
+        self.seed()
+        payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'locked-sync', 'event_id': 'locked-sync-1',
+                   'cwd': str(self.vault), 'prompt': 'Nebula calibration owner'}
+        started = time.monotonic()
+        context = self.invoke(payload, 'claude', script=self.slow_sync_hook(exclusive=True))['hookSpecificOutput']['additionalContext']
+        # The hook bounds its own wait to HOOK_BUDGET; the margin covers a slow runner's interpreter start.
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertIn('V3 source sync is pending', context)
+        self.assertNotIn('failed or conflicted', context)
+        self.assertFalse((self.state / 'hook-error.json').exists())
 
     def test_user_prompt_submit_without_index_keeps_pending_notice(self):
         payload = {'hook_event_name': 'UserPromptSubmit', 'session_id': 'first-sync', 'event_id': 'first-sync-1',

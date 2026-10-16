@@ -572,8 +572,11 @@ def _path_redirected(path):
 
 
 class MemoryStore:
-    def __init__(self, state_dir, vault_root, read_only=False):
+    def __init__(self, state_dir, vault_root, read_only=False, busy_timeout=10):
         self.read_only = bool(read_only)
+        # Seconds a connection waits for another process's write lock. A hook reading
+        # while the sync worker commits passes its remaining budget instead of the default.
+        self.busy_timeout = float(busy_timeout)
         self.vault_root = Path(vault_root).expanduser().resolve()
         if not self.vault_root.is_dir():
             raise ValueError("vault_root must be an existing directory")
@@ -624,10 +627,10 @@ class MemoryStore:
     @contextmanager
     def _connect(self):
         if self.read_only:
-            db = sqlite3.connect(self.database.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+            db = sqlite3.connect(self.database.resolve().as_uri() + "?mode=ro", uri=True, timeout=self.busy_timeout)
             db.execute("PRAGMA query_only=ON")
         else:
-            db = sqlite3.connect(self.database, timeout=10)
+            db = sqlite3.connect(self.database, timeout=self.busy_timeout)
         try:
             with db:
                 yield db
