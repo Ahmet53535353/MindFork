@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from v3_package_helpers import isolated_path
@@ -205,6 +206,82 @@ class ContextDedupeHookTest(unittest.TestCase):
         # Hook must fail open and deliver context normally without crashing
         res = self.invoke('UserPromptSubmit', session_id='damaged-session', prompt='why is the GoPlus quota wasted')
         self.assertIn('knowledge/goplus-quota.md', res.get('hookSpecificOutput', {}).get('additionalContext', ''))
+
+    def test_missing_session_id_never_dedupes(self):
+        self.cli('preferences', '--context-dedupe', 'on')
+        for _ in range(2):
+            res = self.invoke('UserPromptSubmit', session_id='unknown', prompt='why is the GoPlus quota wasted')
+            self.assertIn('knowledge/goplus-quota.md', res.get('hookSpecificOutput', {}).get('additionalContext', ''))
+        self.assertFalse((self.state / 'session-delivery').exists())
+
+
+class DedupeLedgerTest(unittest.TestCase):
+    """Maintainer contracts for the ledger itself: excerpts, size cap and pruning."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='v3-dedupe-ledger-')
+        self.addCleanup(self.tmp.cleanup)
+        self.state = Path(self.tmp.name)
+        sys.path.insert(0, str(SCRIPTS))
+        self.addCleanup(lambda: sys.path.remove(str(SCRIPTS)))
+        import beyin_v3_dedupe
+        self.dedupe = beyin_v3_dedupe
+        self.dedupe.save_settings(self.state, True)
+
+    @staticmethod
+    def record(rid, text='x' * 40, sha='a' * 64):
+        return {'id': rid, 'source_sha256': sha, 'text': text, 'source': 'knowledge/%s.md' % rid}
+
+    def test_another_window_of_a_seen_note_is_still_delivered(self):
+        # Turn context is passage based (#83): one id answers different prompts with different windows.
+        d = self.dedupe
+        first = 'Heading\n\n' + 'alpha section ' * 40
+        other = 'Heading\n\n' + 'omega section ' * 40
+        d.record_delivered(self.state, 'claude', 's', [self.record('a', first)])
+        novel, dup = d.filter_novel(self.state, 'claude', 's', [self.record('a', other)])
+        self.assertEqual([r['id'] for r in novel], ['a'])
+        clipped = first[:200] + ' [truncated]'
+        novel, dup = d.filter_novel(self.state, 'claude', 's', [self.record('a', clipped)])
+        self.assertEqual(novel, [], 'the same window clipped shorter is still a repeat')
+        d.record_delivered(self.state, 'claude', 's', [self.record('a', other)])
+        self.assertEqual(d.filter_novel(self.state, 'claude', 's', [self.record('a', first)])[0], [])
+        self.assertEqual(d.filter_novel(self.state, 'claude', 's', [self.record('a', other)])[0], [])
+
+    def test_held_back_records_return_their_budget_to_the_new_ones(self):
+        from beyin_v3 import pack_context, render_context
+        d = self.dedupe
+        old, new = self.record('a', 'old note ' * 300), self.record('b', 'new note ' * 300)
+        d.record_delivered(self.state, 'claude', 's', [old])
+        context = pack_context([old, new], 5, 2400)
+        clipped = next(r for r in context['records'] if r['id'] == 'b')
+        kept, dup = d.drop_delivered(self.state, 'claude', 's', context)
+        self.assertEqual([r['id'] for r in dup], ['a'])
+        _text, delivered = render_context(kept, 2400)
+        self.assertEqual([r['id'] for r in delivered['records']], ['b'])
+        self.assertGreater(len(delivered['records'][0]['text']), len(clipped['text']),
+                           'the new record is repacked from its original, not from the earlier clip')
+
+    def test_ledger_is_capped_below_the_read_limit(self):
+        d = self.dedupe
+        many = [self.record('md-%04d-%s' % (i, 'q' * 24)) for i in range(d.MAX_RECORDS + 200)]
+        d.record_delivered(self.state, 'claude', 's', many)
+        path = d._session_file(self.state, 'claude', 's')
+        self.assertLess(path.stat().st_size, d.MAX_FILE_BYTES)
+        stored = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(len(stored['records']), d.MAX_RECORDS)
+        self.assertNotIn('session', stored, 'the raw session id is not stored')
+        self.assertEqual(d.filter_novel(self.state, 'claude', 's', [many[-1]])[0], [])
+        self.assertEqual(d.filter_novel(self.state, 'claude', 's', [many[0]])[0], [many[0]])
+
+    def test_old_session_ledgers_are_pruned_on_write(self):
+        d = self.dedupe
+        d.record_delivered(self.state, 'claude', 'old', [self.record('a')])
+        old = d._session_file(self.state, 'claude', 'old')
+        stale = time.time() - d.MAX_AGE_SECONDS - 60
+        os.utime(old, (stale, stale))
+        d.record_delivered(self.state, 'claude', 'new', [self.record('a')])
+        self.assertFalse(old.exists())
+        self.assertTrue(d._session_file(self.state, 'claude', 'new').is_file())
 
 
 if __name__ == '__main__':

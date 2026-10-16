@@ -1,10 +1,18 @@
 """Session-scoped context deduplication (#363): prevent re-injecting already delivered records.
 
 Each session tracks delivered records under `<state>/session-delivery/`, named by the hash
-of harness and session id. The file holds only `{version, harness, session, at, records: {id: source_sha256}}`.
-A record is considered a duplicate only if both its id and its source_sha256 match a previously delivered
-record in the active session. If the source file was edited on disk, its sha256 changes and the note
-is treated as novel and delivered.
+of harness and session id. The file holds only `{version, harness, at, records: {id: {sha, windows}}}`;
+the raw session id is not stored. A record is a duplicate only if its id, its source_sha256 and its
+text window match a delivery earlier in the active session. If the source file was edited on disk, its
+sha256 changes and the note is delivered again.
+
+Turn context is passage based (#83): one long note answers different prompts with different windows
+under the same id and sha. A window is keyed by the hash of its first WINDOW_PREFIX characters, which
+budget clipping never touches (the smallest excerpt keeps 150), so another section of a note already
+seen is still delivered while the same window, clipped or not, is held back.
+The ledger keeps at most MAX_RECORDS ids and MAX_WINDOWS windows per id (oldest dropped first), so it
+never outgrows MAX_FILE_BYTES and silently resets; session files older than MAX_AGE_SECONDS are pruned
+on write.
 
 The toggle lives in `<state>/context-dedupe.json` (default off), never in `.beyin-preferences.json`:
 an older release rejects unknown preference keys, so a rollback would break its doctor and hooks.
@@ -22,7 +30,10 @@ SETTINGS_FILE = 'context-dedupe.json'
 DELIVERY_DIR = 'session-delivery'
 MAX_SESSIONS = 128
 MAX_AGE_SECONDS = 24 * 3600
-MAX_FILE_BYTES = 65536
+MAX_FILE_BYTES = 262144
+MAX_RECORDS = 512    # ~140 bytes per id with one window: far below MAX_FILE_BYTES
+MAX_WINDOWS = 8      # windows remembered per id
+WINDOW_PREFIX = 150  # beyin_v3.MIN_CONTEXT_TEXT: clipping keeps at least this much of a window
 
 
 def _session_file(state, harness, session, create=False):
@@ -87,6 +98,12 @@ def is_enabled(state):
     return enabled
 
 
+def _window(record):
+    text = record.get('text')
+    text = text if isinstance(text, str) else ''
+    return hashlib.sha256(text[:WINDOW_PREFIX].encode('utf-8')).hexdigest()[:16]
+
+
 def _read_ledger(path, now=None):
     try:
         if path is None or not path.is_file() or path.is_symlink() or path.stat().st_size > MAX_FILE_BYTES:
@@ -101,7 +118,9 @@ def _read_ledger(path, now=None):
         records = value.get('records')
         if not isinstance(records, dict):
             return {}
-        return records
+        return {rid: entry for rid, entry in records.items()
+                if isinstance(entry, dict) and isinstance(entry.get('sha'), str)
+                and isinstance(entry.get('windows'), list)}
     except (OSError, ValueError):
         return {}
 
@@ -129,11 +148,32 @@ def filter_novel(state, harness, session, records, now=None):
             continue
         rid = r.get('id')
         sha = r.get('source_sha256')
-        if rid and sha and delivered.get(rid) == sha:
+        entry = delivered.get(rid) if rid and sha else None
+        if entry is not None and entry['sha'] == sha and _window(r) in entry['windows']:
             duplicates.append(r)
         else:
             novel.append(r)
     return novel, duplicates
+
+
+def drop_delivered(state, harness, session, context, now=None):
+    """Return (context without held-back records, duplicates).
+
+    The returned context keeps the same type and its unclipped `sources` for the kept records
+    (beyin_v3.PackedContext), so render_context repacks them from the originals and hands the
+    budget of the held-back records to the new ones instead of re-clipping earlier clips.
+    """
+    records = list(context.get('records') or [])
+    novel, duplicates = filter_novel(state, harness, session, records, now=now)
+    if not duplicates:
+        return context, []
+    kept = type(context)(context)
+    kept['records'] = novel
+    sources = getattr(context, 'sources', ())
+    if len(sources) == len(records):
+        held = {id(r) for r in duplicates}
+        kept.sources = tuple(s for s, r in zip(sources, records) if id(r) not in held)
+    return kept, duplicates
 
 
 def record_delivered(state, harness, session, records, now=None):
@@ -147,24 +187,43 @@ def record_delivered(state, harness, session, records, now=None):
     if path is None:
         return
     existing = _read_ledger(path, now=now)
-    updates = {r['id']: r['source_sha256'] for r in records
-               if isinstance(r, dict) and r.get('id') and r.get('source_sha256')}
-    if not updates:
+    changed = False
+    for r in records:
+        if not (isinstance(r, dict) and r.get('id') and isinstance(r.get('source_sha256'), str)):
+            continue
+        before = existing.pop(r['id'], None)  # re-insert: the dict order is the drop order
+        windows = before['windows'] if before is not None and before['sha'] == r['source_sha256'] else []
+        window = _window(r)
+        windows = ([w for w in windows if w != window] + [window])[-MAX_WINDOWS:]
+        existing[r['id']] = {'sha': r['source_sha256'], 'windows': windows}
+        changed = True
+    if not changed:
         return
-    existing.update(updates)
+    for rid in list(existing)[:max(0, len(existing) - MAX_RECORDS)]:
+        del existing[rid]
     payload = {
         'version': 1,
         'harness': harness,
-        'session': session,
         'at': now,
         'records': existing,
     }
     temporary = None
     try:
         parent = path.parent
-        files = sorted((p for p in parent.glob('*.json') if not p.is_symlink() and p != path),
-                       key=lambda p: p.stat().st_mtime, reverse=True)
-        for candidate in files[MAX_SESSIONS - 1:]:
+        files = []
+        for candidate in parent.glob('*.json'):
+            if candidate.is_symlink() or candidate == path:
+                continue
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue  # another hook removed it meanwhile
+            if now - mtime >= MAX_AGE_SECONDS:
+                candidate.unlink(missing_ok=True)
+            else:
+                files.append((mtime, candidate))
+        files.sort(key=lambda item: item[0], reverse=True)
+        for _, candidate in files[MAX_SESSIONS - 1:]:
             candidate.unlink(missing_ok=True)
         with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=parent, delete=False) as handle:
             temporary = handle.name

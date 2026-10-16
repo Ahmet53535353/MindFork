@@ -601,11 +601,11 @@ def main():
                         except Exception:
                             pass  # an advisor failure must never cost the local context
                 dedupe_enabled = (state / 'context-dedupe.json').is_file() or os.environ.get('BEYIN_V3_CONTEXT_DEDUPE') == '1'
+                duplicates = []
                 if dedupe_enabled and context.get("records"):
                     try:
-                        from beyin_v3_dedupe import filter_novel
-                        novel, _ = filter_novel(state, args.harness, topic_session, context["records"])
-                        context = dict(context, records=novel)
+                        from beyin_v3_dedupe import drop_delivered
+                        context, duplicates = drop_delivered(state, args.harness, topic_session, context)
                     except Exception:
                         pass
                 from beyin_v3 import render_context

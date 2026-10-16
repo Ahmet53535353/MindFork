@@ -221,11 +221,13 @@ python3 beyin.py preferences --parallel-sessions on
 python3 beyin.py preferences --context-dedupe on
 ```
 
-- Kanca, bu oturumda daha önce teslim ettiği kayıtları (`id` ve `source_sha256`) runtime klasöründe `session-delivery/<sha256(harness + "\0" + session_id)>.json` dosyasında tutar.
+- Kanca, bu oturumda daha önce teslim ettiği kayıtları (`id`, `source_sha256` ve metin penceresi) runtime klasöründe `session-delivery/<sha256(harness + "\0" + session_id)>.json` dosyasında tutar. Oturum kimliğinin kendisi yazılmaz.
+- Mesaj bağlamı pasaj tabanlıdır: uzun bir notun başka bir bölümü (aynı `id`, farklı pencere) yeni sayılır ve teslim edilir; aynı pencere kısaltılmış olsa da tekrar sayılır. Geri tutulan kayıtların bütçesi yeni kayıtlara kalır.
 - Arama sonucunda gelen not daha önce iletildiyse ve dosya diskte değişmediyse filtrelenir; mesajda yalnızca yeni ya da güncellenen notlar modele teslim edilir.
 - Bir istemde hiç yeni not kalmazsa kanca boş ek bağlam (`{}`) döner; gereksiz token tüketimi ve dikkat dağınıklığı önlenir.
 - **Sıkıştırma (Compaction):** Model bağlamı sıkıştırdığında (`PreCompact` veya Claude Code `SessionStart` olayında `source: compact`), eski notlar pencereden düştüğü için teslimat defteri otomatik sıfırlanır.
 - `SessionEnd` oturumun teslimat defterini temizler. Dosya diskte düzenlenirse `source_sha256` değiştiği için not yeni sayılır ve tekrar teslim edilir.
+- Defter oturum başına en çok 512 kayıt ve kayıt başına 8 pencere tutar (en eskisi düşer). Her yazımda 24 saatten eski defterler silinir ve en fazla 128 defter tutulur.
 - Ayar, rollback güvenliği için `.beyin-preferences.json` içinde değil, runtime klasöründeki `context-dedupe.json` dosyasında tutulur (varsayılan kapalı). Kapatmak için `--context-dedupe off`.
 
 ## Stop'ta receipt hatırlatması
