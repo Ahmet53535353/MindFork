@@ -215,6 +215,25 @@ class WarmWindowTest(unittest.TestCase):
         self.assertEqual(child.wait(15), 0)
 
 
+class LegacyListenerWindowTest(unittest.TestCase):
+    """After an update the running listener is still the old state copy until `yakala kur`, but it
+    starts the vault's new module with `--hazir` and no `--instance`, then writes one context line."""
+
+    def test_protocol_only_with_an_instance(self):
+        with patch.object(yakala.os, 'name', 'nt'), \
+                patch.object(yakala, '_windows_warm_popup', return_value={'status': 'protokol'}) as new, \
+                patch.object(yakala, '_context_line_popup', return_value={'status': 'satir'}) as old:
+            self.assertEqual(yakala.warm_popup('v', 's', 'a' * 32), {'status': 'protokol'})
+            self.assertEqual(yakala.warm_popup('v', 's'), {'status': 'satir'})
+        new.assert_called_once_with('v', 's', 'a' * 32)
+        old.assert_called_once_with('v', 's')
+
+    def test_a_legacy_context_line_is_not_a_protocol_message(self):
+        # What a 3.10 listener writes: without the line path, the new window aborts on it and no popup opens.
+        legacy = {'uygulama': 'chrome', 'pencere': 'Sayfa - Google Chrome', 'url': 'https://example.com/'}
+        self.assertFalse(yakala._protocol_valid(legacy, 'a' * 32, ('ACTIVATE', 'FOCUS', 'STOP')))
+
+
 class BrowserUrlTest(unittest.TestCase):
     """The active tab's link comes from the browser's own address bar; anything else is not a link."""
 

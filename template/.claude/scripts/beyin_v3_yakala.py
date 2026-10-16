@@ -2968,8 +2968,15 @@ def warm_popup(vault, state=None, instance=None):
     The listener keeps one of these ready and writes the context to its stdin when the key is
     pressed; a closed pipe (the listener stopped) ends it without a window.
     """
-    if os.name == 'nt':
+    if os.name == 'nt' and instance is not None:
         return _windows_warm_popup(vault, state, instance)
+    # No --instance: a listener from before the READY/ACTIVATE protocol started this window. The
+    # listener runs its state copy until `yakala kur`, but starts the vault's (updated) module here,
+    # so after an update it still writes one plain context line and closes stdin.
+    return _context_line_popup(vault, state)
+
+
+def _context_line_popup(vault, state=None):
     import queue
     import threading
     import tkinter as tk
