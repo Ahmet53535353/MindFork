@@ -214,11 +214,10 @@ def _has_declared_learning(summary):
 
 
 def _has_knowledge_update(vault, receipt, since):
+    """A knowledge ref is a citation, not evidence of a write in this edit window."""
     if not receipt:
         return False
     from beyin_v3_projections import DISTILLATION_ROOTS, is_distilled_note
-    if any(isinstance(ref, str) and is_distilled_note(ref) for ref in receipt.get("refs", [])):
-        return True
     if not vault:
         return False
     for root in DISTILLATION_ROOTS:
