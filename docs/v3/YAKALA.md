@@ -121,7 +121,8 @@ Chromium şemayı gizlediği için şemasız adrese `https://` eklenir. Kısayol
 (ör. YouTube ana sayfasındaki bir video kartı) üstündeyse o link varsayılan kaynak olur; açık
 sayfa **Alt+S**, imlecin altındaki link **Alt+I** ile seçilir. Okuma sırasında pencere veya sekme
 değişirse (başlık değişir) iki link de atılır. Link yoksa kaynak pencerenin görüntüsü sunulur
-(önce Windows.Graphics.Capture, olmazsa PrintWindow). Opera Air adres çubuğunu ve sayfa içeriğini
+(önce Windows.Graphics.Capture, olmazsa PrintWindow). Görüntü kapalı gelir; **Alt+W** veya satıra
+tıklama ile eklenir, çünkü `isle` görseli ajana olduğu gibi okutur. Opera Air adres çubuğunu ve sayfa içeriğini
 göstermediğinde URL tahmini yapılmaz; History/oturum veritabanı okunmaz. Localhost/özel IP için mevcut ağ
 güvenliği sınırı korunur. Opera Air adres desteği ayrı çalışmadır.
 

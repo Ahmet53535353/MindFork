@@ -51,7 +51,7 @@ class WindowsSourceDecisionTest(unittest.TestCase):
                 chosen = yakala._source_arguments(sources)
                 self.assertIsNone(chosen['text'])
                 self.assertIsNone(chosen['url'])
-                self.assertEqual(chosen['files'], ['window.png'] if shot else [])
+                self.assertEqual(chosen['files'], [])  # a window picture waits for Alt+W, like the stale clipboard
 
     def test_url_toggle_excludes_other_urls_but_preserves_text_and_images(self):
         sources = yakala.windows_sources({'url': 'https://example.com/page'},

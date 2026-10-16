@@ -788,7 +788,7 @@ class PopupWiringTest(ScreenshotFiles, unittest.TestCase):
         shot = yakala.clipboard_image('', {}, payload=self.bitmap, offered=True)
         self.assertIsNotNone(shot)
         result, root, _ = self.popup('eski metin', self.bitmap,
-                                     [('look', None), ('key', '<Alt-g>'), ('key', '<Alt-m>'), ('key', '<Return>')],
+                                     [('look', None), ('key', '<Alt-g>'), ('key', '<Alt-m>'), ('key', '<Alt-w>'), ('key', '<Return>')],
                                      windows=True, shot=shot)
         self.assertEqual(len(self.saved_files()), 2)
         self.assertIn('> eski metin', self.card(result)['body'])

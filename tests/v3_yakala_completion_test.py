@@ -132,11 +132,14 @@ class WindowsPolicyTest(unittest.TestCase):
                 self.assertEqual(y.canonical('https://www.example.org/x/'), 'example.org/x')
                 self.assertEqual(y.canonical('https://x.com/b/status/42?s=20'), 'x:42')
 
-    def test_page_image_is_default_when_clipboard_is_unknown(self):
+    def test_window_image_is_offered_but_never_selected_unasked(self):
         shot = dict(path='window.png', width=2, height=2, method='WGC')
         image = dict(path='clip.png', width=2, height=2, on=True)
         sources = y.windows_sources({}, 'old text', False, image, shot)
-        self.assertEqual([s['key'] for s in sources if s['on']], ['w'])
+        self.assertEqual([s['key'] for s in sources if s['on']], [])
+        self.assertIn('w', [s['key'] for s in sources])
+        y._source_toggle(sources, next(s for s in sources if s['key'] == 'w'))
+        self.assertEqual(y._source_arguments(sources)['files'], ['window.png'])
 
     def test_browser_link_wins_over_a_fresh_clipboard_which_stays_one_key_away(self):
         sources = y.windows_sources({'url': 'https://example.org/page'}, 'https://example.org/copy', True)

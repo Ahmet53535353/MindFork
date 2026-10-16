@@ -1923,7 +1923,9 @@ def windows_sources(context, clip, fresh, image=None, shot=None):
     if clip and not copied_url:
         add('text', clip, 'Pano metni', copied, 'm')
     for picture, label, on, key in ((image, 'Pano görüntüsü', fresh_image, 'g'),
-                                    (shot, 'Pencere görüntüsü', not copied and not fresh_image and not page and not hovered, 'w')):
+                                    # Whatever window was in front (chat, mail, a password manager) is never attached
+                                    # unasked: `isle` hands a picture to the agent as is. Alt+W or a click adds it.
+                                    (shot, 'Pencere görüntüsü', False, 'w')):
         if picture:
             add('file', picture['path'], label, on, key, picture=picture)
     for index, path in enumerate(context.get('dosyalar') or []):
