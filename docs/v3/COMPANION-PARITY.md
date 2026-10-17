@@ -54,6 +54,16 @@ ve dosyayı okumak gerektiğini söyler. Kesme satır sınırındadır, yarım k
 haritası ve ilişkili kaynaklar payını aldıktan sonra artan bütçe kırpılmış companion
 bölümlerine geri verilir; sınır hiçbir durumda aşılmaz.
 
+Bu paylaşımdan önce companion dosyaları kaynak doğrulamalı anlık görüntüden 200.000
+karakterlik bir üst sınırla okunur ([#374](https://github.com/avenoxai/avenoxbeyin/issues/374)).
+Payından kısa kalan dosya artanı uzun dosyalara bırakır; böylece kural kırpması ve
+`rules X-Y (n of N)` işaretindeki numaralar dosyanın tam metni üzerinden hesaplanır.
+Önceden pay eşit bölünüyordu ve yaklaşık 40.000 karakteri aşan bir `Kurallar.md` bu
+katmanda başını kaybediyordu: dosyanın başındaki özet açılışa hiç ulaşmıyor, işaret de
+kuralları kesik metinden sayıyordu. Üst sınırı aşan bir `Kurallar.md` artık bu katmanda da
+başı ve sonuyla tutulur; `Journal.md` en yeni kayıtlar altta olduğu için sonuyla tutulmaya
+devam eder.
+
 Kapsamlı kurallar (#333, [#375](https://github.com/avenoxai/avenoxbeyin/issues/375)): tek bir
 projeye ya da alana ait düzeltme `projects/<proje>/Kurallar.md` dosyasına yazılır; global
 `Kurallar.md` içinde en çok `[kapsam: <proje>]` etiketli tek satırlık işaretçi kalır. Etiket
@@ -102,7 +112,12 @@ Düzeltme dört parçadır:
   senkronizasyon arızası değildir, `doctor` durumunu değiştirmez. `Kurallar.md`,
   `Core.md`/`Soul.md` ve `Journal.md` bilerek birikir; boyutları yalnız bilgi olarak
   gösterilir, bunlara sınır uygulanmaz. Hook `Kurallar.md` dosyasını doğrudan okur ve
-  sığmadığında başını ve sonunu atlanan karakter sayısıyla birlikte verir (#45).
+  sığmadığında başını ve sonunu atlanan kural aralığıyla birlikte verir (#45, #196).
+  `doctor` ayrıca `companion_rules_opening` altında Claude Code açılışının kural metninin
+  en fazla kaç karakterini tam gösterdiğini (`share`) hook'un kendi hesabıyla verir; sayı
+  öbür companion dosyalarının o anki boyutuna ve receipt'e göre değişir. Kurallar
+  kırpılıyorsa `--human` çıktısında tek satır görünür. Bilgi amaçlıdır, `doctor` durumunu
+  değiştirmez ve hiçbir dosya yazmaz (#374).
 - **Kayıpsız arşivleme.** `python3 beyin.py companion-compact` açık bir komuttur; hook,
   worker veya zamanlayıcı onu kendiliğinden çalıştırmaz. Yalnız sınırı aşan dosyada önce
   `## Previous`/`## Önceki` (Last-Session) veya `## Closed`/`## Kapanan`/`## Kapalı`

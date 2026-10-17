@@ -404,6 +404,13 @@ def human_result(result, command, installed_version=None):
             lines.append('Hafiza hijyeni: ' + name + ' ' + str(entry['chars']) + ' karakter (sinir ' + str(entry['limit']) +
                          '). Ajanina "' + ('py -3' if sys.platform == 'win32' else 'python3') +
                          ' beyin.py companion-compact" calistirmasini soyle; eski kayitlar arsive tasinir, metin silinmez.')
+        rules_opening = result.get('companion_rules_opening') or {}
+        if rules_opening.get('status') == 'clipped':
+            lines.append('Kurallar.md acilista kirpiliyor (bilgi): kural metni ' + str(rules_opening['chars']) +
+                         ' karakter; Claude Code acilisi bu ayarlarla (' + str(rules_opening['budget']) +
+                         ' karakter) en fazla ' + str(rules_opening['share']) + ' karakterini tam gosterir, aradaki kurallar atlanir' +
+                         (' (gerekceler de cikarildi)' if rules_opening.get('reasons_omitted') else '') +
+                         '. Kurallari kisa tut; uzun gerekceyi ve ayrintiyi ayri bir nota (or. Kurallar-Detay.md) tasi.')
         references = result.get('instruction_references') or {}
         if references.get('dead_count'):
             shown = ', '.join(entry['file'] + ':' + str(entry['line']) + ' -> ' + entry['target']
