@@ -2167,14 +2167,22 @@ def _windows_source_cards(canvas, root, sources, y, width, pad):
     return y
 
 
-def _escape_scope(front, source, popup, focused, elapsed):
-    return not focused and bool(source) and front == source and front != popup
+def _escape_scope(front, source, popup):
+    """What a global Esc does while the popup is open: None (Tk's own binding handles it, or no
+    window), 'consume' (the source page is in front: close the popup, keep Esc from the page) or
+    'pass' (another window was clicked: close the popup and let that window see Esc too)."""
+    if not front or front == popup:
+        return None
+    return 'consume' if source and front == source else 'pass'
 
 
 def _win_escape_guard(root, popup, source, dismiss):
-    """Keep an event fallback while the refused-focus source stays foreground; stop on any switch."""
+    """Esc closes the open popup wherever the keyboard focus went, until the popup closes.
+
+    The popup may have been refused focus, or the user may have clicked the page or another
+    window after it opened; either way Tk no longer receives the key, so a low-level hook does.
+    """
     import ctypes
-    import time
     user32 = ctypes.WinDLL('user32', use_last_error=True)
     handle = ctypes.c_void_p
     callback_type = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t)
@@ -2182,50 +2190,31 @@ def _win_escape_guard(root, popup, source, dismiss):
     user32.CallNextHookEx.argtypes, user32.CallNextHookEx.restype = [handle, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t], ctypes.c_ssize_t
     user32.UnhookWindowsHookEx.argtypes = [handle]
     user32.GetForegroundWindow.restype = handle
-    started, pressed, hook = time.monotonic(), threading.Event(), None
-    foreground_hook = None
-    active = {'on': True, 'switched': False}
-
-    def in_scope():
-        return active['on'] and not active['switched'] and _escape_scope(user32.GetForegroundWindow(), source, popup, False, time.monotonic() - started)
+    pressed, hook = threading.Event(), None
+    active = {'on': True}
 
     @callback_type
     def callback(code, message, data):
-        if code >= 0 and message in (0x100, 0x104) and in_scope():  # WM_KEYDOWN / WM_SYSKEYDOWN
+        if code >= 0 and active['on'] and message in (0x100, 0x104):  # WM_KEYDOWN / WM_SYSKEYDOWN
             if ctypes.cast(data, ctypes.POINTER(ctypes.c_uint32))[0] == 0x1B:
-                pressed.set()
-                return 1  # this Esc dismisses our pending/visible popup, not the application behind it
+                scope = _escape_scope(user32.GetForegroundWindow(), source, popup)
+                if scope:
+                    pressed.set()
+                    if scope == 'consume':
+                        return 1  # this Esc dismisses our popup, not the page behind it
         return user32.CallNextHookEx(hook, code, message, data)
 
     kernel32 = ctypes.WinDLL('kernel32')
     kernel32.GetModuleHandleW.argtypes, kernel32.GetModuleHandleW.restype = [ctypes.c_wchar_p], handle
     hook = user32.SetWindowsHookExW(13, callback, kernel32.GetModuleHandleW(None), 0)  # WH_KEYBOARD_LL
 
-    event_type = ctypes.WINFUNCTYPE(None, handle, ctypes.c_uint32, handle, ctypes.c_int32,
-                                   ctypes.c_int32, ctypes.c_uint32, ctypes.c_uint32)
-
-    @event_type
-    def foreground_changed(_hook, _event, hwnd, _object, _child, _thread, _time):
-        if hwnd != source:
-            active['switched'] = True
-
-    user32.SetWinEventHook.argtypes = [ctypes.c_uint32, ctypes.c_uint32, handle, event_type,
-                                      ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
-    user32.SetWinEventHook.restype = handle
-    user32.UnhookWinEvent.argtypes = [handle]
-    if hook:
-        foreground_hook = user32.SetWinEventHook(3, 3, None, foreground_changed, 0, 0, 0)
-
     def stop():
-        nonlocal hook, foreground_hook
+        nonlocal hook
         active['on'] = False
-        if foreground_hook:
-            user32.UnhookWinEvent(foreground_hook)
-            foreground_hook = None
         if hook:
             user32.UnhookWindowsHookEx(hook)
             hook = None
-        _ = callback, foreground_changed  # keep both native callbacks alive through unhook
+        _ = callback  # keep the native callback alive through unhook
 
     def check():
         if not active['on']:
@@ -2233,11 +2222,9 @@ def _win_escape_guard(root, popup, source, dismiss):
         if pressed.is_set():
             stop()
             dismiss()
-        elif not in_scope():
-            stop()
         else:
             root.after(10, check)
-    stop.armed = bool(hook and foreground_hook)
+    stop.armed = bool(hook)
     if stop.armed:
         root.after(10, check)
     else:
@@ -3115,12 +3102,13 @@ def popup(vault, context=None, state=None, root=None, session=None):
             try:
                 root.lift()
                 hwnd = _win_hwnd(root)
-                if _win_focus(hwnd):
+                focused = _win_focus(hwnd)
+                if focused:
                     entry.focus_set()
-                else:
-                    stop_escape = _win_escape_guard(root, hwnd, source_hwnd, dismiss)
-                    if not getattr(stop_escape, 'armed', True):
-                        canvas.itemconfigure(status, text='Odak alınamadı; tıklayın veya Kapat düğmesini kullanın.')
+                # Armed either way: a click on the page or elsewhere takes the key away from Tk.
+                stop_escape = _win_escape_guard(root, hwnd, source_hwnd, dismiss)
+                if not focused and not getattr(stop_escape, 'armed', True):
+                    canvas.itemconfigure(status, text='Odak alınamadı; tıklayın veya Kapat düğmesini kullanın.')
             except Exception:
                 canvas.itemconfigure(status, text='Odak alınamadı; tıklayın veya Kapat düğmesini kullanın.')
         if session:
