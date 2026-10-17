@@ -303,3 +303,46 @@ class ReceiptPathRejectionTest(unittest.TestCase):
         summary = f'Metin:\n\n{FENCE}\nkod satiri\n{FENCE}\n\nDevam.\n'
         self.engine.receipt('fence-yolu-002', summary, ['notes/kaynak.md'], 'claude')
         self.assertIn('fence-yolu-002', self.db_event_ids())
+
+
+class InfoStringRuleTest(unittest.TestCase):
+    """CommonMark: bir backtick çitinin bilgi dizgisi backtick İÇEREMEZ.
+
+    Vault taraması 2026-07-17'de buldu: bir bilgi notu çitlerden *bahsetmek* için
+    şunu yazıyordu:
+
+        ```` ``` ```` işaretleridir; işaretler ```` ````
+
+    Satır satır başında 4 backtick ile başlıyor ve CommonMark'ta **çit değildir** —
+    bilgi dizgisi backtick içerdiği için geçersizdir, düz metindir. Ölçüm koşum
+    bunu açılış sayıp dosyayı bozuk işaretledi; aynı yanlış pozitif üretim
+    kodundaki `unbalanced_fence`'de de vardı, yani kapı geçerli bir notu BLOCKER
+    yapardı. Düz metinde çitten bahsetmek nadirdir ama tam olarak bu notun konusu.
+    """
+
+    BS = chr(96)
+
+    def test_bilgi_dizgisinde_backtick_olan_cit_gecersizdir(self):
+        satir = self.BS * 4 + ' ' + self.BS * 3 + ' işaretleridir; işaretler ' + self.BS * 4
+        metin = 'Bir not:\n\n' + satir + '\n\nDevam metni.\n'
+        self.assertFalse(projections.unbalanced_fence(metin), 'gecersiz bilgi dizgisi çit sayildi')
+
+    def test_ciddi_bilgi_dizgisi_gecerli_cittir(self):
+        metin = 'Bir not:\n\n' + self.BS * 3 + 'python\nkod = 1\n' + self.BS * 3 + '\n\nDevam.\n'
+        self.assertFalse(projections.unbalanced_fence(metin), 'gecerli acik-kapali cit dengeli')
+
+    def test_giris_dizgisinde_backtick_olan_satir_acilis_sayilmaz(self):
+        """Bilgi dizgisi backtick içeren satır açılış değildir.
+
+        İlk yazımda '``` `ek / kod / ```' belgesi 'dengeli' olmalıydı; yanlıştı.
+        1. satır çit değil, 3. satır gerçek bir açılıştır ve kapanmaz — belge
+        **dengesizdir**. Doğru ayrım şu: geçersiz sayılan satır bir *açılış*
+        sayılmaz, ama ondan sonraki çapraz çift kapanmış kalır.
+        """
+        gecersiz = self.BS * 4 + ' ' + self.BS * 3 + ' işaretleridir'
+        dengeli = gecersiz + '\n' + self.BS * 3 + '\n' + self.BS * 3
+        self.assertFalse(projections.unbalanced_fence('Bir not:\n\n' + dengeli + '\n\nDevam.\n'),
+                         'gecersiz aciis sayildi, sonraki capraz citler havada kaldi')
+        kapanmamis = self.BS * 3 + '`ek\nkod\n' + self.BS * 3
+        self.assertTrue(projections.unbalanced_fence('Bir not:\n\n' + kapanmamis + '\n\nDevam.\n'),
+                        '3. satirdaki gecerli acilis kapanmadigi icin belgesi bozuk')

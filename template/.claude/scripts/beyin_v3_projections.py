@@ -668,6 +668,11 @@ def unbalanced_fence(text):
             continue  # girintili kod bloğu
         length = len(ticks)
         if rest.strip():
+            # CommonMark: bir backtick çitinin bilgi dizgisi backtick içeremez.
+            # "``` ``` işaretleridir" gibi bir satır çit değil, düz metindir; ölçülmüş
+            # yanlış pozitif bu notta bulundu ve kapı geçerli bir notu bozuk sayıyordu.
+            if ticks[0] == '`' and '`' in rest:
+                continue
             if opened is None:
                 opened = length  # bilgi dizgisi yalnız açılışta olabilir
             continue
