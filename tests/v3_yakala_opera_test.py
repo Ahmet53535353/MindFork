@@ -379,7 +379,7 @@ class OperaUIARootTest(unittest.TestCase):
                 patch.object(C, 'windll', types.SimpleNamespace(ole32=ole, oleaut32=auto), create=True), \
                 patch.object(C, 'oledll', types.SimpleNamespace(ole32=ole), create=True), \
                 patch.object(y, '_com_call', side_effect=call):
-            self.assertIsNone(y._uia_link_at_cursor(42, [-100, 50], root=55))
+            self.assertIsNone(y._uia_link_at_cursor(42, [-100, 50], root=55, posts=True))
         user.GetAncestor.assert_called_once_with(55, 2)
         self.assertEqual(roots, [55])
         self.assertEqual(released, [105, 104, 103, 102, 101, 100])

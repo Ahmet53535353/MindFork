@@ -1493,6 +1493,22 @@ def _post_permalink(href):
     return None
 
 
+POST_SITES = ('x.com', 'twitter.com', 'instagram.com')
+
+
+def _post_site(url):
+    """True when the committed page itself is X/Twitter or Instagram.
+
+    Only there is the ARIA article under the pointer one post. A news page is one article too,
+    and a tweet it cites or embeds is no post the pointer is on; elsewhere the page stays the source.
+    """
+    try:
+        host = (urlparse(url or '').hostname or '').lower().rstrip('.')
+    except ValueError:
+        return False
+    return host.removeprefix('www.').removeprefix('mobile.') in POST_SITES
+
+
 def _post_title(post, article, link=''):
     """A short card title for a post read from its article.
 
@@ -1508,10 +1524,11 @@ def _post_title(post, article, link=''):
     return text[:200]
 
 
-def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
+def _uia_link_at_cursor(window, at=None, limit=4000, root=None, posts=False):
     """The link under the mouse pointer inside `window` as {'value': href, 'name': text}, else None.
 
     `root` optionally scopes UIA to a validated renderer child; pointer ownership stays top-level.
+    `posts` allows the article fallback below; the caller sets it only for an X/Instagram page.
 
     A hovered YouTube card plays its preview above the link, so the element at the point is not the
     link itself: every Hyperlink of the window is asked for its bounding rectangle instead and the
@@ -1678,7 +1695,7 @@ def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
                     return {'value': _post_permalink(href) or href, 'name': text}
             finally:
                 _com_call(item, 2)
-        return article_post()
+        return article_post() if posts else None
     finally:
         for obj in (articles, role_condition, found, condition, element, uia):
             if obj:
@@ -1818,11 +1835,12 @@ def _opera_snapshot(window, at=None):
     first = _msaa_document(identity[0])
     if not first.get('value'):
         return {}
+    posts = _post_site(first['value'])
     try:
-        hovered = _uia_link_at_cursor(window, at, root=identity[0]) or {}
+        hovered = _uia_link_at_cursor(window, at, root=identity[0], posts=posts) or {}
         # A same-title navigation can reuse its renderer HWND. Keep a link only when
         # the provider returns the same link twice, bracketed by stable document reads.
-        if hovered and _uia_link_at_cursor(window, at, root=identity[0]) != hovered:
+        if hovered and _uia_link_at_cursor(window, at, root=identity[0], posts=posts) != hovered:
             hovered = {}
     except Exception:
         hovered = {}
@@ -1885,11 +1903,13 @@ def windows_browser_url(window, app, timeout=ADDRESS_TIMEOUT, cancel=None):
     return tab_url(result.get('value'))
 
 
-def windows_hovered_link(window, app, at=None, timeout=ADDRESS_TIMEOUT, cancel=None, extra=None):
+def windows_hovered_link(window, app, at=None, timeout=ADDRESS_TIMEOUT, cancel=None, extra=None, posts=False):
     """(url, text) of the link under the pointer in a Chromium window, e.g. a video card on a home page.
 
     `at` is the pointer position recorded at the key press (physical pixels); without it the current one.
     A quoted post inside the pointed post is stored as extra['quote'] when `extra` is a dict.
+    `posts` (the page is X/Instagram, _post_site) lets a post under the pointer name its permalink.
+    Opera decides that itself from the document it reads.
     """
     if not WIN_CHROMIUM.get((app or '').lower()) or not window:
         return None, None
@@ -1901,6 +1921,8 @@ def windows_hovered_link(window, app, at=None, timeout=ADDRESS_TIMEOUT, cancel=N
         request = {'hwnd': int(window)}
         if at is not None:
             request['at'] = [int(at[0]), int(at[1])]
+        if posts:
+            request['posts'] = True
         result = _windows_read('uia_link', request, timeout, cancel)
     check = _opera_url if (app or '').lower() == 'opera' else tab_url
     url = check(result.get('value'))
@@ -1992,7 +2014,8 @@ def windows_enrich(context, cancel=None):
             context['url'] = windows_browser_url(hwnd, app, cancel=cancel)
         extra = {}
         try:
-            hovered, hovered_title = windows_hovered_link(hwnd, app, context.get('imlec'), cancel=cancel, extra=extra)
+            hovered, hovered_title = windows_hovered_link(hwnd, app, context.get('imlec'), cancel=cancel, extra=extra,
+                                                          posts=_post_site(context.get('url')))
         except Exception:
             hovered = hovered_title = None
         quote = extra.get('quote') if hovered else None
@@ -3942,10 +3965,12 @@ def _windows_reader_main(kind):
             hwnd = request.get('hwnd')
             if type(hwnd) is not int or hwnd <= 0:
                 raise ValueError('request-uia')
-            at = request.get('at')
+            at, posts = request.get('at'), request.get('posts', False)
             if at is not None and not (isinstance(at, list) and len(at) == 2 and all(type(v) is int for v in at)):
                 raise ValueError('request-point')
-            result = _uia_link_at_cursor(hwnd, at) or {}
+            if type(posts) is not bool:
+                raise ValueError('request-posts')
+            result = _uia_link_at_cursor(hwnd, at, posts=posts) or {}
         elif kind == 'clipboard':
             result = _win_clipboard_payload(snapshot=bool(request.get('snapshot')))
         elif kind in ('wgc', 'printwindow'):
