@@ -1168,6 +1168,23 @@ def main(argv=None, return_result=False):
                 result['companion_hygiene'] = companion.hygiene(vault, state)
             except Exception as exc:  # a size report must never hide the rest of doctor
                 result['companion_hygiene'] = {'status': 'unavailable', 'error': type(exc).__name__}
+            # Information only (#374): how much of Kurallar.md the Claude Code opening shows whole.
+            # The hook's own render on a read-only store; never raises the doctor status.
+            try:
+                import beyin_v3_companion as companion
+                prefs = result['preferences']
+                if prefs['context_mode'] == 'off':
+                    result['companion_rules_opening'] = {'status': 'context_off'}
+                else:
+                    from beyin_v3_hook import receipt_context
+                    budget = companion.client_budget('claude', companion.opening_budget(state, prefs['context_chars']))
+                    rules = companion.rules_opening(engine.MemoryStore(state, vault, read_only=True), budget,
+                                                    receipt_context(vault, state))
+                    result['companion_rules_opening'] = dict(
+                        rules or {}, status='clipped' if rules and rules['clipped'] else 'ok' if rules else 'no_rules',
+                        budget=budget, harness='claude')
+            except Exception as exc:  # never hides the rest of doctor
+                result['companion_rules_opening'] = {'status': 'unavailable', 'error': type(exc).__name__}
             try:
                 import beyin_v3_references as references
                 result['instruction_references'] = references.check(vault)

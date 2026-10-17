@@ -521,8 +521,11 @@ def clip(text, budget, tail=False, both=False):
     return marker + text[-keep:] if tail else text[:keep] + marker
 
 
-def context(store, budget, session, harness, query='', receipt='', warning='', project=None):
-    """Budget actual displayed text, not repeated JSON metadata; never cut a record header."""
+def context(store, budget, session, harness, query='', receipt='', warning='', project=None, report=None):
+    """Budget actual displayed text, not repeated JSON metadata; never cut a record header.
+
+    A dict passed as report receives the companion Kurallar.md share of the returned text
+    (#374); doctor reads it, the hooks pass nothing."""
     target = directory(store.vault_root)
     hygiene_line = ''
     if target is not None:
@@ -599,16 +602,19 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
             parts = [(label, without_reasons(body) if name == 'Kurallar.md' else body, name)
                      for label, body, name in parts]
             lengths = share(available, parts)
-        rendered = header + notice
+        rendered, rules = header + notice, None
         for i, (label, body, name) in enumerate(parts):
+            if name == 'Kurallar.md' and i < len(records):  # project rule files come after the records
+                rules = {'chars': len(sections[i][1]), 'share': lengths[i], 'clipped': lengths[i] < len(body),
+                         'reasons_omitted': body != sections[i][1]}
             rendered += label + clip(body, lengths[i], both=name == 'Kurallar.md',
                                      tail=name == 'Kurallar.md' or (name == 'Journal.md' and not re.search(r'(?m)^## ', body)))
-        return rendered
+        return rendered, rules
 
     needed = sum(len(body) for _, body, _ in sections)
     available = max(0, int(budget * .83) - fixed)
     companion_clipped = needed > available
-    text = companion(available)
+    text, rules = companion(available)
     extra = ''
     index = store.source_snapshot(['index.md'], source_directory='knowledge', budget_chars=4000)
     if index['records']:
@@ -651,7 +657,21 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
         extra += clip(receipt, budget - len(text) - len(extra))
     # Retrieval takes its share first; every character it did not use goes back to the
     # clipped companion sources instead of being dropped.
-    regained = companion(budget - fixed - len(extra))
+    regained, regained_rules = companion(budget - fixed - len(extra))
     if len(text) < len(regained) <= budget - len(extra):
-        text = regained
+        text, rules = regained, regained_rules
+    if report is not None and rules:
+        report['Kurallar.md'] = rules
     return text + extra
+
+
+def rules_opening(store, budget, receipt=''):
+    """Read-only (#374): Kurallar.md's share of the opening SessionStart renders at budget.
+
+    The hook's own code path with a session id of the same length, so the numbers are the
+    hook's. While the rules are clipped, share is the largest rule text (without its reasons
+    when reasons_omitted) that would arrive whole beside the other companion files as they
+    are now. None without a rules section."""
+    report = {}
+    context(store, budget, '0' * 24, 'claude', receipt=receipt, report=report)
+    return report.get('Kurallar.md')

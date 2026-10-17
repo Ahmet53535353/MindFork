@@ -97,6 +97,11 @@ Düzeltme dört parçadır:
   `Core.md`/`Soul.md` ve `Journal.md` bilerek birikir; boyutları yalnız bilgi olarak
   gösterilir, bunlara sınır uygulanmaz. Hook `Kurallar.md` dosyasını doğrudan okur ve
   sığmadığında başını ve sonunu atlanan kural aralığıyla birlikte verir (#45, #196).
+  `doctor` ayrıca `companion_rules_opening` altında Claude Code açılışının kural metninin
+  en fazla kaç karakterini tam gösterdiğini (`share`) hook'un kendi hesabıyla verir; sayı
+  öbür companion dosyalarının o anki boyutuna ve receipt'e göre değişir. Kurallar
+  kırpılıyorsa `--human` çıktısında tek satır görünür. Bilgi amaçlıdır, `doctor` durumunu
+  değiştirmez ve hiçbir dosya yazmaz (#374).
 - **Kayıpsız arşivleme.** `python3 beyin.py companion-compact` açık bir komuttur; hook,
   worker veya zamanlayıcı onu kendiliğinden çalıştırmaz. Yalnız sınırı aşan dosyada önce
   `## Previous`/`## Önceki` (Last-Session) veya `## Closed`/`## Kapanan`/`## Kapalı`

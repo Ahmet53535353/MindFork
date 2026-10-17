@@ -1,4 +1,5 @@
-"""A long Kurallar.md keeps its head before the companion layer sees it (#374). Synthetic rules only."""
+"""A long Kurallar.md keeps its head before the companion layer sees it, and doctor names
+how much of it the opening shows whole (#374). Synthetic rules only."""
 import hashlib
 import importlib.util
 import json
@@ -119,6 +120,28 @@ class SnapshotTest(unittest.TestCase):
         self.assertTrue(kept.startswith(HEAD))
         self.assertTrue(kept.endswith(f'- R{count:04d} kural metni burada durur, kısa ve tek satır.\n'))
 
+    def test_opening_report_is_the_ceiling_and_changes_nothing(self):
+        for name, body in self.bodies.items():
+            self.write(name, body)
+        self.write('Kurallar.md', rules_file(45600)[0])
+        report = {}
+        text = companion.context(self.store, 5000, '0' * 24, 'claude', report=report)
+        self.assertEqual(text, companion.context(self.store, 5000, '0' * 24, 'claude'))
+        rules = report['Kurallar.md']
+        self.assertTrue(rules['clipped'])
+        self.assertEqual(rules['chars'], len(rules_file(45600)[0]))
+        share = rules['share']
+        self.assertEqual(companion.rules_opening(self.store, 5000), rules)
+        # A rule file of exactly that size arrives whole; one character more is clipped.
+        whole, _ = rules_file(share, exact=True)
+        self.assertEqual(len(whole), share)
+        self.write('Kurallar.md', whole)
+        self.assertFalse(companion.rules_opening(self.store, 5000)['clipped'])
+        shown = section(companion.context(self.store, 5000, '0' * 24, 'claude'), 'Kurallar.md')
+        self.assertEqual(shown, whole)
+        self.write('Kurallar.md', rules_file(share + 1, exact=True)[0])
+        self.assertTrue(companion.rules_opening(self.store, 5000)['clipped'])
+
 
 class InstalledOpeningTest(unittest.TestCase):
     def setUp(self):
@@ -171,6 +194,25 @@ class InstalledOpeningTest(unittest.TestCase):
         self.assertEqual(omitted, last - first + 1)
         numbers = [int(n) for n in re.findall(r'(?m)^- R(\d{4}) ', shown)]
         self.assertEqual(numbers, list(range(1, first)) + list(range(last + 1, count + 1)))
+
+    def test_doctor_names_the_opening_ceiling_and_writes_nothing(self):
+        self.rules(rules_file(45600)[0])
+        self.session_start()
+        before = self.tree()
+        report = json.loads(self.run_cli(self.vault / 'beyin.py', 'doctor', '--json'))['companion_rules_opening']
+        human = self.run_cli(self.vault / 'beyin.py', 'doctor', '--human')
+        self.assertEqual(self.tree(), before, 'doctor must not write')
+        self.assertEqual((report['status'], report['budget'], report['harness']), ('clipped', 5000, 'claude'))
+        self.assertIn(f'Kurallar.md acilista kirpiliyor (bilgi): kural metni {report["chars"]} karakter; '
+                      f'Claude Code acilisi bu ayarlarla (5000 karakter) en fazla {report["share"]} karakterini tam gosterir',
+                      human)
+        # The number is the hook's own: a rule file of exactly that size arrives whole at SessionStart.
+        whole, _ = rules_file(report['share'], exact=True)
+        self.rules(whole)
+        self.assertEqual(section(self.session_start(), 'Kurallar.md'), whole)
+        self.assertEqual(json.loads(self.run_cli(self.vault / 'beyin.py', 'doctor', '--json'))
+                         ['companion_rules_opening']['status'], 'ok')
+        self.assertNotIn('Kurallar.md acilista kirpiliyor', self.run_cli(self.vault / 'beyin.py', 'doctor', '--human'))
 
 
 if __name__ == '__main__':

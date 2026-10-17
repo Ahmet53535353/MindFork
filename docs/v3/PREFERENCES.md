@@ -51,6 +51,13 @@ Açılışta hafıza dosyaları kırpılıyorsa sorgusuz seçilen ilgisiz bir no
 bütçe kırpılan dosyalara döner. Dosyalar tam sığıyorsa en fazla 1.500 karakterlik bir
 güncel not eklenebilir.
 
+`Kurallar.md`'nin bu bütçede en fazla kaç karakterinin tam geldiğini `doctor`
+`companion_rules_opening` altında söyler; kurallar kırpılıyorsa `--human` çıktısı bunu tek
+satırla bildirir (#374). Sayı öbür companion dosyalarının boyutuyla ve receipt'le değişir.
+Core 544, Last-Session 1.743, Threads 543 karakter ve bir receipt taşıyan örnek bir kasada
+varsayılan 5.000 karakterlik açılış yaklaşık 1.550-1.750, 8.000 yaklaşık 3.050-3.300
+karakter gösterir; satır başına ~50 karakterlik kurallarla bu 30 ile 60 kural arasıdır.
+
 ## Opt-in sır süzgeci
 
 `python3 beyin.py preferences --secret-filter on` komutu receipt özeti, note-create ve task-create gövdesi, bu komutların ve task-update değişikliklerinin `title`, `next_action`, `completion_criterion` ve `facts` alanlarında yaygın erişim anahtarı biçimlerini yazmadan önce `[REDACTED]` ile değiştirir. Varsayılan kapalıdır; profil değişikliği bu bağımsız tercihi değiştirmez. Kapatmak için `--secret-filter off` kullan.
