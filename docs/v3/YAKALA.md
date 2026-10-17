@@ -141,6 +141,13 @@ değişirse (başlık değişir) iki link de atılır. Link yoksa kaynak pencere
 tıklama ile eklenir, çünkü `isle` görseli ajana olduğu gibi okutur. History/oturum veritabanı okunmaz;
 localhost/özel IP için mevcut ağ güvenliği sınırı korunur.
 
+**Gönderiler (X, Instagram):** Tweet metni veya akıştaki video bir link değildir. İmleç bir
+linkin üstünde değilse, altındaki en içteki ARIA `article` öğesi (tek gönderi) alınır ve içindeki
+ilk gönderi bağlantısı (`x.com/<kullanıcı>/status/<id>`, `instagram.com/p|reel/<kod>/`) imleç
+linki olur. Aynı gönderideki ikinci, farklı gönderi bağlantısı alıntılanan gönderidir; **Alt+A**
+ile seçilebilir, varsayılan seçili değildir. X'in fotoğraf/video/analytics alt sayfaları gönderi
+adresine indirgenir. Bağlantı sayfanın kendisinden okunur; gönderi adresi üretilmez.
+
 **Opera Air:** Sayfanın ayrı Chromium alt penceresi okunur. Sayfa URL'si MSAA Document
 nesnesinin gerçek değerinden, imleç bağlantısı aynı alt pencerenin UI Automation bağlantılarından
 alınır. Adres çubuğundaki taslak okunmaz; açık sayfanın yüklenmiş adresi kullanılır.
