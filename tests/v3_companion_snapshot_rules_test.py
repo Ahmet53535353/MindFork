@@ -68,7 +68,7 @@ class SnapshotTest(unittest.TestCase):
     def write(self, name, body):
         # A rewrite replaces the record, as sync does: a stale copy would add a notice line.
         source = f'{COMPANION}/{name}'
-        (self.vault / source).write_text(body, encoding='utf-8')
+        (self.vault / source).write_text(body, encoding='utf-8', newline='\n')
         with self.store._connect() as db:
             db.execute('DELETE FROM records WHERE id=?', (name,))
         self.store.ingest({'id': name, 'kind': 'note', 'status': 'active', 'text': body,
@@ -166,7 +166,7 @@ class InstalledOpeningTest(unittest.TestCase):
         return result.stdout
 
     def rules(self, text):
-        (self.vault / COMPANION / 'Kurallar.md').write_text(text, encoding='utf-8')
+        (self.vault / COMPANION / 'Kurallar.md').write_text(text, encoding='utf-8', newline='\n')
         self.run_cli(self.vault / 'beyin.py', '--vault', self.vault, '--state', self.state, 'sync')
 
     def session_start(self):
