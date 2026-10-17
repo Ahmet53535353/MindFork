@@ -644,17 +644,38 @@ FENCE_LINE = re.compile(r'^(\s*)(`{3,})(.*)$')
 
 
 def unbalanced_fence(text):
-    """Kapanmayan bir gercek çit var mi? Gövde içindeki kod çitleri de sayılır."""
-    inside = False
+    """CommonMark kurallarıyla kapanmayan gerçek çit var mı?
+
+    Üç kural, hepsi 2026-10-17'de ölçüldü (önceki sürüm üçünü de yanlış uyguluyordu):
+
+    * Kapatabilmek için çit açılıştan **kısa olamaz**; 4 backtick ile açılıp 3
+      backtick ile kapatılan özet kapanmamıştır. Eski sürüm onu sağlam sayıyordu.
+    * Girintili (4+ boşluk) kod bloğu içindeki çit **gerçek değildir**, yazıdır.
+    * İçi boş bir çit satırı içerik boşken **açılış**, doluyken **kapanıştır**.
+
+    Yanlış pozitif de pahalıdır: `submit_receipt` aynı fonksiyonu kullandığı için
+    kapanmamış sanılan geçerli bir özet gönderimde reddedilirdi.
+    """
+    opened = None
     for line in text.split('\n'):
-        stripped = line.strip()
-        if not stripped.startswith('```'):
+        if opened is None and line.startswith('    '):
+            continue  # girintili kod bloğu: çit yalnızca metin
+        m = FENCE_LINE.match(line)
+        if not m:
             continue
-        if inside and stripped == '```':
-            inside = False
+        indent, ticks, rest = m.groups()
+        if opened is None and len(indent) > 3:
+            continue  # girintili kod bloğu
+        length = len(ticks)
+        if rest.strip():
+            if opened is None:
+                opened = length  # bilgi dizgisi yalnız açılışta olabilir
             continue
-        inside = not inside
-    return inside
+        if opened is None:
+            opened = length
+        elif length >= opened:
+            opened = None
+    return opened is not None
 
 
 def fence_safe_summary(summary):
@@ -676,6 +697,67 @@ def fence_safe_summary(summary):
         else:
             out.append(line)
     return '\n'.join(out)
+
+
+GENERATED_VIEW_FILES = ('knowledge/v3/outcomes.md',)
+GENERATED_VIEW_DIRS = ('daily/v3',)
+
+
+def generated_markdown_health(vault):
+    """Üretilmiş görüntülerin Markdown'ı okunabilir mi?
+
+    2026-10-16'da bir receipt özetindeki kapanmayan çit, `daily/v3/<gün>.md` ve
+    `knowledge/v3/outcomes.md` dosyalarının geri kalanını kod bloğuna çevirdi.
+    Hiçbir katman bunu bildirmedi; iki dosyanın %93'ü ve %17'si yanlış okunuyordu.
+
+    Kapı yalnız **üretilmiş** görüntüleri denetler, çünkü onları `sync` yeniden
+    yazabilir. `receipts/*.md` **değişmezdir**: oradaki kapanmayan çit hiçbir komutla
+    düzeltilemez, bu yüzden bilgi olarak listelenir ama durumu yükseltmez —
+    aksi hâlde doktor kalıcı kırmızıya döner ve alarm bir çıkızsız bildirime
+    dönüşür. Okur, hiçbir şey yazmaz.
+    """
+    vault = Path(vault)
+    candidates = []
+    for relative in GENERATED_VIEW_FILES:
+        candidates.append(vault / relative)
+    for relative in GENERATED_VIEW_DIRS:
+        directory = vault / relative
+        if directory.is_dir():
+            candidates.extend(sorted(directory.glob('*.md')))
+
+    broken = []
+    scanned = 0
+    for path in candidates:
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            continue
+        scanned += 1
+        if unbalanced_fence(text):
+            broken.append({'source': path.relative_to(vault).as_posix(), 'line': _first_open_fence(text)})
+
+    immutable = []
+    receipts = vault / 'receipts'
+    if receipts.is_dir():
+        for path in sorted(receipts.glob('*.md')):
+            try:
+                text = path.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                continue
+            if unbalanced_fence(text):
+                immutable.append({'source': path.relative_to(vault).as_posix(),
+                                  'line': _first_open_fence(text)})
+
+    return {'status': 'broken' if broken else 'ok', 'scanned': scanned, 'broken': broken,
+            'immutable_receipts': immutable}
+
+
+def _first_open_fence(text):
+    """Metinde okunmazlık başlayan satır; tanılamazsa 1."""
+    for index, line in enumerate(text.split('\n'), 1):
+        if unbalanced_fence('\n'.join(text.split('\n')[:index])):
+            return index
+    return 1
 
 
 def _receipt_view_contents(engine, db, warnings=None):

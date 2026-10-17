@@ -180,3 +180,126 @@ class ReceiptSummaryFenceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FenceParityTest(unittest.TestCase):
+    """CommonMark kurallari, 2026-10-17'de olculdu:
+
+    Kapatabilmek icin cit acilistan kisа olmaz; girintili (4+ bosluk) kod blogu
+    icindeki cit gercek degildir. Mevcut kod ikisini de yanlisliyordu: bir
+    gercek bosluk (4-cit acik, 3-cit kapali -> koruma kaciyor) ve iki yanlis
+    pozitif (ic ice citler, girintili kodda cit -> gecerli ozet REDDEDILIYOR).
+    """
+
+    BS = chr(96)
+
+    def fence(self, n=3):
+        return self.BS * n
+
+    def assert_unbalanced(self, text, why):
+        self.assertTrue(projections.unbalanced_fence(text), why)
+
+    def assert_balanced(self, text, why):
+        self.assertFalse(projections.unbalanced_fence(text), why)
+
+    def test_kisa_cit_uzun_acilisi_kapatmaz(self):
+        text = 'Metin:\n\n' + self.fence(4) + '\nkalici\n' + self.fence(3) + '\n\nDevam.'
+        self.assert_unbalanced(text, 'acilis 4 backtick, kapanis 3: kapanmamis')
+
+    def test_uzun_cit_kisa_acilisi_kapatabilir(self):
+        text = 'Metin:\n\n' + self.fence(3) + '\nblok\n' + self.fence(4) + '\n\nDevam.'
+        self.assert_balanced(text, 'kapanis acilistan kisа olmayabilir')
+
+    def test_ic_ice_cit_dengeli(self):
+        text = ('A:\n\n' + self.fence(4) + '\n' + self.fence(3) + '\n' + self.fence(4) +
+                '\n\nB:\n\n' + self.fence(3) + '\n' + self.fence(3))
+        self.assert_balanced(text, '4/3/4 ic ice ve ardindan 3/3 dengeli')
+
+    def test_girintili_kod_blogundaki_cit_gercek_degildir(self):
+        text = 'Metin:\n\n    ' + self.fence() + '\n    gercek kod\n\nDevam.'
+        self.assert_balanced(text, '4 bosluk girintili kod blogu: cit yazidir')
+
+    def test_bos_cit_satiri_hem_acilis_hem_kapanis(self):
+        self.assert_unbalanced('Metin:\n\n' + self.fence() + '\nkod\n\nDevam.',
+                               'bos bir cit satiri ici bosken ACILIS yapar')
+        self.assert_balanced('Metin:\n\n' + self.fence() + '\nkod\n' + self.fence() + '\n\nDevam.',
+                             'iki bos cit satiri: once acilir, sonra kapanir')
+
+    def test_gonderim_gecerli_ozeti_reddetmemeli(self):
+        """Gecersiz kabul edilen gecerli ozet bir regresyondur, gurultu degil."""
+        gecerli = [
+            ('ic ice dengeli', 'A:\n\n' + self.fence(4) + '\n' + self.fence(3) + '\n' + self.fence(4) + '\nB'),
+            ('girintili kodda cit', 'Metin:\n\n    ' + self.fence() + '\n    kod'),
+            ('uzun cit kapali', 'A:\n\n' + self.fence(3) + '\nx\n' + self.fence(4)),
+        ]
+        for ad, text in gecerli:
+            with self.subTest(ad=ad):
+                self.assertFalse(projections.unbalanced_fence(text), ad)
+
+    def test_kacirma_yalniz_sizan_citlere_dokunmali(self):
+        """Ic ice dengeli ozet oldugu gibi gecmeli; kacirma gereksiz degil."""
+        text = 'A:\n\n' + self.fence(4) + '\n' + self.fence(3) + '\n' + self.fence(4) + '\nB'
+        self.assertEqual(projections.fence_safe_summary(text), text)
+
+    def test_kacirma_kapanmayan_citi_etkisizlestirir(self):
+        text = 'Metin:\n\n' + self.fence(4) + '\nkalici\n' + self.fence(3) + '\n\nDevam.'
+        out = projections.fence_safe_summary(text)
+        self.assertNotEqual(out, text)
+        self.assertFalse(projections.unbalanced_fence(out), 'kacirilan metin hala bozuk')
+        self.assertIn('kalici', out, 'icerik korunmali')
+        self.assertIn('Devam', out, 'icerik korunmali')
+
+
+class ReceiptPathRejectionTest(unittest.TestCase):
+    """Koruma, ajanların kullandığı GERÇEK yolda ölçülür.
+
+    `beyin_v3_sync.py:receipt()` dosyayı önce yazıyor, sonra `sync()` ile DB'ye
+    giriyor ve `store.submit_receipt` **en sonda** çağrılıyor. Denetim yanlış
+    uçtaydı: ValueError yükseliyordu ama kayıt **yine de** diske ve DB'ye
+    yazılmış oluyordu (sandbox'ta ölçüldü: DB 104 → 105, dosya oluştu). Bir kapı
+    ki yeşil testle geçiyor ama geçmiyorsa kapı değildir.
+    """
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.vault = Path(self._tmp.name) / 'v'
+        (self.vault / 'notes').mkdir(parents=True)
+        self.state = Path(self._tmp.name) / 'state'
+        self.note = self.vault / 'notes/kaynak.md'
+        self.note.write_text('---\n{"kind": "note", "visibility": "internal"}\n---\nKaynak.\n', encoding='utf-8')
+        module = load_module()
+        self.engine = module.SyncEngine(self.vault, self.state)
+        self.addCleanup(lambda: getattr(self.engine.store, 'close', lambda: None)())
+        self.addCleanup(shutil.rmtree, self.vault, True)
+
+    def db_event_ids(self):
+        import json as _json
+        db = self.state / 'memory.sqlite3'
+        if not db.exists():
+            return []
+        conn = sqlite3.connect(db)
+        try:
+            return [_json.loads(row[0]).get('event_id')
+                    for row in conn.execute('SELECT payload FROM receipts')]
+        finally:
+            conn.close()
+
+    def test_kapanmayan_citli_ozet_hicbir_iz_birmemeli(self):
+        f = FENCE = chr(96) * 3
+        summary = f'Metin:\n\n{FENCE}\nkod satiri\n\nDevam eden metin.\n'
+        with self.assertRaises(ValueError):
+            self.engine.receipt('fence-yolu-001', summary, ['notes/kaynak.md'], 'claude')
+        self.assertNotIn('fence-yolu-001', self.db_event_ids(), 'DB kaydi yazildi')
+        receipts = self.vault / 'receipts'
+        yazilan = [p.name for p in receipts.glob('*.md')] if receipts.is_dir() else []
+        self.assertEqual(yazilan, [], 'receipt dosyasi yazildi: ' + str(yazilan))
+
+    def test_gecerli_ozet_kaydedilmeli(self):
+        """Red yolunu bir hata sanip gecersiz ozeti de engellemek kolay olurdu."""
+        f = FENCE = chr(96) * 3
+        summary = f'Metin:\n\n{FENCE}\nkod satiri\n{FENCE}\n\nDevam.\n'
+        self.engine.receipt('fence-yolu-002', summary, ['notes/kaynak.md'], 'claude')
+        self.assertIn('fence-yolu-002', self.db_event_ids())
