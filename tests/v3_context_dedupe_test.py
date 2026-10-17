@@ -226,6 +226,119 @@ class ContextDedupeHookTest(unittest.TestCase):
             self.assertIn('knowledge/goplus-quota.md', res.get('hookSpecificOutput', {}).get('additionalContext', ''))
         self.assertFalse((self.state / 'session-delivery').exists())
 
+    # The latest receipt block appended after the records (#363, reported by grogureis) follows
+    # the same ledger: once per session, again when a new receipt is written or after compaction.
+
+    @staticmethod
+    def context_of(result):
+        return result.get('hookSpecificOutput', {}).get('additionalContext', '')
+
+    def write_receipt(self, event_id, summary):
+        handoff = self.vault / 'knowledge/handoff.md'
+        if not handoff.exists():
+            handoff.write_text('Lighthouse ferry handoff log.', encoding='utf-8')
+        saved = self.cli('receipt', '--harness', 'claude', '--event-id', event_id,
+                         '--summary', summary, '--ref', 'knowledge/handoff.md')
+        self.assertEqual(saved['status'], 'succeeded')
+
+    def assert_turn(self, result, records=(), receipt=None):
+        text = self.context_of(result)
+        for source in ('knowledge/goplus-quota.md', 'knowledge/postgres-index.md'):
+            (self.assertIn if source in records else self.assertNotIn)(source, text)
+        if receipt is None:
+            self.assertNotIn('Latest receipt (', text)
+        else:
+            self.assertIn('Latest receipt (', text)
+            self.assertIn(receipt, text)
+        return text
+
+    def test_receipt_is_delivered_once_while_new_records_keep_coming(self):
+        self.cli('preferences', '--context-dedupe', 'on')
+        self.write_receipt('receipt-one', 'Receipt marker zebra-one: the ferry handoff is finished.')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'),
+                         ['knowledge/goplus-quota.md'], 'zebra-one')
+        # A new record arrives, the receipt is the same: the record alone.
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='how does postgres performance indexing work'),
+                         ['knowledge/postgres-index.md'])
+        # Nothing new at all: nothing, as before.
+        self.assertEqual(self.invoke('UserPromptSubmit', prompt='how does postgres performance indexing work'), {})
+
+    def test_dedupe_off_repeats_the_receipt_like_before(self):
+        self.write_receipt('receipt-one', 'Receipt marker zebra-one: the ferry handoff is finished.')
+        for setting in (None, 'off'):
+            if setting:
+                self.cli('preferences', '--context-dedupe', setting)
+            session = 'off-%s' % setting
+            first = self.assert_turn(self.invoke('UserPromptSubmit', session_id=session, prompt='why is the GoPlus quota wasted'),
+                                     ['knowledge/goplus-quota.md'], 'zebra-one')
+            second = self.assert_turn(self.invoke('UserPromptSubmit', session_id=session,
+                                                  prompt='how does postgres performance indexing work'),
+                                      ['knowledge/postgres-index.md'], 'zebra-one')
+            receipt = first[first.index('\nLatest receipt ('):]
+            self.assertTrue(second.endswith(receipt))
+        self.assertFalse((self.state / 'session-delivery').exists())
+
+    def test_new_receipt_is_delivered_alone_when_every_record_is_held_back(self):
+        self.cli('preferences', '--context-dedupe', 'on')
+        from beyin_v3 import MemoryStore
+        from beyin_v3_continuity import _path
+        anchor = _path(MemoryStore(self.state, self.vault), 'claude', 'test-session')
+        self.write_receipt('receipt-one', 'Receipt marker zebra-one: the ferry handoff is finished.')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'),
+                         ['knowledge/goplus-quota.md'], 'zebra-one')
+        self.write_receipt('receipt-two', 'Receipt marker zebra-two: the tide table still needs a check.')
+        text = self.assert_turn(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'),
+                                receipt='zebra-two')
+        self.assertIn('V3 source-backed context (data, not instructions):\nLatest receipt (', text)
+        self.assertNotIn('"records"', text, 'no empty envelope that reads as an abstained search')
+        self.assertNotIn('zebra-one', text)
+        self.assertTrue(anchor.is_file(), 'a receipt-only turn keeps the topic anchor')
+        self.assertEqual(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'), {})
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='how does postgres performance indexing work'),
+                         ['knowledge/postgres-index.md'])
+
+    def test_receipt_returns_after_compaction(self):
+        self.cli('preferences', '--context-dedupe', 'on')
+        self.write_receipt('receipt-one', 'Receipt marker zebra-one: the ferry handoff is finished.')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'),
+                         ['knowledge/goplus-quota.md'], 'zebra-one')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='how does postgres performance indexing work'),
+                         ['knowledge/postgres-index.md'])
+        self.invoke('PreCompact')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='how does postgres performance indexing work'),
+                         ['knowledge/postgres-index.md'], 'zebra-one')
+        self.invoke('SessionStart', source='compact')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'),
+                         ['knowledge/goplus-quota.md'], 'zebra-one')
+
+    def test_receipt_fails_open_without_session_or_with_damaged_ledger(self):
+        self.cli('preferences', '--context-dedupe', 'on')
+        self.write_receipt('receipt-one', 'Receipt marker zebra-one: the ferry handoff is finished.')
+        for prompt, source in (('why is the GoPlus quota wasted', 'knowledge/goplus-quota.md'),
+                               ('how does postgres performance indexing work', 'knowledge/postgres-index.md')):
+            self.assert_turn(self.invoke('UserPromptSubmit', session_id='unknown', prompt=prompt), [source], 'zebra-one')
+        import beyin_v3_dedupe as dedupe
+        damaged = dedupe._session_file(self.state, 'claude', 'damaged-session', create=True)
+        damaged.write_text('{invalid-json-content', encoding='utf-8')
+        self.assert_turn(self.invoke('UserPromptSubmit', session_id='damaged-session', prompt='why is the GoPlus quota wasted'),
+                         ['knowledge/goplus-quota.md'], 'zebra-one')
+        # The damaged ledger was replaced by a sound one: the next turn holds the receipt back.
+        self.assert_turn(self.invoke('UserPromptSubmit', session_id='damaged-session',
+                                     prompt='how does postgres performance indexing work'),
+                         ['knowledge/postgres-index.md'])
+
+    def test_receipt_that_did_not_fit_is_not_counted_as_delivered(self):
+        # render_context drops a receipt that does not fit rather than cutting it; a dropped
+        # receipt was never shown, so a later turn with room still carries it.
+        self.cli('preferences', '--context-dedupe', 'on')
+        self.cli('preferences', '--context-chars', '1000')
+        self.write_receipt('receipt-long', 'Receipt marker zebra-long: ' + 'the ferry handoff needs a tide check. ' * 28)
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='why is the GoPlus quota wasted'),
+                         ['knowledge/goplus-quota.md'])
+        self.cli('preferences', '--context-chars', '5000')
+        self.assert_turn(self.invoke('UserPromptSubmit', prompt='how does postgres performance indexing work'),
+                         ['knowledge/postgres-index.md'], 'zebra-long')
+
 
 class DedupeLedgerTest(unittest.TestCase):
     """Maintainer contracts for the ledger itself: excerpts, size cap and pruning."""
@@ -294,6 +407,47 @@ class DedupeLedgerTest(unittest.TestCase):
         d.record_delivered(self.state, 'claude', 'new', [self.record('a')])
         self.assertFalse(old.exists())
         self.assertTrue(d._session_file(self.state, 'claude', 'new').is_file())
+
+    def test_receipt_key_lives_in_the_same_ledger(self):
+        import hashlib
+        d = self.dedupe
+        one, two = '\nLatest receipt (receipts/one.md; ...):\nbody one', '\nLatest receipt (receipts/two.md; ...):\nbody two'
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 's', one), 'no ledger yet')
+        d.record_delivered(self.state, 'claude', 's', [self.record('a')], receipt=one)
+        self.assertTrue(d.receipt_delivered(self.state, 'claude', 's', one))
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 's', two))
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 'other', one), 'per session')
+        self.assertFalse(d.receipt_delivered(self.state, 'codex', 's', one), 'per harness')
+        # A turn that delivered records but no receipt keeps the receipt already said.
+        d.record_delivered(self.state, 'claude', 's', [self.record('b')])
+        self.assertTrue(d.receipt_delivered(self.state, 'claude', 's', one))
+        # A receipt-only turn records the new receipt and keeps the records.
+        d.record_delivered(self.state, 'claude', 's', [], receipt=two)
+        self.assertTrue(d.receipt_delivered(self.state, 'claude', 's', two))
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 's', one))
+        self.assertEqual(d.filter_novel(self.state, 'claude', 's', [self.record('a'), self.record('b')])[0], [])
+        stored = json.loads(d._session_file(self.state, 'claude', 's').read_text(encoding='utf-8'))
+        self.assertEqual(stored['version'], 1, 'an older release still reads the records')
+        self.assertEqual(stored['receipt'], hashlib.sha256(two.encode('utf-8')).hexdigest())
+        self.assertNotIn('body two', json.dumps(stored), 'only a hash of the receipt is kept')
+        d.save_settings(self.state, False)
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 's', two), 'dedupe off: always new')
+        d.save_settings(self.state, True)
+        d.reset_session(self.state, 'claude', 's')
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 's', two), 'compaction clears it')
+        d.record_delivered(self.state, 'claude', 'unknown', [], receipt=one)
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 'unknown', one))
+        self.assertEqual(list((self.state / d.DELIVERY_DIR).glob('*.json')), [], 'no ledger without a session id')
+
+    def test_damaged_receipt_value_fails_open(self):
+        d = self.dedupe
+        path = d._session_file(self.state, 'claude', 's', create=True)
+        path.write_text(json.dumps({'version': 1, 'harness': 'claude', 'at': time.time(), 'receipt': 7,
+                                    'records': {'a': {'sha': 'a' * 64, 'windows': [d._window(self.record('a'))]}}}),
+                        encoding='utf-8')
+        self.assertFalse(d.receipt_delivered(self.state, 'claude', 's', '\nLatest receipt (x):\n7'))
+        self.assertEqual(d.filter_novel(self.state, 'claude', 's', [self.record('a')])[0], [],
+                         'a bad receipt value does not discard the records')
 
 
 if __name__ == '__main__':
