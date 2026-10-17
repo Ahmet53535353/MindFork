@@ -27,6 +27,33 @@ def default_state(vault: Path) -> Path:
     return base / "beyin-v3" / key
 
 
+SOURCE_WRITE_COMMANDS = ("note-create", "task-create", "task-update")
+
+
+def mark_session_edit(state: Path) -> None:
+    """Open the Stop reminder's edit window for the Claude Code session that ran this write (#212).
+
+    Bash is not a PostToolUse matcher, so a note or task written through `beyin.py` from the Bash
+    tool was invisible to the receipt reminder. Claude Code sets CLAUDE_CODE_SESSION_ID in Bash
+    subprocesses to the session_id its hooks receive, so the marker names that exact session;
+    other shells and harnesses do not set it and nothing is guessed. Never costs the write itself.
+    """
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not session or os.environ.get("BEYIN_V3_NO_RECEIPT_REMINDER") == "1":
+        return
+    try:
+        folder = Path(state) / "receipt-reminders"
+        edited = folder / (hashlib.sha256(session.encode("utf-8")).hexdigest() + ".edited")
+        if edited.exists():
+            return  # the window opened by the first edit stays, as for PostToolUse
+        folder.mkdir(parents=True, exist_ok=True)
+        temporary = folder / (edited.name + "." + str(os.getpid()) + ".tmp")
+        temporary.write_text(json.dumps({"at": time.time()}), encoding="utf-8")
+        os.replace(temporary, edited)
+    except OSError:
+        pass
+
+
 def resolve_state(vault: Path, pinned: Path) -> Path:
     """Resolve a foreign OS/user's conventional default; preserve custom and local pins."""
     expected = default_state(vault).resolve()
@@ -1433,6 +1460,8 @@ def main(argv=None, return_result=False):
         else:
             payload = read_json(args.file)
             result = sync.update_task(payload["id"], payload["expected_revision"], payload["changes"])
+        if args.command in SOURCE_WRITE_COMMANDS:
+            mark_session_edit(state)
         if return_result:
             return result, 0
         print(json.dumps(result, ensure_ascii=True, indent=2))
