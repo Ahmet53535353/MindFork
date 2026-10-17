@@ -356,7 +356,8 @@ class OperaUIARootTest(unittest.TestCase):
         ole = types.SimpleNamespace(CoInitializeEx=Mock(return_value=0), CoUninitialize=Mock(),
                                     CoCreateInstance=Mock(side_effect=lambda *a: setattr(a[-1]._obj, 'value', 100) or 0))
         auto = Mock()
-        roots, released = [], []
+        auto.SysAllocString.return_value = 0
+        roots, released, conditions, searches = [], [], iter((102, 104)), iter((103, 105))
 
         def call(obj, slot, *args, **_):
             if slot == 2:
@@ -364,11 +365,11 @@ class OperaUIARootTest(unittest.TestCase):
             elif obj.value == 100 and slot == 6:
                 roots.append(args[0].value)
                 args[-1]._obj.value = 101
-            elif obj.value == 100 and slot == 23:
-                args[-1]._obj.value = 102
-            elif obj.value == 101 and slot == 6:
-                args[-1]._obj.value = 103
-            elif obj.value == 103 and slot == 3:
+            elif obj.value == 100 and slot == 23:  # hyperlink, then article-role condition
+                args[-1]._obj.value = next(conditions)
+            elif obj.value == 101 and slot == 6:  # links, then articles: none under the pointer
+                args[-1]._obj.value = next(searches)
+            elif obj.value in (103, 105) and slot == 3:
                 args[-1]._obj.value = 0
             else:
                 raise AssertionError((obj.value, slot))
@@ -381,7 +382,7 @@ class OperaUIARootTest(unittest.TestCase):
             self.assertIsNone(y._uia_link_at_cursor(42, [-100, 50], root=55))
         user.GetAncestor.assert_called_once_with(55, 2)
         self.assertEqual(roots, [55])
-        self.assertEqual(released, [103, 102, 101, 100])
+        self.assertEqual(released, [105, 104, 103, 102, 101, 100])
         ole.CoUninitialize.assert_called_once()
 
     def test_pointer_on_another_window_is_rejected_before_provider_access(self):

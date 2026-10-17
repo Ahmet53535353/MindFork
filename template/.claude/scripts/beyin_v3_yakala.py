@@ -1472,6 +1472,25 @@ def _uia_address_bar(window, class_name):
             ctypes.windll.ole32.CoUninitialize()
 
 
+POST_PERMALINKS = (
+    # X/Twitter: a post and its photo/video/analytics sub-pages all name the same post.
+    (re.compile(r'^https://(?:www\.|mobile\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})/status/(\d+)(?:[/?#]|$)', re.I),
+     lambda m: 'https://x.com/%s/status/%s' % (m.group(1), m.group(2))),
+    # Instagram: a post or a reel, with or without the author's name before it.
+    (re.compile(r'^https://(?:www\.)?instagram\.com/(?:[A-Za-z0-9_.]{1,30}/)?(p|reels?)/([A-Za-z0-9_-]{5,})(?:[/?#]|$)', re.I),
+     lambda m: 'https://www.instagram.com/%s/%s/' % ('p' if m.group(1).lower() == 'p' else 'reel', m.group(2))),
+)
+
+
+def _post_permalink(href):
+    """The canonical address of the post a link belongs to, or None when it is no post link."""
+    for pattern, build in POST_PERMALINKS:
+        match = pattern.match(href or '')
+        if match:
+            return build(match)
+    return None
+
+
 def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
     """The link under the mouse pointer inside `window` as {'value': href, 'name': text}, else None.
 
@@ -1480,6 +1499,10 @@ def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
     A hovered YouTube card plays its preview above the link, so the element at the point is not the
     link itself: every Hyperlink of the window is asked for its bounding rectangle instead and the
     one containing the pointer wins. Values come from the page (ValuePattern), never from a guess.
+
+    A post's text or video is no link on X or in the Instagram feed. When no link holds the
+    pointer, the innermost ARIA article (one post) under it is taken and its own permalink, the
+    first post link inside it, is returned; a second distinct one is the quoted post ('quote').
     """
     import ctypes
     import uuid
@@ -1525,9 +1548,96 @@ def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
     if started < 0:
         return None
     uia, element, condition, found = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+    role_condition, articles = ctypes.c_void_p(), ctypes.c_void_p()
+    oleaut32.SysAllocString.argtypes, oleaut32.SysAllocString.restype = [ctypes.c_wchar_p], ctypes.c_void_p
 
     def prop(obj, ident, value):
         _com_call(obj, 10, ident, ctypes.byref(value), argtypes=(ctypes.c_int, ctypes.POINTER(VARIANT)))  # GetCurrentPropertyValue
+
+    def elements(array):
+        """Each element of an IUIAutomationElementArray, in document order; the caller releases it."""
+        count = ctypes.c_int()
+        _com_call(array, 3, ctypes.byref(count), argtypes=(ctypes.POINTER(ctypes.c_int),))  # get_Length
+        for index in range(min(count.value, limit)):
+            item = ctypes.c_void_p()
+            _com_call(array, 4, index, ctypes.byref(item), argtypes=(ctypes.c_int, out))  # GetElement
+            if item:
+                yield item
+
+    def area(item):
+        """Width*height when the element's rectangle holds the pointer, else 0."""
+        box = VARIANT()
+        try:
+            prop(item, 30001, box)  # BoundingRectangle: SAFEARRAY of left, top, width, height
+            upper = ctypes.c_long()
+            if box.vt == 0x2005 and box.v1 and not oleaut32.SafeArrayGetUBound(box.v1, 1, ctypes.byref(upper)) \
+                    and upper.value == 3:
+                data = ctypes.c_void_p()
+                if not oleaut32.SafeArrayAccessData(box.v1, ctypes.byref(data)):
+                    try:
+                        left, top, wide, high = ctypes.cast(data, ctypes.POINTER(ctypes.c_double * 4)).contents
+                    finally:
+                        oleaut32.SafeArrayUnaccessData(box.v1)
+                    if wide > 0 and high > 0 and left <= point.x < left + wide and top <= point.y < top + high:
+                        return wide * high
+            return 0
+        finally:
+            oleaut32.VariantClear(ctypes.byref(box))
+
+    def strings(item):
+        value, name = VARIANT(), VARIANT()
+        try:
+            prop(item, 30045, value)  # Value
+            prop(item, 30005, name)  # Name
+            return (ctypes.wstring_at(value.v1) if value.vt == 8 and value.v1 else '',
+                    ctypes.wstring_at(name.v1) if name.vt == 8 and name.v1 else '')
+        finally:
+            oleaut32.VariantClear(ctypes.byref(value))
+            oleaut32.VariantClear(ctypes.byref(name))
+
+    def article_post():
+        """The permalink of the innermost ARIA article (one post) under the pointer."""
+        role = VARIANT(vt=8, v1=oleaut32.SysAllocString('article'))  # VT_BSTR
+        try:
+            _com_call(uia, 23, 30101, role, ctypes.byref(role_condition),  # CreatePropertyCondition, AriaRole
+                      argtypes=(ctypes.c_int, VARIANT, out))
+        finally:
+            oleaut32.VariantClear(ctypes.byref(role))
+        _com_call(element, 6, 4, role_condition, ctypes.byref(articles), argtypes=(ctypes.c_int, ctypes.c_void_p, out))
+        if not articles:
+            return None
+        best, best_area = None, 0
+        for item in elements(articles):
+            size = area(item)
+            if size and (best is None or size < best_area):
+                if best:
+                    _com_call(best, 2)
+                best, best_area = item, size
+            else:
+                _com_call(item, 2)
+        if not best:
+            return None
+        links = ctypes.c_void_p()
+        try:
+            _com_call(best, 6, 4, condition, ctypes.byref(links), argtypes=(ctypes.c_int, ctypes.c_void_p, out))
+            posts = []
+            for item in (elements(links) if links else ()):
+                try:
+                    post = _post_permalink(strings(item)[0])
+                    if post and post not in posts:
+                        posts.append(post)
+                finally:
+                    _com_call(item, 2)
+            if not posts:
+                return None
+            result = {'value': posts[0], 'name': re.sub(r'\s+', ' ', strings(best)[1]).strip()[:200]}
+            if len(posts) > 1:
+                result['quote'] = posts[1]
+            return result
+        finally:
+            if links:
+                _com_call(links, 2)
+            _com_call(best, 2)
 
     try:
         ctypes.oledll.ole32.CoCreateInstance(ctypes.byref(guid('ff48dba4-60ef-4201-aa87-54103eef594e')), None, 1,
@@ -1540,48 +1650,18 @@ def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
                   argtypes=(ctypes.c_int, ctypes.c_void_p, out))
         if not found:
             return None
-        count = ctypes.c_int()
-        _com_call(found, 3, ctypes.byref(count), argtypes=(ctypes.POINTER(ctypes.c_int),))  # get_Length
-        for index in range(min(count.value, limit)):
-            item = ctypes.c_void_p()
-            _com_call(found, 4, index, ctypes.byref(item), argtypes=(ctypes.c_int, out))  # GetElement
-            if not item:
-                continue
+        for item in elements(found):
             try:
-                box = VARIANT()
-                try:
-                    prop(item, 30001, box)  # BoundingRectangle: SAFEARRAY of left, top, width, height
-                    inside = False
-                    upper = ctypes.c_long()
-                    if box.vt == 0x2005 and box.v1 and not oleaut32.SafeArrayGetUBound(box.v1, 1, ctypes.byref(upper)) \
-                            and upper.value == 3:
-                        data = ctypes.c_void_p()
-                        if not oleaut32.SafeArrayAccessData(box.v1, ctypes.byref(data)):
-                            try:
-                                left, top, wide, high = ctypes.cast(data, ctypes.POINTER(ctypes.c_double * 4)).contents
-                            finally:
-                                oleaut32.SafeArrayUnaccessData(box.v1)
-                            inside = wide > 0 and high > 0 and left <= point.x < left + wide and top <= point.y < top + high
-                finally:
-                    oleaut32.VariantClear(ctypes.byref(box))
-                if not inside:
+                if not area(item):
                     continue
-                value, name = VARIANT(), VARIANT()
-                try:
-                    prop(item, 30045, value)  # Value
-                    prop(item, 30005, name)  # Name
-                    href = ctypes.wstring_at(value.v1) if value.vt == 8 and value.v1 else ''
-                    text = ctypes.wstring_at(name.v1) if name.vt == 8 and name.v1 else ''
-                finally:
-                    oleaut32.VariantClear(ctypes.byref(value))
-                    oleaut32.VariantClear(ctypes.byref(name))
+                href, text = strings(item)
                 if re.match(r'https?://', href, re.I):
-                    return {'value': href, 'name': text}
+                    return {'value': _post_permalink(href) or href, 'name': text}
             finally:
                 _com_call(item, 2)
-        return None
+        return article_post()
     finally:
-        for obj in (found, condition, element, uia):
+        for obj in (articles, role_condition, found, condition, element, uia):
             if obj:
                 _com_call(obj, 2)  # Release
         ctypes.windll.ole32.CoUninitialize()
@@ -1735,6 +1815,9 @@ def _opera_snapshot(window, at=None):
     if value:
         result['hover_value'] = value
         result['hover_name'] = re.sub(r'\s+', ' ', str(hovered.get('name') or '')).strip()
+        quote = _opera_url(hovered.get('quote'))
+        if quote and quote != value:
+            result['hover_quote'] = quote
     return result
 
 
@@ -1783,23 +1866,29 @@ def windows_browser_url(window, app, timeout=ADDRESS_TIMEOUT, cancel=None):
     return tab_url(result.get('value'))
 
 
-def windows_hovered_link(window, app, at=None, timeout=ADDRESS_TIMEOUT, cancel=None):
+def windows_hovered_link(window, app, at=None, timeout=ADDRESS_TIMEOUT, cancel=None, extra=None):
     """(url, text) of the link under the pointer in a Chromium window, e.g. a video card on a home page.
 
     `at` is the pointer position recorded at the key press (physical pixels); without it the current one.
+    A quoted post inside the pointed post is stored as extra['quote'] when `extra` is a dict.
     """
     if not WIN_CHROMIUM.get((app or '').lower()) or not window:
         return None, None
     if (app or '').lower() == 'opera':
         snapshot = _windows_opera_snapshot(window, at, timeout, cancel)
-        result = {'value': snapshot.get('hover_value'), 'name': snapshot.get('hover_name')}
+        result = {'value': snapshot.get('hover_value'), 'name': snapshot.get('hover_name'),
+                  'quote': snapshot.get('hover_quote')}
     else:
         request = {'hwnd': int(window)}
         if at is not None:
             request['at'] = [int(at[0]), int(at[1])]
         result = _windows_read('uia_link', request, timeout, cancel)
-    url = (_opera_url if (app or '').lower() == 'opera' else tab_url)(result.get('value'))
+    check = _opera_url if (app or '').lower() == 'opera' else tab_url
+    url = check(result.get('value'))
     text = re.sub(r'\s+', ' ', str(result.get('name') or '')).strip()
+    quote = check(result.get('quote')) if url and result.get('quote') else None
+    if isinstance(extra, dict) and quote and quote != url:
+        extra['quote'] = quote
     return (url, text or None) if url else (None, None)
 
 
@@ -1872,21 +1961,26 @@ def windows_enrich(context, cancel=None):
         return context
     title = _win_page_title(context.get('pencere'), app, context.get('profil'))
     if (app or '').lower() == 'opera':
-        for key in ('url_imlec', 'baslik_imlec', 'baslik'):
+        for key in ('url_imlec', 'baslik_imlec', 'baslik', 'url_alinti'):
             context.pop(key, None)
         snapshot = _windows_opera_snapshot(hwnd, context.get('imlec'), cancel=cancel)
         context['url'] = _opera_url(snapshot.get('value'))
         hovered = _opera_url(snapshot.get('hover_value'))
         hovered_title = re.sub(r'\s+', ' ', str(snapshot.get('hover_name') or '')).strip() or None
+        quote = _opera_url(snapshot.get('hover_quote')) if hovered else None
     else:
         if not context.get('url'):
             context['url'] = windows_browser_url(hwnd, app, cancel=cancel)
+        extra = {}
         try:
-            hovered, hovered_title = windows_hovered_link(hwnd, app, context.get('imlec'), cancel=cancel)
+            hovered, hovered_title = windows_hovered_link(hwnd, app, context.get('imlec'), cancel=cancel, extra=extra)
         except Exception:
             hovered = hovered_title = None
+        quote = extra.get('quote') if hovered else None
     if hovered and hovered != context.get('url'):
         context['url_imlec'], context['baslik_imlec'] = hovered, hovered_title
+    if quote and quote not in (hovered, context.get('url')):
+        context['url_alinti'] = quote
     if context.get('url') or context.get('url_imlec'):
         try:
             # A tab switch keeps the window and process: the title is what tells the page changed.
@@ -1895,7 +1989,7 @@ def windows_enrich(context, cancel=None):
         except Exception:
             same = False
         if not same:
-            for key in ('url', 'baslik', 'url_imlec', 'baslik_imlec'):
+            for key in ('url', 'baslik', 'url_imlec', 'baslik_imlec', 'url_alinti'):
                 context.pop(key, None)
         elif context.get('url'):
             context['baslik'] = title
@@ -2091,6 +2185,7 @@ def windows_sources(context, clip, fresh, image=None, shot=None):
     copied = clipboard_leads and bool(clip)
     add('url', hovered, 'İmlecin altındaki bağlantı', True, 'i', context.get('baslik_imlec'))
     add('url', page, 'Etkin sayfa', not hovered, 's', context.get('baslik'))
+    add('url', context.get('url_alinti'), 'Alıntılanan gönderi', False, 'a')
     same = next((source for source in sources if source['kind'] == 'url' and source['value'] == copied_url), None)
     if copied_url and not same:
         add('url', copied_url, 'Pano bağlantısı', clipboard_leads, 'p')
