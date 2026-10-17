@@ -706,63 +706,132 @@ def fence_safe_summary(summary):
 
 GENERATED_VIEW_FILES = ('knowledge/v3/outcomes.md',)
 GENERATED_VIEW_DIRS = ('daily/v3',)
-
-
-def generated_markdown_health(vault):
-    """Üretilmiş görüntülerin Markdown'ı okunabilir mi?
-
-    2026-10-16'da bir receipt özetindeki kapanmayan çit, `daily/v3/<gün>.md` ve
-    `knowledge/v3/outcomes.md` dosyalarının geri kalanını kod bloğuna çevirdi.
-    Hiçbir katman bunu bildirmedi; iki dosyanın %93'ü ve %17'si yanlış okunuyordu.
-
-    Kapı yalnız **üretilmiş** görüntüleri denetler, çünkü onları `sync` yeniden
-    yazabilir. `receipts/*.md` **değişmezdir**: oradaki kapanmayan çit hiçbir komutla
-    düzeltilemez, bu yüzden bilgi olarak listelenir ama durumu yükseltmez —
-    aksi hâlde doktor kalıcı kırmızıya döner ve alarm bir çıkızsız bildirime
-    dönüşür. Okur, hiçbir şey yazmaz.
-    """
-    vault = Path(vault)
-    candidates = []
-    for relative in GENERATED_VIEW_FILES:
-        candidates.append(vault / relative)
-    for relative in GENERATED_VIEW_DIRS:
-        directory = vault / relative
-        if directory.is_dir():
-            candidates.extend(sorted(directory.glob('*.md')))
-
-    broken = []
-    scanned = 0
-    for path in candidates:
-        try:
-            text = path.read_text(encoding='utf-8')
-        except (OSError, UnicodeError):
-            continue
-        scanned += 1
-        if unbalanced_fence(text):
-            broken.append({'source': path.relative_to(vault).as_posix(), 'line': _first_open_fence(text)})
-
-    immutable = []
-    receipts = vault / 'receipts'
-    if receipts.is_dir():
-        for path in sorted(receipts.glob('*.md')):
-            try:
-                text = path.read_text(encoding='utf-8')
-            except (OSError, UnicodeError):
-                continue
-            if unbalanced_fence(text):
-                immutable.append({'source': path.relative_to(vault).as_posix(),
-                                  'line': _first_open_fence(text)})
-
-    return {'status': 'broken' if broken else 'ok', 'scanned': scanned, 'broken': broken,
-            'immutable_receipts': immutable}
+COMPANION_DIRECTORY = '🔮 850-Companion'
+COMPANION_VIEWS = ('Last-Session.md', 'Threads.md', 'Core.md', 'Soul.md', 'Kurallar.md',
+                   'Journal.md', 'Tetikleyici.md')
+IMMUTABLE_DIRS = ('receipts',)
+# Hidden and vendored trees are never read as Markdown by the user, and a scanner that
+# counts them reports noise instead of harm.
+SKIP_DIRS = frozenset({'node_modules', '.git', '.obsidian', '__pycache__', '.kiro', '.agents'})
 
 
 def _first_open_fence(text):
-    """Metinde okunmazlık başlayan satır; tanılamazsa 1."""
-    for index, line in enumerate(text.split('\n'), 1):
-        if unbalanced_fence('\n'.join(text.split('\n')[:index])):
+    """Metinde okunmazlığın başladığı satır; tanılamazsa 1."""
+    lines = text.split('\n')
+    for index in range(1, len(lines) + 1):
+        if unbalanced_fence('\n'.join(lines[:index])):
             return index
     return 1
+
+
+def _broken(path, vault):
+    try:
+        text = path.read_text(encoding='utf-8')
+    except (OSError, UnicodeError):
+        return None
+    if not unbalanced_fence(text):
+        return None
+    return {'source': path.relative_to(vault).as_posix(), 'line': _first_open_fence(text)}
+
+
+def _vault_markdown(vault):
+    for path in sorted(vault.rglob('*.md')):
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        if path.is_symlink():
+            continue
+        yield path
+
+
+def markdown_health(vault):
+    """Vault'un Markdown'ı hâlâ okunabilir mi? Kapsam 2026-07-17'de ölçülerek açıldı.
+
+    278 dosyalık vault'u taramak **45 ms** sürüyor, yani daraltmanın bir maliyet
+    gerekçesi yoktu. Asıl gerekçe yazıcı denetimi: motor `Last-Session.md` ve
+    `Threads.md` için **hiçbir yazma çağrısı yapmıyor**, dolayısıyla o dosyalara
+    girdi denetimi uygulanamaz; `notes/` içeriği ayrıca `beyin_v3_yakala.py`
+    üzerinden dışarıdan gelir. Hepsi için ortak ağ **çıktı** taramasıdır.
+
+    Dört kova, çünkü hepsi aynı ağırlıkta değil:
+
+    * `broken_generated` — motor yazıyor, `sync` yeniden yazabilir: **yükseltir**.
+    * `broken_companion` — ajan yazıyor, oturum başına bağlama giriyor: **yükseltir**.
+    * `broken_sources` — ham yakalama, arşiv, el yazımı not: **yalnız bildirir**.
+      Bir web kopyasının kırık çiti normaldir; BLOCKER yapmak doctor'u itibarsızlaştırır.
+    * `immutable_receipts` — değiştirilemez, hiçbir komutla düzeltilemez: **yalnız bildirir**.
+
+    Okur, hiçbir şey yazmaz ve hiçbir şeyi değiştirmez.
+    """
+    vault = Path(vault)
+    generated = []
+    companion = []
+    sources = []
+    immutable = []
+    scanned = 0
+    for path in _vault_markdown(vault):
+        found = _broken(path, vault)
+        if found is None:
+            scanned += 1
+            continue
+        relative = found['source']
+        parts = path.relative_to(vault).parts
+        # Dizin adları yol olarak saklanır ("daily/v3"), karşılaştırma parça
+        # torkasıyla yapılmalı; "daily" ile "daily/v3" eşit değildir. Ölçüldü:
+        # ilk yazımda kırık daily/v3 dosyası `broken_sources`a düşüp durumu `ok`
+        # bildiriyordu — yani kapı tam da yakalamaması gereken yerde sessizdi.
+        if relative in GENERATED_VIEW_FILES or any(
+                parts[:len(d.split('/'))] == tuple(d.split('/')) for d in GENERATED_VIEW_DIRS):
+            generated.append(found)
+        elif len(parts) > 1 and parts[0] == COMPANION_DIRECTORY and parts[-1] in COMPANION_VIEWS:
+            companion.append(found)
+        elif len(parts) > 1 and parts[0] in IMMUTABLE_DIRS:
+            immutable.append(found)
+        else:
+            sources.append(found)
+    return {
+        'status': 'broken' if (generated or companion) else 'ok',
+        'scanned': scanned,
+        # `broken` = durumu yükseltenlerin birleşik listesi; tüketiciler için tek
+        # liste, kova ayrımı yalnız açıklamada. 2026-07-17 öncesi çağıranlar çalışsın.
+        'broken': generated + companion,
+        'broken_generated': generated,
+        'broken_companion': companion,
+        'broken_sources': sources,
+        'immutable_receipts': immutable,
+    }
+
+
+def generated_markdown_health(vault):
+    """Eski ad; doktor hattı bunu çağırıyor. Kapsam `markdown_health` ile aynı."""
+    return markdown_health(vault)
+
+
+def markdown_read_notice(vault):
+    """Okuma anında tek satırlık uyarı; yalnız **companion** dosyaları için.
+
+    Bu dosyalar oturum başında bağlama giriyor. Kırık çit orada yalnız metni bozar,
+    veriyi değil — bu yüzden bağlamı kesmez, yalnız söyler. Statik bir uyarıdır:
+    her oturumda tek satır gelir, kayıt sayısı gibi büyümez.
+
+    Kapsam bilinçli olarak dar: **SessionStart vault taraması yapamaz**
+    (`tests/v3_perf_budget_test.py` walk/rglob/glob sayacını sıfır bekliyor). İlk
+    yazımda tüm vault'u tarayan `markdown_health` çağrılıyordu ve tam olarak bu
+    bütçeyi kırıyordu — 1 rglob + 1 glob. Burada yalnız yedi adlandırılmış companion
+    dosyasına doğrudan bakılır, gezinti yok.
+    """
+    vault = Path(vault)
+    names = []
+    for name in COMPANION_VIEWS:
+        try:
+            text = (vault / COMPANION_DIRECTORY / name).read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            continue
+        if unbalanced_fence(text):
+            names.append(name)
+    if not names:
+        return ''
+    return ('Unreadable Markdown (unclosed code fence; the rest of the file renders as code): '
+            + ', '.join(sorted(names)) + '. Open the file and close the fence.\n')
 
 
 def _receipt_view_contents(engine, db, warnings=None):
