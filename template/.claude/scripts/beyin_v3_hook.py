@@ -37,6 +37,9 @@ HARNESS_SYNTHETIC_PROMPT_PREFIXES = (
     "<local-command-caveat>",
     "<command-name>",
     "<local-command-stdout>",
+    # Codex Desktop drafts the composer's suggestion in a thread/fork with this prompt (#373). Its
+    # UserPromptSubmit payload carries no field that tells the fork apart, so the text decides.
+    "This is an app-generated request for a suggested next user message.",
 )
 # Claude Code turn origins that no human typed. Its hook payload carries no origin field today (2.1.285), so
 # the prefixes above do the work; if one appears, other kinds (channel, bridge, remote, ...) can be a person
@@ -338,8 +341,11 @@ def enqueue_event(vault, state, payload, harness):
         metadata.update(project)
     if payload.get('no_memory') is True:
         metadata['no_memory'] = True
-    # Hermes and OpenCode deliver the first user prompt as SessionStart; keep only the fact, never the text.
-    if isinstance(payload.get('prompt'), str) and payload['prompt'].strip():
+    if payload.get('hook_event_name') in ('UserPromptSubmit', 'SessionStart') and is_synthetic_prompt(payload):
+        # No person typed this turn (#373): the event stays observable, but it opens no receipt checkpoint.
+        metadata['synthetic'] = True
+    elif isinstance(payload.get('prompt'), str) and payload['prompt'].strip():
+        # Hermes and OpenCode deliver the first user prompt as SessionStart; keep only the fact, never the text.
         metadata['prompted'] = True
     identity = str(payload.get("event_id") or uuid.uuid4().hex)
     key = hashlib.sha256(identity.encode()).hexdigest()

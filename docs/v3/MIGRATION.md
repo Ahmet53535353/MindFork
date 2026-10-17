@@ -212,6 +212,12 @@ explicitly session-limited rather than proof of per-turn completeness. Missing
 prompt events are reported as a terminal-only limitation. Explicit `no_memory`
 hook metadata suppresses the
 checkpoint signal. Respect a user's no-memory request regardless of that signal.
+A turn no person typed (a `<task-notification>`, a message from another agent
+session, or the prompt Codex Desktop sends to a fork to draft a suggested next
+user message) keeps its lifecycle event, marked `synthetic`, but opens no
+checkpoint and moves no turn boundary, so it cannot reopen a session that a
+receipt already closed (#373). Edits made during such a turn count toward the
+latest turn a person started.
 
 `doctor` also reports `receipt_coverage`: the share of finished sessions with a
 matching receipt, for all time and for the last 7 and 30 days, measured when
