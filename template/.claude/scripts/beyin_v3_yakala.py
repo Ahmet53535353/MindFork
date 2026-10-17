@@ -1491,6 +1491,21 @@ def _post_permalink(href):
     return None
 
 
+def _post_title(post, article, link=''):
+    """A short card title for a post read from its article.
+
+    X reads an article as "<name> <badge> @<handle> <time> <text>"; the time is the post's own
+    link, so the text after it, prefixed by the handle, is the title. Other sites keep the text.
+    """
+    text = re.sub(r'\s+', ' ', article or '').strip()
+    link = re.sub(r'\s+', ' ', link or '').strip()
+    handle = re.match(r'^https://x\.com/([A-Za-z0-9_]{1,15})/status/', post or '')
+    if handle and link and link in text:
+        body = text.split(link, 1)[1].strip()
+        text = '@%s: %s' % (handle.group(1), body) if body else '@' + handle.group(1)
+    return text[:200]
+
+
 def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
     """The link under the mouse pointer inside `window` as {'value': href, 'name': text}, else None.
 
@@ -1620,17 +1635,19 @@ def _uia_link_at_cursor(window, at=None, limit=4000, root=None):
         links = ctypes.c_void_p()
         try:
             _com_call(best, 6, 4, condition, ctypes.byref(links), argtypes=(ctypes.c_int, ctypes.c_void_p, out))
-            posts = []
+            posts, first = [], ''
             for item in (elements(links) if links else ()):
                 try:
-                    post = _post_permalink(strings(item)[0])
+                    href, label = strings(item)
+                    post = _post_permalink(href)
                     if post and post not in posts:
+                        first = first if posts else label  # the post's own link: X's time stamp
                         posts.append(post)
                 finally:
                     _com_call(item, 2)
             if not posts:
                 return None
-            result = {'value': posts[0], 'name': re.sub(r'\s+', ' ', strings(best)[1]).strip()[:200]}
+            result = {'value': posts[0], 'name': _post_title(posts[0], strings(best)[1], first)}
             if len(posts) > 1:
                 result['quote'] = posts[1]
             return result

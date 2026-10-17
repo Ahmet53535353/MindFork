@@ -65,5 +65,22 @@ class QuotedPostTest(unittest.TestCase):
             self.assertEqual(extra, {'quote': QUOTE})
 
 
+class PostTitleTest(unittest.TestCase):
+    def test_x_title_is_handle_and_text_after_the_time_link(self):
+        article = 'Varun Mohan Verified account @_mohansolo 2 hours ago Lots of excitement   for Argon'
+        self.assertEqual(y._post_title('https://x.com/_mohansolo/status/1', article, '2 hours ago'),
+                         '@_mohansolo: Lots of excitement for Argon')
+
+    def test_localised_or_missing_time_keeps_the_article_text(self):
+        article = 'Varun Mohan Onaylanmış hesap @_mohansolo 2 saat Metin'
+        self.assertEqual(y._post_title('https://x.com/_mohansolo/status/1', article, '2 saat'), '@_mohansolo: Metin')
+        self.assertEqual(y._post_title('https://x.com/_mohansolo/status/1', article, ''), article)
+        self.assertEqual(y._post_title('https://x.com/_mohansolo/status/1', 'Varun 2h', '2h'), '@_mohansolo')
+
+    def test_instagram_keeps_text_and_titles_are_bounded(self):
+        self.assertEqual(y._post_title('https://www.instagram.com/p/abcde/', 'Photo by VL STUDIO', 'x'), 'Photo by VL STUDIO')
+        self.assertEqual(len(y._post_title('https://www.instagram.com/p/abcde/', 'a' * 500)), 200)
+
+
 if __name__ == '__main__':
     unittest.main()
