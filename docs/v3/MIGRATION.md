@@ -219,6 +219,10 @@ checkpoint and moves no turn boundary, so it cannot reopen a session that a
 receipt already closed (#373). Edits made during such a turn count toward the
 latest turn a person started.
 
+The per-turn context names receipt gaps only for sessions that finished in the
+last 7 days, with their count as measured by the latest sync. The all-time
+count stays in `doctor` as `potential_missing_receipts`.
+
 `doctor` also reports `receipt_coverage`: the share of finished sessions with a
 matching receipt, for all time and for the last 7 and 30 days, measured when
 `doctor` runs. Only sessions with an observed user prompt count, either a

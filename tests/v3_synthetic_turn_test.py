@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turns no person typed open no receipt checkpoint (#373).
+"""Turns no person typed open no receipt checkpoint, and the gap warning tracks recent work (#373).
 
 Every case drives a real temporary install: the installed hook and beyin.py run as subprocesses
 with real lifecycle JSON on stdin, inside an isolated home.
@@ -222,6 +222,31 @@ class SyntheticTurnCheckpointTest(unittest.TestCase):
         self.drain()
         self.assertNotIn(session_key('only-notification'), self.gap_sessions())
         self.assertEqual(self.gaps()['receipt_coverage']['total'], 0)
+
+    def test_gap_warning_names_only_the_last_seven_days(self):
+        old = time.time() - 10 * 86400
+        queue = self.state / 'hook-queue'
+        queue.mkdir(exist_ok=True)
+        for offset, event in enumerate(('UserPromptSubmit', 'Stop')):
+            name = hashlib.sha256(('old-' + event).encode('utf-8')).hexdigest() + '.json'
+            (queue / name).write_text(json.dumps({'event': event, 'harness': 'claude', 'session': session_key('old-work'),
+                                                  'at': old + offset}), encoding='utf-8')
+        self.drain()
+        self.assertEqual(self.gaps()['potential_missing_receipts'], 1)
+        self.assertEqual(self.gaps()['receipt_coverage']['last_7d']['missing'], 0)
+        context = self.hook('claude', 'UserPromptSubmit', 'reader-1', prompt='suggested next user message flow')
+        self.assertIn('notes/suggestion.md', context)
+        self.assertNotIn('lack structured receipts', context)
+
+        self.hook('claude', 'UserPromptSubmit', 'recent-work', prompt='Öneri akışını düzenle')
+        self.hook('claude', 'Stop', 'recent-work')
+        self.drain()
+        context = self.hook('claude', 'UserPromptSubmit', 'reader-2', prompt='suggested next user message flow')
+        warnings = [line for line in context.splitlines() if 'lack structured receipts' in line]
+        self.assertEqual(len(warnings), 1, context)
+        self.assertIn('1 in the last 7 days', warnings[0])
+        # The all-time count stays a doctor figure.
+        self.assertEqual(self.cli('doctor')['potential_missing_receipts'], 2)
 
 
 if __name__ == '__main__':

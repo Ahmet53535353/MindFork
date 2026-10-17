@@ -373,7 +373,11 @@ def drain_queue(vault, state):
         result['secrets_redacted'] = secret_filter_health(state)['total']
         gap_path = state/'receipt-gaps.json'
         if gap_path.exists():
-            result['potential_missing_receipts'] = json.loads(gap_path.read_text(encoding='utf-8'))['potential_missing_receipts']
+            gaps = json.loads(gap_path.read_text(encoding='utf-8'))
+            result['potential_missing_receipts'] = gaps['potential_missing_receipts']
+            # The prompt warning names only the last 7 days, already counted by this sync (#373).
+            recent = (gaps.get('receipt_coverage') or {}).get('last_7d') or {}
+            result['recent_missing_receipts'] = recent.get('missing', 0)
         from beyin_v3_skills import sync_skills
         skills = sync_skills(vault, state)
         # Skill mirroring owns no queued event, so its outcome is reported for
@@ -603,8 +607,11 @@ def main():
                     warning += "V3 receipt view preserved; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
-                if sync.get('potential_missing_receipts'):
-                    warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
+                # Only recent gaps reach the prompt; the all-time count never clears and stays in doctor (#373).
+                recent = sync.get('recent_missing_receipts')
+                if isinstance(recent, int) and recent > 0:
+                    warning += (f'Prior checkpoints may lack structured receipts ({recent} in the last 7 days); '
+                                'check Last-Session/Threads and current sources for unfinished work.\n')
             from beyin_v3_companion import (context as companion_context, relevant, opening_budget, client_budget,
                                             client_rebudget, fit_client)
             # Both budgets stop below a client's own cut-off; past it the client files the text away (#175).
