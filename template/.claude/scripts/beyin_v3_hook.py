@@ -37,6 +37,9 @@ HARNESS_SYNTHETIC_PROMPT_PREFIXES = (
     "<local-command-caveat>",
     "<command-name>",
     "<local-command-stdout>",
+    # Codex Desktop drafts the composer's suggestion in a thread/fork with this prompt (#373). Its
+    # UserPromptSubmit payload carries no field that tells the fork apart, so the text decides.
+    "This is an app-generated request for a suggested next user message.",
 )
 # Claude Code turn origins that no human typed. Its hook payload carries no origin field today (2.1.285), so
 # the prefixes above do the work; if one appears, other kinds (channel, bridge, remote, ...) can be a person
@@ -338,8 +341,11 @@ def enqueue_event(vault, state, payload, harness):
         metadata.update(project)
     if payload.get('no_memory') is True:
         metadata['no_memory'] = True
-    # Hermes and OpenCode deliver the first user prompt as SessionStart; keep only the fact, never the text.
-    if isinstance(payload.get('prompt'), str) and payload['prompt'].strip():
+    if payload.get('hook_event_name') in ('UserPromptSubmit', 'SessionStart') and is_synthetic_prompt(payload):
+        # No person typed this turn (#373): the event stays observable, but it opens no receipt checkpoint.
+        metadata['synthetic'] = True
+    elif isinstance(payload.get('prompt'), str) and payload['prompt'].strip():
+        # Hermes and OpenCode deliver the first user prompt as SessionStart; keep only the fact, never the text.
         metadata['prompted'] = True
     identity = str(payload.get("event_id") or uuid.uuid4().hex)
     key = hashlib.sha256(identity.encode()).hexdigest()
@@ -367,7 +373,11 @@ def drain_queue(vault, state):
         result['secrets_redacted'] = secret_filter_health(state)['total']
         gap_path = state/'receipt-gaps.json'
         if gap_path.exists():
-            result['potential_missing_receipts'] = json.loads(gap_path.read_text(encoding='utf-8'))['potential_missing_receipts']
+            gaps = json.loads(gap_path.read_text(encoding='utf-8'))
+            result['potential_missing_receipts'] = gaps['potential_missing_receipts']
+            # The prompt warning names only the last 7 days, already counted by this sync (#373).
+            recent = (gaps.get('receipt_coverage') or {}).get('last_7d') or {}
+            result['recent_missing_receipts'] = recent.get('missing', 0)
         from beyin_v3_skills import sync_skills
         skills = sync_skills(vault, state)
         # Skill mirroring owns no queued event, so its outcome is reported for
@@ -597,8 +607,11 @@ def main():
                     warning += "V3 receipt view preserved; consult doctor or run beyin.py sync --recover-views to archive and regenerate.\n"
                 if sync.get('skill_conflicts'):
                     warning += 'Shared skills differ between harnesses; both versions are preserved. Run doctor before trusting skill text.\n'
-                if sync.get('potential_missing_receipts'):
-                    warning += 'Prior checkpoints may lack structured receipts; check Last-Session/Threads and current sources for unfinished work.\n'
+                # Only recent gaps reach the prompt; the all-time count never clears and stays in doctor (#373).
+                recent = sync.get('recent_missing_receipts')
+                if isinstance(recent, int) and recent > 0:
+                    warning += (f'Prior checkpoints may lack structured receipts ({recent} in the last 7 days); '
+                                'check Last-Session/Threads and current sources for unfinished work.\n')
             from beyin_v3_companion import (context as companion_context, relevant, opening_budget, client_budget,
                                             client_rebudget, fit_client)
             # Both budgets stop below a client's own cut-off; past it the client files the text away (#175).
