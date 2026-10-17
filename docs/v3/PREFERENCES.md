@@ -224,7 +224,8 @@ python3 beyin.py preferences --context-dedupe on
 - Kanca, bu oturumda daha önce teslim ettiği kayıtları (`id`, `source_sha256` ve metin penceresi) runtime klasöründe `session-delivery/<sha256(harness + "\0" + session_id)>.json` dosyasında tutar. Oturum kimliğinin kendisi yazılmaz.
 - Mesaj bağlamı pasaj tabanlıdır: uzun bir notun başka bir bölümü (aynı `id`, farklı pencere) yeni sayılır ve teslim edilir; aynı pencere kısaltılmış olsa da tekrar sayılır. Geri tutulan kayıtların bütçesi yeni kayıtlara kalır.
 - Arama sonucunda gelen not daha önce iletildiyse ve dosya diskte değişmediyse filtrelenir; mesajda yalnızca yeni ya da güncellenen notlar modele teslim edilir.
-- Bir istemde hiç yeni not kalmazsa kanca boş ek bağlam (`{}`) döner; gereksiz token tüketimi ve dikkat dağınıklığı önlenir.
+- Notların ardından eklenen son receipt bloğu da aynı defterle izlenir; defterde receipt metninin yalnız sha256 değeri tutulur. Aynı receipt oturumda bir kez verilir; yeni bir receipt yazılınca ya da receipt dosyası değişince ve sıkıştırmadan sonra yeniden verilir. Bütçeye sığmadığı için gösterilmeyen receipt teslim edilmiş sayılmaz.
+- Bir istemde hiç yeni not kalmazsa kanca boş ek bağlam (`{}`) döner; gereksiz token tüketimi ve dikkat dağınıklığı önlenir. Eşleşen notların hepsi geri tutulduğu halde son receipt bu oturum için yeniyse yalnız receipt verilir. Hiç not eşleşmeyen istemde, tekrar önleme kapalıyken olduğu gibi receipt de eklenmez.
 - **Sıkıştırma (Compaction):** Model bağlamı sıkıştırdığında (`PreCompact` veya Claude Code `SessionStart` olayında `source: compact`), eski notlar pencereden düştüğü için teslimat defteri otomatik sıfırlanır.
 - `SessionEnd` oturumun teslimat defterini temizler. Dosya diskte düzenlenirse `source_sha256` değiştiği için not yeni sayılır ve tekrar teslim edilir.
 - Tümü tekrar sayılan bir istem süreklilik çapasını (`topic-refs`) silmez; sıkıştırmadan sonra gelen kısa bir devam mesajı konuyu kaybetmez.
