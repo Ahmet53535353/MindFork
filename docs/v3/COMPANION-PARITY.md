@@ -54,6 +54,22 @@ ve dosyayı okumak gerektiğini söyler. Kesme satır sınırındadır, yarım k
 haritası ve ilişkili kaynaklar payını aldıktan sonra artan bütçe kırpılmış companion
 bölümlerine geri verilir; sınır hiçbir durumda aşılmaz.
 
+Kapsamlı kurallar (#333, [#375](https://github.com/avenoxai/avenoxbeyin/issues/375)): tek bir
+projeye ya da alana ait düzeltme `projects/<proje>/Kurallar.md` dosyasına yazılır; global
+`Kurallar.md` içinde en çok `[kapsam: <proje>]` etiketli tek satırlık işaretçi kalır. Etiket
+`[kapsam: ...]` ya da `[scope: ...]` biçimindedir (köşeli parantezsiz `kapsam: ad` da tanınır),
+virgülle birden çok ad alır; `genel`, `global`, `all` ve `herkes` etiketsiz kuralla aynıdır. Etiket, satır başında `-`, `*`, `+`,
+`1.` ya da `1)` ile açılan liste maddesinin herhangi bir satırında durabilir; madde boş satıra
+ya da başlığa kadar sürer. Ad karşılaştırması büyük/küçük harf ve Türkçe karakter farkını yok
+sayar. Hook başka projelerin etiketli maddelerini yalnız kanca girdisinde etkin bir `project`
+adı geldiğinde eler; o zaman vault kökündeki `projects/`, `Projeler/` ve `projeler/` altında
+bu adı birebir taşıyan klasörden ilk bulunan `Kurallar.md` (yoksa `rules.md`) dosyasını da
+ekler. Sembolik bağ ve vault dışına çıkan yol okunmaz; dosya indekslenmiş ve `private`
+olmayan bir kaynak olmalıdır. Claude Code kanca girdisinde `project` alanı göndermez: orada
+etiketli kurallar da açılışa girer ve proje dosyası otomatik gelmez. Bu yüzden işaretçi satırı
+ajana dosyayı ne zaman açacağını söyler. Etkin projeyi `cwd` üzerinden bulma ayrı bir iştir
+([#288](https://github.com/avenoxai/avenoxbeyin/issues/288)).
+
 ## Boyut sınırı ve arşivleme (#96)
 
 [Issue #96](https://github.com/avenoxai/avenoxbeyin/issues/96) beş haftalık bir kasada

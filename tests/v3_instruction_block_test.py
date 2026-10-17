@@ -1,4 +1,5 @@
 """The generated AGENTS.md block must separate direct user statements from agent inferences."""
+import ast
 import base64
 import hashlib
 import json
@@ -19,6 +20,13 @@ ENGLISH = ('A preference, decision or fact the user states directly is not an in
            'record it promptly without waiting to be asked.')
 TURKISH = ('Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; '
            'istenmesini beklemeden kaydedilir.')
+# #375: "record it promptly" is about timing; the target of a correction is chosen first.
+SCOPE_ENGLISH = ('Promptly is about timing, not target: a correction that belongs to one project or area goes to '
+                 '`projects/<project>/Kurallar.md`, leaving at most a one-line pointer in Kurallar.md.')
+SCOPE_TURKISH = ('Beklemeden kaydetmek hedefi değiştirmez: tek bir projeye ya da alana ait düzeltme '
+                 '`projects/<proje>/Kurallar.md` dosyasına gider, Kurallar.md\'de en çok bir satırlık işaretçi kalır; '
+                 'yalnız her işte geçerli kural Kurallar.md\'ye tam metin girer.')
+CLAUSES = (ENGLISH, TURKISH, SCOPE_ENGLISH, SCOPE_TURKISH)
 NOTE = '\nKullanıcının kendi notu: bu paragraf blok dışında ve korunmalı.\n'
 RULES = '# Kurallarım\nUSER_RULE_SENTINEL: yalnız AGENTS.md içinde yaşar.\n'
 CLAUDE = '# Claude kuralları\nBu dosya kendi talimatlarını taşır.\n'
@@ -111,7 +119,7 @@ class InstructionBlockTest(unittest.TestCase):
         for name in ('AGENTS.md', 'CLAUDE.md'):
             path = self.vault / name
             text = path.read_text(encoding='utf-8')
-            for sentence in (ENGLISH, TURKISH):
+            for sentence in CLAUSES:
                 pattern = r'\s*' + r'\s+'.join(map(re.escape, sentence.split()))
                 text, count = re.subn(pattern, '', text, count=1)
                 self.assertEqual(count, 1, 'clause missing from generated ' + name)
@@ -129,7 +137,7 @@ class InstructionBlockTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         for name in ('AGENTS.md', 'CLAUDE.md'):
             text = (self.vault / name).read_text(encoding='utf-8')
-            for sentence in (ENGLISH, TURKISH):
+            for sentence in CLAUSES:
                 text = re.sub(r'\s*' + r'\s+'.join(map(re.escape, sentence.split())), '', text, count=1)
             data = text.encode()
             manifest['files'][name] = dict(manifest['files'][name], installed_hash=hashlib.sha256(data).hexdigest(),
@@ -144,6 +152,46 @@ class InstructionBlockTest(unittest.TestCase):
                 block = self.block(name)
                 self.assertIn(' '.join(ENGLISH.split()), ' '.join(block.split()))
                 self.assertIn(' '.join(TURKISH.split()), ' '.join(block.split()))
+
+    def test_correction_target_is_chosen_before_recording(self):
+        # #375: the target of a user correction was fixed to Kurallar.md and scope was only a label,
+        # so project rules piled up in the global file every session opens with.
+        self.seed('CLAUDE.md', CLAUDE)
+        self.install()
+        for name in ('AGENTS.md', 'CLAUDE.md'):
+            with self.subTest(file=name):
+                block = ' '.join(self.block(name).split())
+                for sentence in CLAUSES:
+                    self.assertIn(' '.join(sentence.split()), block)
+                self.assertNotIn("kural olarak Kurallar'a", block)
+        scripts = str(ROOT / 'template/.claude/scripts')
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import beyin_v3_companion as companion
+        skill = ' '.join((ROOT / 'template/.agents/skills/beyin/SKILL.md').read_text(encoding='utf-8').split())
+        self.assertIn('ama önce hedefini seç', skill)
+        self.assertIn('`projects/<proje>/Kurallar.md` dosyasına yaz', skill)
+        # Documented only as the hook implements it: the folders it scans, and that the filter
+        # needs a client that sends the active project, which Claude Code does not (#288).
+        source = (ROOT / 'template/.claude/scripts/beyin_v3_companion.py').read_text(encoding='utf-8')
+        folders = ast.literal_eval(re.search(r'for folder in (\([^)]*\))', source)[1])
+        for folder in folders:
+            self.assertIn('`' + folder + '/`', skill)
+        self.assertIn('yalnız istemci kancaya etkin proje adını gönderdiğinde', skill)
+        self.assertIn('Claude Code bugün proje adı göndermez', skill)
+        # The pointer the skill shows is a rule the hook really scopes.
+        pointer = re.search(r'`(- \[kapsam: <proje>\][^`]*)`', skill)[1].replace('<proje>', 'alpha')
+        self.assertEqual(companion.rule_scopes(pointer), {'alpha'})
+        self.assertEqual(companion.filter_scoped_rules(pointer, 'alpha'), pointer)
+        self.assertEqual(companion.filter_scoped_rules(pointer, None), pointer)
+        self.assertNotIn('alpha', companion.filter_scoped_rules(pointer, 'beta'))
+        router = (ROOT / 'template/CLAUDE.md').read_text(encoding='utf-8')
+        seeds = (companion.STARTERS['Kurallar.md'], (ROOT / 'template/🔮 850-Companion/Kurallar.md').read_text(encoding='utf-8'))
+        for text in (skill, router) + seeds:
+            self.assertIn('projects/<proje>/Kurallar.md', ' '.join(text.split()))
+        for text in (skill, router, self.block()) + seeds:
+            for forbidden in ('\u2014', '\u2013', '\u00e2'):  # em dash, en dash, circumflex a
+                self.assertNotIn(forbidden, text)
 
     def test_generated_block_paragraphs_are_single_line_softwrapped(self):
         self.seed('CLAUDE.md', CLAUDE)
@@ -227,7 +275,8 @@ class InstructionBlockTest(unittest.TestCase):
         self.downgrade()
         self.install()
         for name in ('AGENTS.md', 'CLAUDE.md'):
-            self.assertIn(' '.join(ENGLISH.split()), ' '.join(self.block(name).split()))
+            for sentence in CLAUSES:
+                self.assertIn(' '.join(sentence.split()), ' '.join(self.block(name).split()))
         self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
 
     def test_crlf_router_with_user_text_outside_the_block_still_reinstalls(self):
@@ -246,11 +295,15 @@ class InstructionBlockTest(unittest.TestCase):
         self.downgrade()
         self.update()
         for name in ('AGENTS.md', 'CLAUDE.md'):
-            self.assertIn(' '.join(TURKISH.split()), ' '.join(self.block(name).split()))
+            text = (self.vault / name).read_text(encoding='utf-8')
+            self.assertEqual((text.count(START), text.count(END)), (1, 1))
+            for sentence in (TURKISH, SCOPE_TURKISH, SCOPE_ENGLISH):
+                self.assertIn(' '.join(sentence.split()), ' '.join(self.block(name).split()))
         self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
         self.assertEqual(self.run_cli(self.vault / 'beyin.py', 'rollback')['status'], 'rolled_back')
         for name in ('AGENTS.md', 'CLAUDE.md'):
-            self.assertNotIn(' '.join(TURKISH.split()), ' '.join(self.block(name).split()))
+            for sentence in (TURKISH, SCOPE_TURKISH):
+                self.assertNotIn(' '.join(sentence.split()), ' '.join(self.block(name).split()))
         self.assertIn(NOTE.strip(), (self.vault / 'AGENTS.md').read_text(encoding='utf-8'))
 
     def test_missing_claude_md_is_created_as_an_agents_md_import(self):
