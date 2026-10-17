@@ -35,6 +35,16 @@ class PostPermalinkTest(unittest.TestCase):
             with self.subTest(href=href):
                 self.assertIsNone(y._post_permalink(href))
 
+    def test_instagram_sound_page_is_no_post(self):
+        # A reel shows its sound (/reels/audio/<id>/) as a link above the media; it is read
+        # before the post's own link, so it must not turn into a made-up /reel/audio/ post.
+        for href in ('https://www.instagram.com/reels/audio/1234567890123456/',
+                     'https://www.instagram.com/reels/audio/', 'https://www.instagram.com/reel/audio/42/'):
+            with self.subTest(href=href):
+                self.assertIsNone(y._post_permalink(href))
+        self.assertEqual(y._post_permalink('https://www.instagram.com/reel/AudioClip1/'),
+                         'https://www.instagram.com/reel/AudioClip1/')
+
 
 class QuotedPostTest(unittest.TestCase):
     def test_quote_is_offered_unselected_on_its_own_key(self):

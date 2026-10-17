@@ -1476,8 +1476,10 @@ POST_PERMALINKS = (
     # X/Twitter: a post and its photo/video/analytics sub-pages all name the same post.
     (re.compile(r'^https://(?:www\.|mobile\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})/status/(\d+)(?:[/?#]|$)', re.I),
      lambda m: 'https://x.com/%s/status/%s' % (m.group(1), m.group(2))),
-    # Instagram: a post or a reel, with or without the author's name before it.
-    (re.compile(r'^https://(?:www\.)?instagram\.com/(?:[A-Za-z0-9_.]{1,30}/)?(p|reels?)/([A-Za-z0-9_-]{5,})(?:[/?#]|$)', re.I),
+    # Instagram: a post or a reel, with or without the author's name before it. A reel's sound
+    # page (/reels/audio/<id>/) is no post: it must not become a made-up /reel/audio/ address.
+    (re.compile(r'^https://(?:www\.)?instagram\.com/(?:[A-Za-z0-9_.]{1,30}/)?(p|reels?)/(?!audio(?:[/?#]|$))'
+                r'([A-Za-z0-9_-]{5,})(?:[/?#]|$)', re.I),
      lambda m: 'https://www.instagram.com/%s/%s/' % ('p' if m.group(1).lower() == 'p' else 'reel', m.group(2))),
 )
 
