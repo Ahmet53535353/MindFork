@@ -672,7 +672,7 @@ def fence_safe_summary(summary):
         m = FENCE_LINE.match(line)
         if m:
             indent, ticks, rest = m.groups()
-            out.append(indent + ''.join('\\\\`' for _ in ticks) + rest)
+            out.append(indent + ''.join('\\`' for _ in ticks) + rest)
         else:
             out.append(line)
     return '\n'.join(out)

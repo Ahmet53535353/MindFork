@@ -154,6 +154,17 @@ class ReceiptSummaryFenceTest(unittest.TestCase):
                 self.assertFalse(unclosed_fences(path.read_text(encoding='utf-8')),
                                  'sync zehirli goruntuyu onarmadi')
 
+    def test_kacis_tek_ters_bolu_kullanir(self):
+        BS = chr(96)   # backtick
+        cift = chr(92) * 2 + BS      # cift kacis: ekranda gorunur kalir
+        tek = chr(92) + BS            # dogru kacis
+        out = projections.fence_safe_summary(BROKEN)
+        fence_line = next(l for l in out.split('\n') if BS in l)
+        self.assertNotIn(cift, fence_line, 'cift kacis var')
+        self.assertIn(tek * 3, fence_line, 'tek kacis yok')
+        self.assertNotIn(BS * 3, fence_line, 'kacislanmamis kaldi')
+
+
     def test_gonderim_kapanmayan_citi_reddeder(self):
         with self.assertRaises(ValueError):
             self.submit(BROKEN)
