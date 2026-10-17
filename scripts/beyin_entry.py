@@ -266,6 +266,10 @@ def human_result(result, command, installed_version=None):
             lines.append('Paralel oturum bildirimi: ' + ('acik' if result['parallel_sessions'] == 'on' else 'kapali'))
         if result.get('parallel_sessions_notice'):
             lines.append(result['parallel_sessions_notice'])
+        if result.get('context_dedupe'):
+            lines.append('Oturum ici tekrar onleme: ' + ('acik' if result['context_dedupe'] == 'on' else 'kapali'))
+        if result.get('context_dedupe_notice'):
+            lines.append(result['context_dedupe_notice'])
         hermes_p = result.get('hermes_platforms') or {}
         if hermes_p.get('attended') or hermes_p.get('unattended'):
             h_parts = []
@@ -467,6 +471,11 @@ def human_result(result, command, installed_version=None):
             lines.append('Paralel oturum bildirimi: acik (son 45 dakikada etkin ' + str(parallel.get('active', 0)) + ' oturum isareti)')
         elif parallel.get('valid') is False:
             lines.append('parallel-sessions.json gecersiz; paralel oturum bildirimi kapali sayiliyor.')
+        dedupe = result.get('context_dedupe') or {}
+        if dedupe.get('enabled'):
+            lines.append('Oturum ici tekrar onleme: acik (' + str(dedupe.get('sessions', 0)) + ' oturum defteri)')
+        elif dedupe.get('valid') is False:
+            lines.append('context-dedupe.json gecersiz; oturum ici tekrar onleme kapali sayiliyor.')
         index_scope = result.get('index_exclusions') or {}
         lines += index_exclusion_lines(index_scope)
         hint = index_scope.get('vendored_hint') or {}
