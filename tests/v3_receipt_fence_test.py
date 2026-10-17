@@ -1,0 +1,171 @@
+"""Bir receipt özeti kapanmayan bir çit içerirse indeks dosyaları okunmaz olur.
+
+`_receipt_view_contents` (beyin_v3_projections.py) özeti `daily/v3/<gün>.md` ve
+`knowledge/v3/outcomes.md` içine **kelimesi kelimesine** gömer. Markdown'da kapanmayan
+``` bloğu, dosyanın kalanını kod bloğu sayar: Obsidian'da koyu arka plan, açık renk yazı.
+`submit_receipt` özetin boş olup olmadığını ve refs'i denetler, içeriğin Markdown
+olduğuna **bakmaz**; 2026-10-16'da vault'ta üç dosyanın (receipt + iki görüntü) bu
+yüzden bozulduğu ölçüldü.
+
+Düzeltme iki yerde olmalı: gömerken çitleri etkisizleştirmek (geçmişi de onarır) ve
+gönderirken reddetmek (yenisini oluşmasını engeller). Ölçülmüş çözüm 4 boşluklu
+girintili kod bloğu: projeksiyon girintiyi eklediğinde çit sayısı 3'e çıkar ve
+Markdown girintili kod bloğu sayar — çit saymaz.
+"""
+import importlib.util
+import json
+import os
+import sqlite3
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(os.environ.get('BEYIN_TEST_REPO', Path(__file__).resolve().parents[1]))
+MODULE = ROOT / 'template/.claude/scripts/beyin_v3_sync.py'
+sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
+import beyin_v3_projections as projections
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location('beyin_v3_sync_fence_subject', MODULE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    scripts = str(MODULE.parent)
+    sys.path.insert(0, scripts)
+    old = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = old
+        sys.path.remove(scripts)
+    return module
+
+
+# 2026-10-16'da yazdigim receipt'in ozetinden: acilan ama kapanmayan blok.
+BROKEN = ('AHMET BIR HATA GOSTERDI ve dogruydu. Temiz dosyanin sonunda su yaziyordu:\n'
+          '\n'
+          '  ```\n'
+          '  > Kod eksik: ET, Path, gzip... (uyari)\n'
+          '  Before using it with production data, ... (makalenin SON PARAGRAFI)\n'
+          '\n'
+          'Yani benim ekledigim uyari kod blogunun hemen arkasina gomuluyordu.')
+
+
+def unclosed_fences(text):
+    """Dosyada tek sayida kalan gercek çit satiri var mi? Gövde içindeki kod çitleri hariç."""
+    inside = False
+    depth = 0
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped.startswith('```'):
+            continue
+        if inside and stripped == '```':
+            inside = False
+            continue
+        inside = not inside
+        depth += 1
+    return inside
+
+
+class ReceiptSummaryFenceTest(unittest.TestCase):
+    """Özet ne yazarsa yazsın, indeks dosyası okunur kalmalı."""
+
+    def setUp(self):
+        self.module = load_module()
+        self.tmp = tempfile.TemporaryDirectory(prefix='beyin-fence-')
+        self.addCleanup(self.tmp.cleanup)
+        self.vault = Path(self.tmp.name) / 'Vault'
+        self.vault.mkdir()
+        self.engine = self.module.SyncEngine(self.vault, Path(self.tmp.name) / 'state')
+        self.addCleanup(lambda: getattr(self.engine.store, 'close', lambda: None)())
+        self.db = sqlite3.connect(self.engine.store.database)
+        self.addCleanup(self.db.close)
+        self.source = self.vault / 'notes/source.md'
+        self.source.parent.mkdir(parents=True, exist_ok=True)
+        self.source.write_text('---\n{"kind": "note", "visibility": "internal"}\n---\nKaynak.\n',
+                               encoding='utf-8')
+
+    def record(self, summary, ident='fence-probe'):
+        """Receipt'i dogrudan tabloya yazar; gonderim ayrica test edilir."""
+        with self.engine.store._connect() as db:
+            db.execute('INSERT OR REPLACE INTO receipts VALUES (?,?)', (ident, json.dumps({
+                'event_id': ident, 'summary': summary, 'refs': ['notes/source.md'],
+                'harness': 'claude', 'created_at': '2026-10-16T12:00:00+00:00',
+            })))
+        return self.engine.sync()
+
+    def submit(self, summary):
+        return self.engine.store.submit_receipt(
+            event_id='fence-submit', summary=summary,
+            refs=['notes/source.md'], harness='claude')
+
+    def test_kapanmayan_cit_ozet_indeksi_bozmaz(self):
+        self.record(BROKEN)
+        desired = projections._receipt_view_contents(self.engine, self.db, [])
+        self.assertTrue(desired, 'görünüm üretilmedi; test ölçüm yapamaz')
+        for name, content in desired.items():
+            with self.subTest(view=name):
+                self.assertFalse(unclosed_fences(content),
+                                 f'{name} kapanmayan çitle bitiyor')
+
+    def test_dengeli_cit_ozeti_aynen_kalir(self):
+        """Dengeli çitler gömülebilir; sorun kapanmayanlarda."""
+        balanced = 'Girdi:\n\n```\nkod satiri\n```\n\nDevam eden metin.'
+        self.record(balanced)
+        desired = projections._receipt_view_contents(self.engine, self.db, [])
+        joined = '\n'.join(desired.values())
+        self.assertIn('kod satiri', joined)
+        self.assertFalse(unclosed_fences(joined))
+
+    def test_duz_metim_ozeti_degismez(self):
+        plain = 'Sadece duz bir iki cumle, hicbir kod yok.'
+        self.record(plain)
+        desired = projections._receipt_view_contents(self.engine, self.db, [])
+        self.assertIn(plain, '\n'.join(desired.values()))
+
+    def test_zehirlenmis_goruntuyu_sync_onar(self):
+        """Onceden yazilmis bozuk goruntuyu, hash kaydi duruyorken de sync duzeltmeli.
+
+        Gercek durum: 2026-10-16'da kapanmayan citli bir receipt iki goruntuyu bozdu.
+        Receipt degistirilemedigi icin (amend yolu yok) tek yol projeksiyon katmani.
+        """
+        self.record(BROKEN)
+        daily = self.vault / 'daily/v3/2026-10-16.md'
+        outcomes = self.vault / 'knowledge/v3/outcomes.md'
+        for path in (daily, outcomes):
+            self.assertTrue(path.exists(), f'{path} uretilmedi')
+        # eski davranis: govdeyi boz, hash kaydi oldugu gibi kalsin
+        _hash, _atomic, render = self.engine.projection_helpers()
+        broken = daily.read_text(encoding='utf-8').replace('\\\\`', '`')
+        daily.write_text(broken, encoding='utf-8')
+        outcomes.write_text(outcomes.read_text(encoding='utf-8').replace('\\\\`', '`'),
+                            encoding='utf-8')
+        with self.engine.store._connect() as db:
+            for path in (daily, outcomes):
+                rel = path.relative_to(self.vault).as_posix()
+                db.execute('INSERT OR REPLACE INTO receipt_views VALUES (?,?)',
+                           (rel, _hash(path.read_bytes())))
+
+        self.engine.sync()
+        for path in (daily, outcomes):
+            with self.subTest(view=path.name):
+                self.assertFalse(unclosed_fences(path.read_text(encoding='utf-8')),
+                                 'sync zehirli goruntuyu onarmadi')
+
+    def test_gonderim_kapanmayan_citi_reddeder(self):
+        with self.assertRaises(ValueError):
+            self.submit(BROKEN)
+
+    def test_gonderim_dengeli_citi_kabul_eder(self):
+        r = self.submit('Girdi:\n\n```\nkod\n```\n\nBitti.')
+        self.assertTrue(r.get('event_id'))
+
+    def test_gonderim_duz_metni_kabul_eder(self):
+        r = self.submit('Duz metin, iyi hucre.')
+        self.assertTrue(r.get('event_id'))
+
+
+if __name__ == '__main__':
+    unittest.main()

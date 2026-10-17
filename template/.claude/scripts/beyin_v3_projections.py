@@ -640,6 +640,44 @@ def receipt_day(created_at, zone=None):
         return None
 
 
+FENCE_LINE = re.compile(r'^(\s*)(`{3,})(.*)$')
+
+
+def unbalanced_fence(text):
+    """Kapanmayan bir gercek çit var mi? Gövde içindeki kod çitleri de sayılır."""
+    inside = False
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped.startswith('```'):
+            continue
+        if inside and stripped == '```':
+            inside = False
+            continue
+        inside = not inside
+    return inside
+
+
+def fence_safe_summary(summary):
+    """Özeti gömerken çitlerin dosyayı bloklamasını engelle.
+
+    Dengeli çitler aynen geçer; kapanmayan çitler satır satır kaçırılır, böylece
+    kapanış işareti uydurulmaz ve okuyucu metni olduğu gibi görür. 2026-10-16'da
+    kapanmayan bir çitli özet `daily/v3/` ve `knowledge/v3/outcomes.md` dosyalarının
+    geri kalanını kod bloğuna çevirdi (koyu arka plan, açık yazı).
+    """
+    if not unbalanced_fence(summary):
+        return summary
+    out = []
+    for line in summary.split('\n'):
+        m = FENCE_LINE.match(line)
+        if m:
+            indent, ticks, rest = m.groups()
+            out.append(indent + ''.join('\\\\`' for _ in ticks) + rest)
+        else:
+            out.append(line)
+    return '\n'.join(out)
+
+
 def _receipt_view_contents(engine, db, warnings=None):
     """Desired views from immutable receipts, without writing files or tracking state."""
     _hash, _, render = engine.projection_helpers()
@@ -662,7 +700,8 @@ def _receipt_view_contents(engine, db, warnings=None):
             if warnings is not None:
                 warnings.append({'source': source, 'reason': 'unreadable receipt created_at; omitted from daily/v3'})
             continue
-        grouped[day].append((_receipt_instant(event['created_at']), event['created_at'], source, event['summary']))
+        grouped[day].append((_receipt_instant(event['created_at']), event['created_at'], source,
+                            fence_safe_summary(event['summary'])))
     desired = {}
     outcomes = []
     for day, items in sorted(grouped.items()):

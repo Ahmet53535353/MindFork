@@ -971,6 +971,12 @@ class MemoryStore:
             raise ValueError("event_id required")
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("summary required")
+        # An unclosed fence makes every generated index unreadable from that point on:
+        # the summary is embedded verbatim in daily/v3/<day>.md and knowledge/v3/outcomes.md,
+        # and a receipt is immutable afterwards (no amend path), so the damage is permanent.
+        from beyin_v3_projections import unbalanced_fence
+        if unbalanced_fence(summary):
+            raise ValueError("summary has an unclosed code fence; it would break every generated index")
         if harness not in HARNESSES + ("manual",):
             raise ValueError("unsupported harness")
         if not isinstance(refs, list) or not refs:
