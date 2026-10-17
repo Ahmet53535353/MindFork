@@ -538,7 +538,14 @@ def context(store, budget, session, harness, query='', receipt='', warning='', p
                                      source_directory=target.relative_to(store.vault_root).as_posix(),
                                      text_transform=lambda name, text: excerpt(name, text, project=project))
     records = snapshot['records']
-    notice = ''
+    # A companion file with an unclosed fence enters the context as ordinary text; only the
+    # rendering is broken, not the data. So this reports and never clips. These files are
+    # agent-authored -- the engine never writes them -- so no input gate can exist for them.
+    try:
+        from beyin_v3_projections import markdown_read_notice
+        notice = markdown_read_notice(store.vault_root)
+    except Exception:
+        notice = ''  # a readability report must never cost the session its context
     if snapshot['missing_sources']:
         notice += 'Missing/unavailable companion sources: ' + ', '.join(snapshot['missing_sources']) + '.\n'
     if snapshot['stale_excluded']:

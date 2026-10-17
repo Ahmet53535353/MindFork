@@ -838,6 +838,12 @@ class MemoryStore:
             raise ValueError("event_id required")
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("summary required")
+        # Defense in depth: SyncEngine.receipt validates first, so this only fires for a
+        # direct store caller. An unclosed fence makes every generated index unreadable from
+        # that point on, and a receipt is immutable afterwards (no amend path).
+        from beyin_v3_projections import unbalanced_fence
+        if unbalanced_fence(summary):
+            raise ValueError("summary has an unclosed code fence; it would break every generated index")
         if harness not in HARNESSES + ("manual",):
             raise ValueError("unsupported harness")
         if not isinstance(refs, list) or not refs:

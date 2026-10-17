@@ -1257,13 +1257,22 @@ def main(argv=None, return_result=False):
             except Exception as exc:  # never hides the rest of doctor
                 result['index_exclusions'] = {'status': 'unavailable', 'error': type(exc).__name__}
             result['receipt_line_endings'] = receipt_line_endings(vault)  # information only: the status below is untouched
+            # Raises the status for generated views and for companion files, which the engine
+            # never writes and which therefore admit no input gate. Immutable receipts and raw
+            # captures are listed but never raise: nothing can rewrite them, and a raising gate
+            # would stay red forever with no way out.
+            try:
+                from beyin_v3_projections import markdown_health
+                result['generated_markdown'] = markdown_health(vault)
+            except Exception as exc:  # never hides the rest of doctor
+                result['generated_markdown'] = {'status': 'unavailable', 'error': type(exc).__name__}
             try:
                 _ensure_scripts_path()
                 import beyin_v3_projects as projects
                 result['project_scopes'] = projects.check_project_scopes(vault)
             except Exception as exc:
                 result['project_scopes'] = {'status': 'unavailable', 'error': type(exc).__name__}
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook_paths'].get('status') == 'stale' or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') or result.get('project_scopes', {}).get('status') in ('error', 'warning') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['hook_paths'].get('status') == 'stale' or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') or result.get('project_scopes', {}).get('status') in ('error', 'warning') or result.get('generated_markdown', {}).get('status') == 'broken' else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
             # Information only: a leftover global OMP hook copy predates the vault-owned plan
             # (OMP.md says the installer never updates or removes it). After an engine update the
             # copy can be older than the installed vault hook, so a session outside the vault can

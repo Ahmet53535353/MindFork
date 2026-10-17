@@ -1369,6 +1369,15 @@ class SyncEngine:
         if harness not in HARNESSES + ('manual',) or not isinstance(refs, list) or not refs:
             raise ValueError('harness and refs required')
         summary, redacted = self._protect(summary)
+        # The fence check belongs at the FIRST end of this pipeline. This method writes the
+        # receipt file and then syncs -- which is what inserts the row -- before it reaches
+        # store.submit_receipt, so a check living only in submit_receipt raises only after
+        # everything is already persisted. Measured 2026-07-17: the CLI printed the
+        # ValueError and the row and the file were both written (DB 104 -> 105). A gate that
+        # reports a rejection nobody can act on is worse than no gate: the damage looks handled.
+        from beyin_v3_projections import unbalanced_fence
+        if unbalanced_fence(summary):
+            raise ValueError('summary has an unclosed code fence; it would break every generated index')
         refs = [self.store._source(ref) for ref in refs]
         links = self._links(links)
         source = 'receipts/' + _hash(event_id) + '.md'
