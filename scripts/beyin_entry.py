@@ -596,7 +596,8 @@ def load_cli(directory):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    human = ('--human' in argv or sys.stdout.isatty()) and '--json' not in argv
+    force_json = '--json' in argv
+    human = ('--human' in argv or sys.stdout.isatty()) and not force_json
     argv = [arg for arg in argv if arg not in ('--human', '--json')]
     if human:
         # A piped or redirected Windows console uses a legacy code page (cp1252 has no s-cedilla);
@@ -640,7 +641,7 @@ def main(argv=None):
         if argv and argv[0] == 'yakala':
             # Optional capture tool: its own small CLI, no index or sync engine.
             import beyin_v3_yakala as yakala
-            return yakala.main(argv[1:], vault=vault, state=state)
+            return yakala.main((['--json'] if force_json else []) + argv[1:], vault=vault, state=state)
         if argv and argv[0] in ('update', 'rollback', 'recover'):
             import argparse
             import beyin_v3_update as updater
