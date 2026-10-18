@@ -45,6 +45,7 @@ Satırlar kapsama ölçümüyle üretilir. Yeni bir yerel düzeltme eklediğinde
 
 Satır silmek doğru değildir: bir düzeltme geri alındıysa tablo da düşer, ama
 o düzeltmenin **yerine ne geldiği** yukarıdaki gerekçede yazılır.
+| Saat dilimi dayatması | `isolated_env(home, tz=` | Alt sürece `TZ='UTC'` **sessizce** dayatılıyordu (`949c028`, 2026-09-28) ve bu, upstream'in "bu makinenin saati" anlamına gelen `TZ=None` değerini (`4909a2d4`, 2026-10-11) eziyordu: damgalar +03'te kurulup komut UTC'de çalışınca gece-yarısı kayıtları bir gün geriye düşüyor. **Yalnız CI komutunda görünüyordu** (unittest `conftest.py`'i yüklemiyor, pytest yüklüyor). Ölçüm 2026-10-18: CI komutunda 4 hata, pytest'te 0; `79f6c75`'te de 4 hata — yani merge-7 ve 3.14.0 güncellemesi değil. Sabitlemenin kaynağı **koşula bağlı**: pytest altında `conftest.py` süreci UTC'ye bağlar ve alt süreçler onu miras alır; unittest altında yalnız bu dayatma vardır. Çıkış yolu: `tz=None`. **Tuzak:** `TZ=+03` POSIX'te UTC−3'tür, "geçiyor" gözlemi bu testler için kanıt değildir. |
 
 ## Tablo bayatlar
 

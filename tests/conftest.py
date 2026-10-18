@@ -10,7 +10,7 @@ saat burada sabitlenir; `TZ=Etc/GMT+12` ile de doğrulanabilir (`TZ=UTC` iken ay
 bugün zararsız çünkü `windows.yml` pytest koşturmuyor, ama pytest eklenirse koruma sessizce
 kaybolur. (2) Bu sabitleme ürünün kendi saat anlayışını değiştirmez, yalnız test sürecini
 etkiler: günlük log yerel güne, konsolidasyon penceresi UTC gününe tarihlendiği için UTC dışında
-ikisi ayrışır. O ayrışma `tests/v3_local_utc_day_divergence_test.py` ile ölçülüp sabitlenmiştir.
+ikisi ayrışır. O ayrışma `tests/v3_daily_local_day_test.py` ve `tests/v3_projection_local_day_test.py` ile ölçülüp sabitlenmiştir.
 """
 import os
 import time

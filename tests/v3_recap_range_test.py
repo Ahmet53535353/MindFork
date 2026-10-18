@@ -233,10 +233,11 @@ class InstalledRecapRange:
         cls.vault, cls.state = cls.root / 'vault', cls.root / 'state'
         (cls.vault / 'notes').mkdir(parents=True)
         (cls.vault / 'notes/source.md').write_text('# Source\n\nSynthetic evidence.\n', encoding='utf-8')
-        cls.env = isolated_env(cls.root / 'home')
         zone = cls.TZ or os.environ.get('TZ')
-        if zone:
-            cls.env['TZ'] = zone
+        # `tz=None` (no TZ known) means the installed commands read this machine's zone, which
+        # is how cls.at() builds the stamps below. The helper used to pin UTC silently, so four
+        # of these tests failed on a +03 machine under the CI command (unittest skips conftest).
+        cls.env = isolated_env(cls.root / 'home', tz=zone)
         installed = install(cls.vault, cls.state, cls.env)
         if installed.returncode:
             raise AssertionError(installed.stderr.decode('utf-8', errors='replace'))

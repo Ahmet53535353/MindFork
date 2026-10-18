@@ -54,17 +54,28 @@ def isolated_path(*first):
     return os.pathsep.join(entries + [os.defpath])
 
 
-def isolated_env(home):
+def isolated_env(home, tz='UTC'):
+    """A subprocess environment with no inherited timezone surprise.
+
+    The product dates windows in UTC; a local-time subprocess reads a different day for three
+    hours a day. Pinned here as well as in tests/conftest.py because callers build their own env
+    from this dict and would otherwise inherit the developer's timezone.
+
+    `tz=None` is the escape hatch, and it is not cosmetic. Upstream's recap suite means "this
+    machine's zone" by that value (4909a2d4, 2026-10-11) and builds its stamps from this
+    process's clock, so a silent UTC pin made four of its tests fail on a +03 machine -- and
+    only under the CI command, which runs unittest and therefore never loads conftest.py to pin
+    the parent. Measured 2026-10-18: the pin removed, 4 failures to 0. A caller that means a
+    zone says so now instead of losing to a default.
+    """
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
     env = {'HOME': str(home), 'USERPROFILE': str(home), 'APPDATA': str(home / 'appdata'),
            'LOCALAPPDATA': str(home / 'localappdata'), 'TEMP': str(home), 'TMP': str(home),
-'PATH': isolated_path(Path(sys.executable).parent),
-           'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8', 'BEYIN_V3_NO_SPAWN': '1',
-           # The product dates windows in UTC; a local-time subprocess reads a different day for
-           # three hours a day. Pinned here as well as in tests/conftest.py because callers build
-           # their own env from this dict and would otherwise inherit the developer's timezone.
-           'TZ': 'UTC'}
+           'PATH': isolated_path(Path(sys.executable).parent),
+           'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8', 'BEYIN_V3_NO_SPAWN': '1'}
+    if tz is not None:
+        env['TZ'] = tz
     env.update(windows_runtime_env())
     return env
 
