@@ -79,6 +79,19 @@ class DailyLogRemovedTest(unittest.TestCase):
             text = result.stdout.decode('utf-8', 'replace')
             self.assertNotIn('Günlük log', text, 'hook çıktısında günlük log bildirimi var')
 
+    def test_the_skill_teaches_no_daily_log_block(self):
+        """The instructions are part of the removal: a paragraph that tells the agent to fill
+        a `daily/log/` block survives a code removal on its own. It did: the feature went on
+        2026-10-15 and the skill kept the paragraph until 2026-10-18."""
+        skill = ROOT / 'template/.agents/skills/beyin/SKILL.md'
+        text = skill.read_text(encoding='utf-8')
+        self.assertNotIn('daily/log/` içindeki', text)
+        self.assertNotIn('### Özet` bölümünü', text)
+        # The preference was removed with the feature; a line that still teaches the switch
+        # sends the user to a command that no longer exists.
+        self.assertNotIn('--daily-log', text)
+        self.assertNotIn('günlük log açık', text)
+
     def test_no_daily_log_preference_is_consulted_anywhere(self):
         for name in ('beyin_v3_hook.py', 'beyin_v3_preferences.py'):
             with self.subTest(module=name):

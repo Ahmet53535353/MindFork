@@ -28,6 +28,42 @@ sys.path.insert(0, str(SCRIPTS))
 import beyin_v3_yakala as yakala  # noqa: E402
 
 
+class WindowsSourceDecisionTest(unittest.TestCase):
+    def test_fresh_sources_win_without_losing_alternatives(self):
+        image = {'path': 'clipboard.png', 'on': False}
+        shot = {'path': 'window.png', 'on': True}
+        context = {'url': 'https://example.com/page'}
+        for fresh in (True, False):  # the browser's link leads; the copied one stays an alternative
+            sources = yakala.windows_sources(context, 'https://example.com/copied', fresh, shot=shot)
+            self.assertEqual(yakala._source_arguments(sources)['url'], 'https://example.com/page')
+            self.assertEqual(len(sources), 3)
+        sources = yakala.windows_sources(context, '', True, image, shot)
+        self.assertEqual(yakala._source_arguments(sources)['files'], [])
+        self.assertEqual(yakala._source_arguments(sources)['url'], 'https://example.com/page')
+        self.assertEqual(len(sources), 3)
+        sources = yakala.windows_sources({}, 'https://example.com/copied', True, shot=shot)
+        self.assertEqual(yakala._source_arguments(sources)['url'], 'https://example.com/copied')  # no browser link
+
+    def test_stale_clipboard_does_not_depend_on_a_successful_screenshot(self):
+        for clip in ('private note', 'https://example.com/old'):
+            for shot in (None, {'path': 'window.png', 'on': True}):
+                sources = yakala.windows_sources({}, clip, False, shot=shot)
+                chosen = yakala._source_arguments(sources)
+                self.assertIsNone(chosen['text'])
+                self.assertIsNone(chosen['url'])
+                self.assertEqual(chosen['files'], [])  # a window picture waits for Alt+W, like the stale clipboard
+
+    def test_url_toggle_excludes_other_urls_but_preserves_text_and_images(self):
+        sources = yakala.windows_sources({'url': 'https://example.com/page'},
+                                         'copied text', True, {'path': 'image.png', 'on': True})
+        for key in ('m', 'g'):  # clipboard text and picture are offered off next to a link; switch them on
+            yakala._source_toggle(sources, next(source for source in sources if source['key'] == key))
+        chosen = yakala._source_arguments(sources)
+        self.assertEqual(chosen['url'], 'https://example.com/page')
+        self.assertEqual(chosen['text'], 'copied text')
+        self.assertEqual(chosen['files'], ['image.png'])
+
+
 def public_dns_fixture(test):
     # Helpers below are real offline subprocess stand-ins, so DNS must also stay deterministic.
     patcher = patch.object(socket, 'getaddrinfo', return_value=[
@@ -544,6 +580,30 @@ class YakalaUnitTest(unittest.TestCase):
         return [sys.executable, str(Path(state).resolve() / 'yakala' / 'beyin_v3_yakala.py'), 'pencere',
                 '--vault', str(self.vault.resolve())]
 
+    def test_wayland_without_wl_paste_warns_even_when_hotkey_works(self):
+        self._linux_env('KDE')
+        self.linux_missing.add('wl-paste')
+        state = Path(self.tmp.name) / 'state'
+        with patch.dict(yakala.os.environ, {'WAYLAND_DISPLAY': 'wayland-0'}):
+            done = yakala.install(self.vault, state)
+            health = yakala.status(self.vault, state)
+            self.assertTrue(done['kisayol_calisiyor'])
+            self.assertTrue(health['dinleyici_calisiyor'])
+            for result, command in ((done, 'kur'), (health, 'durum')):
+                self.assertIn('wl-paste', result['pano_uyarisi'])
+                self.assertIn('wl-clipboard', yakala.human(result, command))
+            self.assertIn('wl-paste', yakala._empty_capture_hint(self.vault, state))
+
+    def test_wayland_clipboard_warning_is_not_a_false_capture_failure(self):
+        with patch.object(yakala.sys, 'platform', 'linux'), patch.dict(yakala.os.environ, {'WAYLAND_DISPLAY': 'wayland-0'}):
+            with patch.object(yakala, '_which', return_value='/usr/bin/wl-paste'):
+                self.assertIsNone(yakala._clipboard_warning())
+            with patch.object(yakala, '_which', return_value=None):
+                self.assertIn('wl-paste', yakala._clipboard_warning())
+        with patch.object(yakala.sys, 'platform', 'linux'), patch.dict(yakala.os.environ, {'WAYLAND_DISPLAY': ''}):
+            with patch.object(yakala, '_which', return_value=None):
+                self.assertIsNone(yakala._clipboard_warning())  # Tk still reads the X11 clipboard
+
     def test_linux_install_kde_and_uninstall(self):
         entry, calls = self._linux_env('KDE')
         state = Path(self.tmp.name) / 'state'
@@ -567,6 +627,18 @@ class YakalaUnitTest(unittest.TestCase):
         self.assertFalse(Path(self._linux_argv(state)[1]).exists())
         # No call can hang the command or reach a shell.
         self.assertTrue(all(options.get('timeout') and not options.get('shell') for options in self.linux_options))
+
+    def test_linux_reinstall_refreshes_existing_state_copy(self):
+        entry, _ = self._linux_env('KDE')
+        state = Path(self.tmp.name) / 'state'
+        runner = state / 'yakala' / 'beyin_v3_yakala.py'
+        runner.parent.mkdir(parents=True)
+        runner.write_text('# eski kopya: font probe yok\n', encoding='utf-8')
+        yakala.install(self.vault, state)
+        source = yakala.__file__
+        assert source is not None
+        self.assertEqual(runner.read_bytes(), Path(source).read_bytes())
+        self.assertEqual(desktop_exec_argv(entry.read_text(encoding='utf-8')), self._linux_argv(state))
 
     def test_linux_install_gnome_keeps_existing_bindings(self):
         entry, calls = self._linux_env('ubuntu:GNOME', "['/org/other/custom0/']")
@@ -748,6 +820,12 @@ class YakalaUnitTest(unittest.TestCase):
                          ('https://ornek.com/mac', 'Başlık', 'Safari'))
         self.assertIn('mac nedeni', card['body'])
 
+    def test_windows_fallback_never_saves_a_found_source_unasked(self):
+        context = {'url': 'https://ornek.com/sayfa', 'baslik': 'Sayfa', 'uygulama': 'opera', 'metin': 'pano'}
+        with patch.object(yakala.os, 'name', 'nt'), patch.object(yakala.sys, 'platform', 'win32'):
+            self.assertEqual(yakala._popup_fallback(self.vault, context), {'status': 'vazgecildi'})
+        self.assertEqual(yakala.cards(self.vault), [])
+
     def test_desktop_entry_round_trips_any_vault_path(self):
         vaults = ['/home/ayşe/İkinci Beyin', '/home/u/📥 Beyin', '/home/u/100% Beyin %U %%f', '/home/u/$HOME `id` $(id)',
                   '/home/u/"çift" \'tek\' tırnak', '/home/u/ters\\bölü\\', '/home/u/satır\nsonu\tsekme\rdönüş',
@@ -898,7 +976,8 @@ class YakalaUnitTest(unittest.TestCase):
         runner.parent.mkdir(parents=True)
         runner.write_text('# kopya\n', encoding='utf-8')
         argv = ['x', 'pencere', '--vault', str(self.vault)]
-        with patch.object(yakala.os, 'execv') as execv, patch.object(yakala.sys, 'argv', argv):
+        with patch.object(yakala.os, 'execv') as execv, patch.object(yakala.sys, 'argv', argv), \
+                patch.object(yakala, '_linux_tk_python', return_value=sys.executable, create=True):
             with patch.object(yakala, '__file__', str(runner)):
                 yakala._hand_over(self.vault, state)  # the vault has no module of its own: the copy keeps running
                 execv.assert_not_called()
@@ -913,6 +992,64 @@ class YakalaUnitTest(unittest.TestCase):
                 yakala._hand_over(self.vault, state)  # already the vault module
             yakala._hand_over(self.vault, state)  # run from the package, as these tests do
             execv.assert_not_called()
+
+    def test_linux_tk_font_fallback_hands_over_to_system_python(self):
+        state = Path(self.tmp.name) / 'state'
+        runner = state / 'yakala' / 'beyin_v3_yakala.py'
+        current = self.vault / '.claude/scripts/beyin_v3_yakala.py'
+        runner.parent.mkdir(parents=True)
+        runner.write_text('# state copy\n', encoding='utf-8')
+        current.parent.mkdir(parents=True)
+        current.write_text('# vault copy\n', encoding='utf-8')
+        argv = ['x', 'pencere', '--vault', str(self.vault)]
+        with patch.object(yakala, '__file__', str(runner)), patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'argv', argv), patch.object(yakala.os, 'execv') as execv, \
+                patch.object(yakala, '_linux_tk_python', return_value='/usr/bin/python3', create=True):
+            yakala._hand_over(self.vault, state)
+        execv.assert_called_once_with('/usr/bin/python3', ['/usr/bin/python3', str(current)] + argv[1:])
+
+    def test_linux_tk_python_selects_font_capable_runtime_only(self):
+        from subprocess import CompletedProcess, TimeoutExpired
+        with patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'executable', '/conda/bin/python3'), \
+                patch.object(yakala.Path, 'is_file', return_value=True), \
+                patch.object(yakala.subprocess, 'run', side_effect=[
+                    CompletedProcess([], 1), CompletedProcess([], 0),
+                    CompletedProcess([], 0),
+                    TimeoutExpired([], 3), CompletedProcess([], 1),
+                ]) as probe:
+            self.assertEqual(yakala._linux_tk_python(), '/usr/bin/python3')
+            self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
+            self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
+            self.assertEqual(probe.call_count, 5)
+        with patch.object(yakala.sys, 'platform', 'darwin'), patch.object(yakala.subprocess, 'run') as probe:
+            self.assertEqual(yakala._linux_tk_python(), sys.executable)
+            probe.assert_not_called()
+
+    def test_linux_tk_python_keeps_current_when_system_tk_missing(self):
+        from subprocess import CompletedProcess
+        with patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'executable', '/conda/bin/python3'), \
+                patch.object(yakala.Path, 'is_file', return_value=False), \
+                patch.object(yakala.subprocess, 'run', return_value=CompletedProcess([], 1)) as probe:
+            self.assertEqual(yakala._linux_tk_python(), '/conda/bin/python3')
+        self.assertEqual(probe.call_count, 1)  # no attempt to run an absent system Python
+
+    def test_linux_tk_probe_is_isolated_and_rejects_an_older_python(self):
+        from subprocess import CompletedProcess
+        with patch.object(yakala.sys, 'platform', 'linux'), \
+                patch.object(yakala.sys, 'executable', '/conda/bin/python3'), \
+                patch.object(yakala.Path, 'is_file', return_value=True), \
+                patch.object(yakala.subprocess, 'run', return_value=CompletedProcess([], 1)) as probe:
+            yakala._linux_tk_python()
+        command = probe.call_args_list[-1].args[0]
+        self.assertEqual(command[:3], ['/usr/bin/python3', '-I', '-c'])
+        guard = command[3].split('import tkinter')[0]  # the version check runs before any Tk import
+        with patch.object(sys, 'version_info', (3, 10, 12)):
+            with self.assertRaises(SystemExit) as stopped:
+                exec(guard, {})
+        self.assertEqual(stopped.exception.code, 1)
+        exec(guard, {})  # this interpreter (3.11+) passes
 
     def test_hand_over_only_for_the_linux_hotkey_process(self):
         argv = ['x', 'pencere', '--vault', str(self.vault)]

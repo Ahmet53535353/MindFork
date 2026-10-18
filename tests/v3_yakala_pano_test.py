@@ -327,10 +327,12 @@ class ImageOfferTest(ScreenshotFiles, unittest.TestCase):
         self.assertFalse(Path(made[0]).exists())
 
     @unittest.skipIf(os.name == 'nt', 'Windows has the reader')
-    def test_other_systems_never_get_an_image(self):
-        self.assertIsNone(yakala._clipboard_payload())
-        self.assertIsNone(yakala.clipboard_image('', {}))
-        self.assertIsNone(yakala.clipboard_image(REPORTED, {}))
+    def test_unsupported_systems_never_get_an_image(self):
+        # Do not inspect a real Linux clipboard while running synthetic tests.
+        with patch.object(yakala.sys, 'platform', 'darwin'):
+            self.assertIsNone(yakala._clipboard_payload())
+            self.assertIsNone(yakala.clipboard_image('', {}))
+            self.assertIsNone(yakala.clipboard_image(REPORTED, {}))
 
     def test_age_words(self):
         self.assertEqual([yakala._ago(seconds) for seconds in (0, 59, 60, 3599, 3600, 172799, 172800)],
@@ -555,8 +557,10 @@ class Canvas(Widget):
 class Photo:
     opened = []
 
-    def __init__(self, master=None, file=None, size=(1920, 1080)):
+    def __init__(self, master=None, file=None, size=(1920, 1080), data=None, format=None):
         self.size = size
+        if data:
+            assert yakala.png_info(data)
         if file:
             assert yakala.png_info(Path(file).read_bytes()), file  # the temp PNG exists while the window is up
             Photo.opened.append(file)
@@ -582,7 +586,7 @@ class PopupWiringTest(ScreenshotFiles, unittest.TestCase):
         self.bitmap = {'image': True, 'png': None, 'dib': make_dib(self.pixels, bits=32)}
         Photo.opened = []
 
-    def popup(self, clip, payload, script, context=None):
+    def popup(self, clip, payload, script, context=None, windows=False, fresh=False, shot=None):
         roots = []
         fake = types.ModuleType('tkinter')
         fake.Tk = lambda: roots.append(Root(script)) or roots[-1]
@@ -590,12 +594,30 @@ class PopupWiringTest(ScreenshotFiles, unittest.TestCase):
         fake.font = types.ModuleType('tkinter.font')
         fake.font.Font = lambda **_options: types.SimpleNamespace(measure=lambda text: len(text) * 6)
         environment = {key: value for key, value in os.environ.items() if key != 'BEYIN_YAKALA_SNAPSHOT'}
+        if not windows and os.name == 'nt':
+            # On a Windows host the non-Windows model skips the desktop path this way; never on macOS,
+            # where the variable starts the development screencapture of the (fake) window.
+            environment['BEYIN_YAKALA_SNAPSHOT'] = 'model'
+        system = types.SimpleNamespace(**{**vars(os), 'name': 'nt' if windows else os.name})
         with patch.dict(sys.modules, {'tkinter': fake, 'tkinter.font': fake.font}), \
                 patch.dict(os.environ, environment, clear=True), \
+                patch.object(yakala, 'os', system), \
+                patch.object(yakala, '_style_mac'), \
                 patch.object(yakala, '_clipboard', return_value=clip), \
                 patch.object(yakala, '_clipboard_payload', return_value=payload, create=True) as probe, \
-                patch.object(yakala, '_style_mac'):
-            result = yakala.popup(self.vault, context)
+                patch.object(yakala, '_windows_clipboard', return_value={**(payload or {}), 'text': clip, 'sequence': 77}), \
+                patch.object(yakala, 'clipboard_fresh', return_value=fresh), \
+                patch.object(yakala, 'windows_enrich', side_effect=lambda value, cancel=None: value), \
+                patch.object(yakala, 'window_image', return_value=shot), \
+                patch.object(yakala, '_windows_prepare', side_effect=lambda root, ctx, vault, state, session=None:
+                             yakala._collect_windows(ctx, vault, state)), \
+                patch.object(yakala, '_font', side_effect=lambda size, weight='normal': ('Segoe UI', size, weight)), \
+                patch.object(yakala, '_win_dpi'), patch.object(yakala, '_win_managed_chrome'), \
+                patch.object(yakala, '_win_place'), \
+                patch.object(yakala, '_win_monitor', return_value=(-1920, 0, 0, 1080)), \
+                patch.object(yakala, '_win_focus', return_value=True), patch.object(yakala, '_win_escape_guard'), \
+                patch.object(yakala, '_style_mac'), patch.object(yakala.subprocess, 'run'):
+            result = yakala.popup(self.vault, context, state=Path(self.tmp.name) / 'state')
         return result, roots[0], probe
 
     def card(self, result):
@@ -736,6 +758,91 @@ class PopupWiringTest(ScreenshotFiles, unittest.TestCase):
         self.assertEqual(result['kaynak_turu'], 'makale')
         probe.assert_not_called()
 
+    def test_windows_page_link_wins_and_a_fresh_copied_link_stays_selectable(self):
+        context = {'url': 'https://example.com/page', 'baslik': 'Page'}
+        result, root, _ = self.popup('https://example.com/copied', None,
+                                    [('look', None), ('key', '<Return>')], context, windows=True, fresh=True)
+        self.assertEqual(self.card(result)['meta']['url'], context['url'])
+        self.assertTrue(any('Pano bağlantısı' in text for text in root.seen[0][1]))
+        result, _, _ = self.popup('https://example.com/copied', None,
+                                  [('key', '<Alt-p>'), ('key', '<Return>')], context, windows=True, fresh=True)
+        self.assertEqual(self.card(result)['meta']['url'], 'https://example.com/copied')
+
+    def test_windows_stale_text_is_off_even_when_window_capture_fails(self):
+        for clip in ('eski özel metin', 'https://example.com/old'):
+            result, _, _ = self.popup(clip, None, [('key', '<Return>'), ('key', '<Escape>')], windows=True)
+            self.assertEqual(result, {'status': 'vazgecildi'})
+        self.assertEqual(yakala.cards(self.vault), [])
+
+    def test_windows_sequence_makes_image_fresh_without_snipping_tool_path(self):
+        result, root, _ = self.popup('', self.bitmap, [('look', None), ('key', '<Return>')],
+                                     windows=True, fresh=True)
+        self.assertEqual(result['kaynak_turu'], 'dosya')
+        self.assertEqual(len(self.saved_files()), 1)
+        self.assertTrue(any('Pano görüntüsü' in text for text in root.seen[0][1]))
+        # Next to a browser link the fresh picture is offered, not chosen.
+        result, _, _ = self.popup('', self.bitmap, [('key', '<Return>')],
+                                  {'url': 'https://example.com/page'}, windows=True, fresh=True)
+        self.assertEqual(self.card(result)['meta']['url'], 'https://example.com/page')
+        self.assertEqual(len(self.saved_files()), 1)
+
+    def test_windows_clipboard_and_window_images_are_independent(self):
+        shot = yakala.clipboard_image('', {}, payload=self.bitmap, offered=True)
+        self.assertIsNotNone(shot)
+        result, root, _ = self.popup('eski metin', self.bitmap,
+                                     [('look', None), ('key', '<Alt-g>'), ('key', '<Alt-m>'), ('key', '<Alt-w>'), ('key', '<Return>')],
+                                     windows=True, shot=shot)
+        self.assertEqual(len(self.saved_files()), 2)
+        self.assertIn('> eski metin', self.card(result)['body'])
+        self.assertTrue(any('Alt+M' in text for text in root.seen[0][1]))
+        self.assertFalse(Path(shot['folder']).exists())
+
+    def test_windows_escape_guard_is_armed_even_when_the_popup_got_focus(self):
+        # A click on the page after the popup opened takes the key away from Tk, so the Esc hook
+        # must already be there; it was armed only when focus was refused before (#383).
+        guards = []
+
+        def hwnd(_root):
+            guards.append(yakala._win_escape_guard)  # the model's guard mock, live inside popup()
+            return 99
+        with patch.object(yakala, '_win_hwnd', side_effect=hwnd):
+            result, root, _ = self.popup('', None, [('key', '<Escape>')], {'hwnd': 42}, windows=True)
+        self.assertEqual(result, {'status': 'vazgecildi'})
+        self.assertFalse(root.alive)
+        guard = guards[-1]
+        guard.assert_called_once()
+        self.assertEqual(guard.call_args.args[1:3], (99, 42))  # popup frame, source window
+        guard.return_value.assert_called()  # and stopped again when the popup closed
+
+    def test_windows_cancel_does_not_consume_sequence_and_double_enter_saves_once(self):
+        state = Path(self.tmp.name) / 'state/yakala/pano-sira.txt'
+        result, root, _ = self.popup('new', None, [('key', '<Escape>')], windows=True, fresh=True)
+        self.assertFalse(root.alive)
+        self.assertFalse(state.exists())
+        result, _, _ = self.popup('new', None, [('key', '<Return>'), ('key', '<Return>')], windows=True, fresh=True)
+        self.assertEqual(len(yakala.cards(self.vault)), 1)
+        self.assertEqual(state.read_text(encoding='ascii'), '77')
+
+    def test_windows_failed_save_keeps_sequence_and_allows_retry(self):
+        with patch.object(yakala, 'capture', side_effect=[OSError('locked'), {'status': 'yakalandi'}]) as capture:
+            result, _, _ = self.popup('new', None, [('key', '<Return>'), ('key', '<Return>')], windows=True, fresh=True)
+        self.assertEqual(capture.call_count, 2)
+        self.assertEqual(result['status'], 'yakalandi')
+        with patch.object(yakala, 'capture', side_effect=OSError('locked')):
+            before = (Path(self.tmp.name) / 'state/yakala/pano-sira.txt').read_text()
+            self.popup('another', None, [('key', '<Return>'), ('key', '<Escape>')], windows=True, fresh=True)
+            self.assertEqual((Path(self.tmp.name) / 'state/yakala/pano-sira.txt').read_text(), before)
+
+    def test_windows_freshness_only_changes_after_success(self):
+        state = Path(self.tmp.name) / 'state'
+        self.assertFalse(yakala.clipboard_fresh(self.vault, 10, state))
+        self.assertFalse(state.exists())
+        yakala._clipboard_saved(self.vault, 10, state)
+        self.assertFalse(yakala.clipboard_fresh(self.vault, 10, state))
+        self.assertTrue(yakala.clipboard_fresh(self.vault, 11, state))
+        self.assertTrue(yakala.clipboard_fresh(self.vault, 11, state))
+        self.assertFalse(yakala.clipboard_fresh(self.vault, None, state))
+
 
 class StandaloneCopyTest(unittest.TestCase):
     def test_single_file_copy_runs_alone(self):
@@ -743,7 +850,8 @@ class StandaloneCopyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='v3-yakala-tek-') as folder:
             copy = Path(folder) / 'beyin_v3_yakala.py'
             copy.write_bytes((SCRIPTS / 'beyin_v3_yakala.py').read_bytes())
-            code = ('import beyin_v3_yakala as y, os; '
+            code = ('import beyin_v3_yakala as y, os; from unittest.mock import patch; '
+                    'with_no_helper = patch.object(y, "_which", return_value=None); with_no_helper.start(); '
                     'print(y.png_info(b"") is None, y.clipboard_image("bir not", {}) is None, '
                     'os.name == "nt" or y.clipboard_image("", {}) is None)')
             result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, encoding='utf-8',
