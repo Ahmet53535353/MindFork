@@ -67,12 +67,23 @@ ayrılabilir. Bunu atlamak "yeşil testler işe yaradı" yanılgısının en pah
 python3 .agents/skills/beyin-upstream-merge/measure_merge.py --only coverage
 ```
 
-`divergences.md` her yerel düzeltmeyi bir **davranış işareti**yle listeler; betik her
-işareti `tests/` altında arar. `YOK` çıkan düzeltme merge'de sessizce düşebilir: ya test
-yaz, ya da Ahmet'e "bu düzeltme korumasız, düşerse ne olur?" diye sor.
+`divergences.md` her yerel düzeltmeyi bir **davranış işaretiyle** ve bir **koşul sütunuyla**
+listeler; betik her işareti `tests/` altında arar. `YOK` çıkan düzeltme merge'de sessizce
+düşebilir: ya test yaz, ya da Ahmet'e "bu düzeltme korumasız, düşerse ne olur?" diye sor.
+
+**Koşul sütunu boş bırakılmaz.** 2026-10-18'de bunun bedeli ölçüldü: "Automatic check
+deferred" düzeltmesi testli ve yerinde duruyordu, ama **tetik koşulu** (`continuity and not due`)
+koddan düştüğü için davranış neredeyse her turda çalışıyor, 156 karakter gider harcıyor ve
+upstream'in dedupe sözleşmesini kırıyordu. Ne kaybolmuş ne de kapsamasızdı — **genişlemişti**,
+ve ne kapsama raporu ne de testler bunu gösterdi. Sapma satırı "ne zaman tetiklenir"
+bilgisini taşımadan korunamaz.
 
 **Sembol adıyla kapsama ölçme.** 2026-10-15'te `VALID_MEMORY_TYPES` için grep sıfır test
 dedi ve boşluk sanıldı; tip kapısının davranışı 4 test dosyasında kapsanıyordu.
+
+**Sığ grep de yanıltabilir.** `grep tests/*.py` alt dizinleri görmez; `tests/custom/` ayrı bir
+paket ve oradaki kaldırma testleri (günlük logun yokluğu) tam da kapsamayı taşıyordu. Ölçümü
+`measure_merge.py` yapar (rglob); elle bakacaksan `tests/**/*.py`.
 
 ## Adım 4 — Merge
 
@@ -112,10 +123,33 @@ Sıra şu:
    | Kurallar .45 + Threads .10 | **bütün** | **GEÇER** |
 
    Ölçüm yapmadan seçenek sunmak, seçimi gerekçeden çıkarır.
-3. **Kırmızı test önce.** Çözüm bir davranış değişikliği getiriyorsa, testi önce yaz ve
+3. **Hangi dosya.** Kırık test hangi dosyadan geliyor? Çakışmayı okuyak tahmin etme:
+   `--only worktree` upstream'in kendi ağacını geçici bir worktree'de açar, testi orada
+   koşturur (taban), sonra aday dosyaları tek tek upstream'in hâliyle değiştirip testi
+   yeniden koşturur. 2026-10-18'de beş adaydan yalnız `beyin_v3_hook.py` hataları
+   6'dan 1'e indirdi; çakıştığını sandığımız dosya (`beyin_v3_companion.py`) hiçbir şeyi
+   değiştirmedi. Sonuç **hata sayısıyla** raporlanır, PASS/FAIL ile değil: bir dosya tek
+   başına yeşile yetmeyebilir ama 5 hatayı 1'e indirmek de kanıttır.
+   ```sh
+   python3 .agents/skills/beyin-upstream-merge/measure_merge.py --only worktree \
+     --test tests/v3_context_dedupe_test.py --files template/.claude/scripts/beyin_v3_hook.py
+   ```
+4. **Kırmızı test önce.** Çözüm bir davranış değişikliği getiriyorsa, testi önce yaz ve
    **kırmızı olduğunu gör** (2026-09-27'de R1–R6 böyle yazıldı).
-4. **Sor.** Ölçüm tablosuyla birlikte, tek soruda seçenekleri ver. Uygulama cevabından
+5. **Sor.** Ölçüm tablosuyla birlikte, tek soruda seçenekleri ver. Uygulama cevabından
    sonra.
+6. **Yeşil olduktan sonra yeri ölç.** Test yeşile döndü **diye** kapatma. Aynı gün iki
+   düzeltme yazıldı ve ikisi de yeşil test verdi; ikisi de yanlıştı:
+
+   | düzeltme | ölçüm | sonuç |
+   |---|---|---|
+   | `whole_rule_share()` sabit nokta | 9 bütçe/vault kombinasyonu | pay zaten tam gelen boyuttu → **gereksiz** |
+   | `opening_warning(pending, due)` ortak gider | `claim_check` okundu | `SessionStart`'ta her zaman `True`; sayılacak bir uyarı yok → **gereksiz** |
+
+   Ayıran şey testin geçmesi değil, **davranışın nerede değiştiğini** ölçmekti. Yeşil
+   olan bir düzeltmeyi kabul etmeden önce: hangi satır, hangi dal, hangi çağrı yolu
+   değişti? Kaynakta okunacak tek bir koşul varsa (ör. `claim_check`'in `SessionStart`
+   dalı) onu oku. **Kaynakta okunacak bir koşul varsa tahmin etme.**
 
 ### Asla yapma
 
@@ -124,6 +158,8 @@ Sıra şu:
   kanıtla. 2026-10-15'te bir test fazla spesifik bir sözleşmeydi (`{}` beklerken upstream
   artık uyarı da basıyordu) ve düzeltildi; ama aynı gün başka bir kırık **gerçek bir
   hataydı** (`type` izin kümesine eklenmemişti) ve yalnız kanıtlayınca görüldü.
+- **Yeşil testi "yerinde" saymak.** 5b'nin son adımı: yeşil, düzeltmenin doğru yerde
+  olduğu anlamına gelmez.
 - Merge'in sessizce kaldırdığı bir sembolü fark etmemek. Adım 3'ün raporu bunun için var.
 
 ## Adım 6 — Birleşim sonrası anlamsal denetim
@@ -138,6 +174,11 @@ Testler yeşil olsa da **mimari değişmiş olabilir**. Bu adım testlerin göre
    `beyin_v3_sessionlog`'a gidiyordu. Sembol yok diye bağlantı da yok sanma.
 3. **Kaynak değişti mi?** Aynı gün upstream `VERSION` dosyasını getirdi ve sürümün
    nerede sabitlendiği değişti. Yayın adımı bu yüzden `VERSION`'u okumak zorunda.
+4. **Silinen özelliğin talimatı kaldı mı?** Kod silinince talimatı gitmez. 2026-10-18'de
+   günlük log 2026-10-15'te tamamen silinmişti, ama `SKILL.md`'de iki ölü talimat duruyordu:
+   `daily/log/` bloğunu doldurma paragrafı ve `--daily-log` tercihi. Kullanıcıya var olmayan
+   bir komut yaptırıyordu. Merge'de sildiğimiz her yerel özellik için `template/.agents/`
+   ve `docs/` altında o özelliğin adını ara; kaldırma testi talimatı da kapsasın.
 
 Bu adımın bulgusu olmasa da yapılır; yoksa "yeşil testler = doğru merge" yanılgısıyla
 kalır.
@@ -196,4 +237,8 @@ ile elle kurulmalı.
 | `latest` ucu gecikir | `missing_package` birkaç saniye sonra düzelir — iki farklı hata |
 | Çakışmayı elle saymak | Sezgi çürütülmüş bir dalga var; `merge-tree` esas |
 | Sembolle kapsama ölçmek | Var diye "korumasız" sanmak; davranış kapsanmış olabilir |
+| `grep tests/*.py` ile kapsama ölçmek | `tests/custom/` altını görmez; kaldırma testleri orada |
 | Yeşil test = doğru merge | Anlamsal denetim olmadan kalan yapısal kayıplar |
+| Yeşil test = doğru düzeltme | 2026-10-18: iki yanlış düzeltme de yeşildi; ayıran ölçtüğü **yer**di |
+| Suçlu dosyayı çakışmadan tahmin etmek | Çakıştığını sandığın dosya hiçbir şeyi değiştirmeyebilir; `--only worktree` |
+| Koşulu düşen sapma | Testli ve yerinde duruyor ama davranış her yere yayılmış; `--only coverage` görmez |

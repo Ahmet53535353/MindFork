@@ -6,7 +6,7 @@ expensive: `git merge-tree` on 2026-09-27 refuted a hand-made estimate of five
 conflicts by reporting one. This script exists so the conflict set is never
 estimated again. It reports only; it never edits, merges, or resolves.
 
-Three reports, each answering a question that has already cost a merge:
+Four reports, each answering a question that has already cost a merge:
 
   preflight  Is the remote-tracking state trustworthy? A refspec that tracks one
              branch makes `origin/main` stale, and `--force-with-lease` then
@@ -17,19 +17,29 @@ Three reports, each answering a question that has already cost a merge:
              dropping it? Coverage is measured by behaviour marker, never by
              symbol name -- a grep for the symbol says nothing about whether the
              behaviour survives.
+  worktree   Which file broke a test? A green suite plus a red test does not say
+             whether the test is wrong or we are, and on 2026-10-18 the answer was
+             one file out of five candidates: swapping that single file for
+             upstream's cut the failures from five to zero, while its two
+             neighbours (the file the conflict was in, and the file the theory
+             pointed at) changed nothing. Guessing the culprit by reading the
+             conflict is how two wrong fixes got written that day.
 
 Usage:
-    python3 measure_merge.py                # all three
+    python3 measure_merge.py                # preflight + merge + coverage
     python3 measure_merge.py --only merge
     python3 measure_merge.py --theirs <ref>  # dry-run against an arbitrary ref
+    python3 measure_merge.py --only worktree --test tests/v3_hook_test.py
 """
 from __future__ import annotations
 
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -186,10 +196,135 @@ def coverage() -> bool:
     return complete
 
 
+# --- worktree lab ----------------------------------------------------------
+
+def _pytest(cwd: Path, target: str) -> tuple[int, str]:
+    """(failure count, last line) for one pytest target.
+
+    The count, not pass/fail, is the measure. A whole test file can need two files
+    restored to go green, and then no single swap reaches zero -- but it still drops
+    from five failures to one, and that drop is the evidence. Pass/fail would have
+    reported both rows as FAIL and said nothing.
+    """
+    env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONIOENCODING': 'utf-8'}
+    done = subprocess.run([sys.executable, '-m', 'pytest', target, '-q', '-p', 'no:cacheprovider'],
+                          capture_output=True, text=True, cwd=cwd, env=env, timeout=1800)
+    tail = (done.stdout + done.stderr).strip().split('\n')
+    last = tail[-1] if tail else ''
+    if done.returncode in (4, 5) or 'ERROR: file or directory not found' in done.stdout \
+            or 'no tests ran' in done.stdout.lower():
+        # pytest's usage/no-collection codes are not a red test. Reporting them as zero
+        # failures would print "test geçiyor" for a target that never ran.
+        return -1, f'HEDEF KOŞMADI ({last})'
+    failed = re.search(r'(\d+) failed', done.stdout)
+    errors = re.search(r'(\d+) error', done.stdout)
+    count = int(failed.group(1)) if failed else (int(errors.group(1)) if errors else 0)
+    return count, last
+
+
+def _candidates(theirs: str, limit: int) -> list[str]:
+    """Files where our tree and theirs disagree, runtime first: the culprit is code."""
+    changed = [p for p in run('diff', '--name-only', 'HEAD', theirs).stdout.split('\n') if p.strip()]
+    order = ('template/.claude/scripts/', 'scripts/', 'tests/', 'template/')
+    def rank(path: str) -> int:
+        for i, prefix in enumerate(order):
+            if path.startswith(prefix):
+                return i
+        return len(order)
+    ranked = sorted(changed, key=lambda p: (rank(p), p))
+    if len(ranked) > limit:
+        print(f'  ({len(ranked)} aday vardı, {limit} tanesi sınandı; --limit ile artır)')
+    return ranked[:limit]
+
+
+def worktree(theirs: str, target: str, only: list[str] | None, limit: int, keep: bool) -> bool:
+    """Find which file turns a red test green, by swapping files one at a time.
+
+    The baseline is upstream's own tree in a throwaway worktree: a test that fails
+    there is not ours to fix. When it passes there, every candidate file is
+    temporarily replaced by upstream's version in *this* tree and the test is run
+    again; the file that makes it pass is the one carrying our behaviour. The
+    working tree is restored after every swap and verified at the end, because a
+    measurement tool that leaves the tree changed is worse than no tool.
+
+    Only for a single red test. For "the suite is red", read the failure first:
+    N failing tests share N causes, and this costs one run per file.
+    """
+    if not target:
+        print('WORKTREE\n  --test gerekli: tek bir kırmızı testin adresini ver')
+        return False
+    before = run('status', '--porcelain').stdout
+    unmerged = {line[3:] for line in before.split('\n') if line[:2] in ('UU', 'AA', 'DU', 'UD', 'AU', 'UA', 'DD')}
+    parent = Path(tempfile.mkdtemp(prefix='beyin-merge-lab-'))
+    lab = parent / 'theirs'
+    print(f'WORKTREE\n  taban: {theirs} -> {lab}')
+    added = run('worktree', 'add', '--detach', '--force', str(lab), theirs).returncode == 0
+    try:
+        if not added:
+            print('  worktree açılamadı; elde ölçmek zorundayın')
+            return False
+        base_fail, base_line = _pytest(lab, target)
+        print(f'  taban ({theirs}): {base_fail} hata  {base_line}')
+        if base_fail < 0:
+            print('  → Hedef upstream ağacında koşmadı (yeni test olabilir); `--files`/`--limit` daralt.')
+            return False
+        if base_fail:
+            print('  → Bu test upstream ağacında da kırık. Merge\'in işi değil; yukarı kaynağı aç.')
+            return True
+        ours, ours_line = _pytest(ROOT, target)
+        print(f'  bizim ağaç:        {ours} hata  {ours_line}')
+        if ours < 0:
+            print('  → Hedef bizim ağaçta da koşmadı; adresi düzelt.')
+            return False
+        if not ours:
+            print('  → Test geçiyor; ölçülecek kırılma yok.')
+            return True
+        candidates = only or _candidates(theirs, limit)
+        rows = []
+        for path in candidates:
+            if path in unmerged:
+                print(f'    atla (çakışmalı) {path}')
+                continue
+            local = ROOT / path
+            if not local.is_file():
+                continue
+            blob = run('show', f'{theirs}:{path}')
+            if blob.returncode != 0:
+                continue
+            original = local.read_bytes()
+            try:
+                local.write_bytes(blob.stdout.encode('utf-8'))
+                fail, _ = _pytest(ROOT, target)
+            finally:
+                local.write_bytes(original)
+            if fail < 0:
+                print(f'    ---  koşmadı           {path}')
+                continue
+            rows.append((path, fail))
+            print(f'    {fail:>3} hata (bizim {ours})  {path}')
+        drops = [p for p, f in rows if f < ours]
+        print(f'\n  Hata sayısını düşüren dosya: {drops or "(yok — aday listesini genişlet: --limit/--files)"}')
+        if not drops:
+            print('  Tek dosya hiçbir şeyi taşımıyor: ya iki dosya birlikte, ya kırılma bizim değil.')
+        return bool(drops)
+    finally:
+        if keep:
+            print(f'  worktree bırakıldı: {lab}')
+        else:
+            run('worktree', 'remove', '--force', str(lab))
+            shutil.rmtree(parent, ignore_errors=True)
+        after = run('status', '--porcelain').stdout
+        print(f'  çalışma ağacı {"değişmedi ✓" if after == before else "DEĞİŞTİ — elle bak ✗"}')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--theirs', default='upstream/main', help='upstream ref (default upstream/main)')
-    parser.add_argument('--only', choices=('preflight', 'merge', 'coverage'), action='append')
+    parser.add_argument('--only', choices=('preflight', 'merge', 'coverage', 'worktree'), action='append')
+    parser.add_argument('--test', help='worktree adımı: tek bir kırmızı test (pytest adresi)')
+    parser.add_argument('--files', help='worktree adımı: yalnız bu dosyaları sına (virgülle ayrılmış)')
+    parser.add_argument('--limit', type=int, default=12, help='worktree adımı: en çok kaç aday sınansın')
+    parser.add_argument('--keep-worktree', action='store_true', help='iş bitince lab worktree bırakılsın')
     args = parser.parse_args()
     steps = args.only or ['preflight', 'merge', 'coverage']
     ok = True
@@ -199,6 +334,9 @@ def main() -> int:
         ok &= report_merge(args.theirs)
     if 'coverage' in steps:
         coverage()
+    if 'worktree' in steps:
+        files = [f.strip() for f in args.files.split(',')] if args.files else None
+        ok &= worktree(args.theirs, args.test, files, args.limit, args.keep_worktree)
     return 0 if ok else 1
 
 
