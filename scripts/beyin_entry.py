@@ -610,6 +610,28 @@ def load_cli(directory):
     return cli
 
 
+GLOBAL_VALUE_FLAGS = ('--vault', '--state')
+
+
+def split_command(argv):
+    """Return (verb, rest): the first argument that is neither a flag nor a flag's value.
+
+    This entry reads its vault from its own location, so `--vault` here is redundant at best;
+    a vault note still documents it (`beyin.py --vault . ingest-server`), and reading argv[0]
+    alone made that form skip the four verbs that short-circuit before argparse (`yakala`,
+    `update`, `rollback`, `recover`) and report them as unknown commands. The flag's value is
+    skipped too, or `--vault .` would make the path the verb -- a second, quieter bug.
+    """
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        if argument.startswith('-'):
+            index += 2 if (argument in GLOBAL_VALUE_FLAGS and '=' not in argument) else 1
+            continue
+        return argument, argv[index + 1:]
+    return 'doctor', []
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     force_json = '--json' in argv
@@ -621,7 +643,7 @@ def main(argv=None):
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, 'reconfigure'):
                 stream.reconfigure(errors='replace')
-    command = argv[0] if argv else 'doctor'
+    command, rest = split_command(argv)
     vault = Path(__file__).resolve().parent
     stamp = vault / '.beyin-version'
     installed_version = None
@@ -654,11 +676,11 @@ def main(argv=None):
                   'mutlak bir yol degil; vault baska bir isletim sisteminden esitlenmis olabilir. Bu makinenin '
                   'varsayilan state klasoru kullaniliyor: ' + plain_text(state) + '. Kalici duzeltme: bu makinede '
                   'install_v3.py ile kur; hook komutlari da boylece bu makineye baglanir.', file=sys.stderr)
-        if argv and argv[0] == 'yakala':
+        if command == 'yakala':
             # Optional capture tool: its own small CLI, no index or sync engine.
             import beyin_v3_yakala as yakala
-            return yakala.main((['--json'] if force_json else []) + argv[1:], vault=vault, state=state)
-        if argv and argv[0] in ('update', 'rollback', 'recover'):
+            return yakala.main((['--json'] if force_json else []) + rest, vault=vault, state=state)
+        if command in ('update', 'rollback', 'recover'):
             import argparse
             import beyin_v3_update as updater
             parser = argparse.ArgumentParser()
@@ -667,7 +689,7 @@ def main(argv=None):
             parser.add_argument('--package', type=Path)
             parser.add_argument('--metadata-only', action='store_true')
             parser.add_argument('--dismiss')
-            args = parser.parse_args(argv)
+            args = parser.parse_args([command] + rest)
             if args.command != 'update' and (args.check or args.package or args.metadata_only or args.dismiss is not None):
                 parser.error('update options require the update command')
             if args.metadata_only and (not args.check or args.package or args.dismiss is not None):
