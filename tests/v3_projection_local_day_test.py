@@ -4,9 +4,7 @@
 (`event['created_at'][:10]`) while the machine's own clock was the one the user reads. At +03:00
 the first hours of a day landed under yesterday's name in one file and today's in the other, so
 one working day was split across two files. Both answer "what happened today", so they must read
-the same clock: the machine's. The consolidation window
-(`beyin_v3_dream._now`) stays UTC on purpose -- it is a batch boundary, not a human day, and
-`tests/v3_local_utc_day_divergence_test.py` pins that split.
+the same clock: the machine's.
 
 The writer is a full recomputation: every sync regroups every receipt and rewrites the desired
 paths. It never deleted a path it stopped wanting, so renaming the day would have left the old

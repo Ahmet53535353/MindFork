@@ -16,9 +16,7 @@ artefaktlarinin tarihi geri alinir:
   kullanilir; `daily/v3/<tarih>.md` projection'i gercekten o sanal tarihe
   duser, sync temiz gecer;
 * gunluk log: bloklar `<!-- beyin-session:... -->` isaretine gore gunlere
-  bolunur (dosya adlari sanal tarihe yazilir);
-* `dream.last_run`: meta verisi elle yazilir (faz-2 mutating window henuz yok;
-  kapi mantigi olculur).
+  bolunur (dosya adlari sanal tarihe yazilir).
 
 Boylece ay sonunda motor gercekten yaslanmis bir vault gorur: recency siralamasi,
 prune yas hesabi ve gunluk log takvimi gercek tarihlerle calisir.
@@ -233,13 +231,6 @@ class Month:
             (self.vault / 'daily/log' / f'{day}.md').write_text(title + '\n\n' + body, encoding='utf-8')
         today.unlink()
 
-    def set_dream_last_run(self, stamp):
-        with sqlite3.connect(self.db) as db:
-            if stamp is None:
-                db.execute("DELETE FROM metadata WHERE key='dream.last_run'")
-            else:
-                db.execute("INSERT OR REPLACE INTO metadata VALUES ('dream.last_run',?)", (stamp,))
-
     def records(self):
         with sqlite3.connect(self.db) as db:
             return {json.loads(p)['source']: json.loads(p) for (p,) in db.execute('SELECT payload FROM records')}
@@ -355,7 +346,7 @@ class Month:
         self.cli('sync')
 
     def consolidate(self):
-        """Dream raporundaki adayi ajan elle uygular (faz-2 otomatik apply henuz yok)."""
+        """Ay sonu daginikligini ajan elle uygular (motor icinde otomatik pencere yok)."""
         draft = self.vault / 'notes/eski-menu-taslak.md'
         text = draft.read_text(encoding='utf-8')
         draft.write_text(text.replace('"status": "draft"', '"status": "closed"').rstrip() +
@@ -611,25 +602,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         m.hook('SessionEnd', s20)
         m.cli('sync')
 
-        # ---------------- G21 (2026-09-17) dream -------------------------
-        s21 = f'{PERSON}-g21'
-        m.session_days[hashlib.sha256(s21.encode()).hexdigest()[:24]] = vday(21)
-        m.hook('SessionStart', s21)
-        m.hook('UserPromptSubmit', s21, prompt='aylik olarak bakiyimiz ne durumda, bir goz atalim')
-        m.dream_first = m.cli('dream')
-        m.set_dream_last_run(vstamp(28, 9, 0))          # 2 gün önce: 5'ten az yeni receipt
-        m.dream_receipt_gate = m.cli('dream')
-        m.set_dream_last_run(dt.datetime.now(dt.timezone.utc).isoformat())  # bugün: cooldown
-        m.dream_cooldown = m.cli('dream')
-        m.set_dream_last_run(None)
-        m.receipt('g21-r', f'{PERSON}-g21-dream',
-                  'Konsolidasyon penceresi raporu alındı (ilk kez yazmadan).\nÖğrenilen: yok', ['notes/ozet-notu.md'], 21,
-                  session=_session(s21))
-        m.hook('Stop', s21)
-        m.fill_log(s21, '## Bağlam\nAyın ilk konsolidasyon raporu alındı.\n\n## Yapılacaklar\nAdaylar gözden geçirilecek.')
-        m.hook('SessionEnd', s21)
-        m.cli('sync')
-
         # ---------------- G24 (2026-09-20) Kural 3 + arsiv --------------
         s24 = f'{PERSON}-g24'
         m.session_days[hashlib.sha256(s24.encode()).hexdigest()[:24]] = vday(24)
@@ -664,12 +636,9 @@ class HumanMonthE2ETest(unittest.TestCase):
         s30 = f'{PERSON}-g30'
         m.session_days[hashlib.sha256(s30.encode()).hexdigest()[:24]] = vday(29)
         m.hook('SessionStart', s30)
-        m.hook('UserPromptSubmit', s30, prompt='ay sonu: rapordaki adayi uygula, sonra kontrol et')
-        m.dream_pre = m.cli('dream')          # ay sonu "bir goze atalim" raporu
-        m.snap_pre_consolidation = snapshot(m.vault)
+        m.hook('UserPromptSubmit', s30, prompt='ay sonu: daginik notlari birleştir, sonra kontrol et')
         m.consolidate()
         m.cli('sync')
-        m.dream_after = m.cli('dream')
         m.write_last_session('Ay sonu konsolidasyonu yapıldı. Eylül için menü ve ödeme üzerine çalışılacak.',
                             s30, offset=29, hour=17, minute=40, label='ay sonu')
         # Ikinci kart yazildi; bundan sonraki donus baglami iki kartli dosyayi gormeli.
@@ -678,8 +647,8 @@ class HumanMonthE2ETest(unittest.TestCase):
         m.handoff_cards_text = (m.vault / '🔮 850-Companion/Last-Session.md').read_text(encoding='utf-8')
         m.handoff_two_cards = m.hook('UserPromptSubmit', s30, prompt='ay sonu kartlari ne diyor')
         m.receipt('g30-r', f'{PERSON}-g30-konsolidasyon',
-                  'Dream raporundaki adaylar uygulandı: iki ödeme notu birleşti, eski taslak kapatıldı, '
-                  'büyük özet notu bölündü.\nÖğrenilen: Konsolidasyon faz-1 raporu yazmadan çalışır', ['knowledge/concepts/odeme-yontemi.md', 'notes/ozet-notu.md'], 30,
+                  'Ay sonu konsolidasyonu elle uygulandı: iki ödeme notu birleşti, eski taslak kapatıldı, '
+                  'büyük özet notu bölündü.\nÖğrenilen: Konsolidasyon ajan isteğiyle elle yapılır', ['knowledge/concepts/odeme-yontemi.md', 'notes/ozet-notu.md'], 30,
                   session=_session(s30))
         m.hook('Stop', s30)
         m.fill_log(s30, '## Bağlam\nAy sonu konsolidasyonu.\n\n## Alınan Kararlar\nAdaylar rapora göre uygulandı.\n\n'
@@ -693,7 +662,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         m.recall2 = m.context_sources('webhook kac kez deniyordu')
         m.recall3 = m.context_sources('musteri fiyatlari gizli mi')
         m.recall_rule = m.context_sources('toplanti saati ne')
-        m.dream_post = m.cli('dream')
 
     # =====================================================================
     # Bir insanin sorulari: ay boyunca olusan gercek davranis
@@ -752,44 +720,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         self.assertIn('knowledge/concepts/stripe-webhook-retry.md', m.recall2)
         self.assertIn('knowledge/concepts/musteri-gizlilik.md', m.recall3)
 
-    def test_q4_consolidated_only_on_request(self):
-        """Dagınıklık istendiğinde derlendi mi, izinsiz sey yazilmadi mi?"""
-        m = self.month
-        first = m.dream_first
-        self.assertTrue(first['gates']['passed'], first['gates'])
-        self.assertFalse(first['wrote'])
-        self.assertEqual(first['model_calls'], False)
-        self.assertEqual(first['network'], False)
-        # Ay sonunda adaylar gercekten vardi: eski taslak, yinelenen not, devasa not.
-        kinds = {'prune': 'notes/eski-menu-taslak.md',
-                 'merge': 'knowledge/concepts/odeme-yontemi-ek.md',
-                 'refresh': 'notes/ozet-notu.md'}
-        for kind, expected in kinds.items():
-            flat = json.dumps(m.dream_pre['candidates'][kind], ensure_ascii=False)
-            self.assertIn(expected, flat, f'{kind} adayi yok: {flat}')
-        # D21'de (not henuz buyumedigi icin) yalniz iki aday vardi.
-        self.assertEqual(m.dream_first['candidates']['refresh'], [])
-        # Kapilar: 5'ten az yeni receipt ve 24 saatten kisa sure reddeder.
-        self.assertIn('min_receipts', m.dream_receipt_gate['gates']['blocked_by'])
-        self.assertIn('min_hours', m.dream_cooldown['gates']['blocked_by'])
-        # Rapor disinda hicbir dosya degismedi.
-        changed = {p for p in m.snap_pre_consolidation
-                   if p in m.snap_month_end and m.snap_pre_consolidation[p] != m.snap_month_end[p]}
-        allowed = {'notes/ozet-notu.md', 'knowledge/concepts/odeme-yontemi.md',
-                   'notes/eski-menu-taslak.md', 'knowledge/v3/outcomes.md',
-                   '🔮 850-Companion/Last-Session.md'}
-        self.assertEqual(changed - allowed, set(), f'raporda olmayan dosya degisti: {sorted(changed - allowed)}')
-        # daily/log/ dosyalari testin takvim yeniden dagitimiyla yer degistirir (sanal
-        # tarihe yazilir); urun yazimi degildir, q9 sonucu dogrular.
-        removed = {p for p in set(m.snap_pre_consolidation) - set(m.snap_month_end)
-                   if not p.startswith('daily/log/')}
-        self.assertEqual(removed, {'knowledge/concepts/odeme-yontemi-ek.md'},
-                         f'beklenmeyen dosya silindi: {sorted(removed)}')
-        # Uygulama sonrasi adaylar temizlendi ve rapor yine bir sey yazmadi.
-        self.assertEqual(m.dream_post['wrote'], False)
-        for kind in ('prune', 'merge', 'refresh'):
-            self.assertEqual(m.dream_post['candidates'][kind], [], f'{kind} adayi kalmadi')
-
     def test_q5_seed_files_intact(self):
         """Tohum dosyalarim duruyor mu? Kurallar/aynisip el degmedi mi?"""
         m = self.month
@@ -828,9 +758,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         self.assertEqual(m.doctor_final['automatic_model_calls'], False)
         self.assertEqual(m.doctor_final['jev']['mode'], 'off')
         self.assertFalse(m.doctor_final['jev']['configured'])
-        for report in (m.dream_first, m.dream_after, m.dream_post):
-            self.assertEqual(report['model_calls'], False)
-            self.assertEqual(report['network'], False)
 
     def test_q8_turkish_natural_queries(self):
         """Insanin dogal sorulari calisiyor mu? (diakritikli, kisa, günlük dille)"""
@@ -898,123 +825,6 @@ class HumanMonthE2ETest(unittest.TestCase):
         store.semantic_searcher = broken
         degraded = [r['source'] for r in store._retrieve(query, limit=5)['records']]
         self.assertEqual(degraded, lexical_only, 'semantik arama bozulunca kelimesel sira korunmali')
-
-    def test_q15_consolidation_window_applies_and_restores_byte_identically(self):
-        """Geri al kanitinin gercek kurulumda olculmesi (roadmap §6).
-
-        Ay surucusu sanal bir takvimde kostugu icin gercek bir 24 saat geçmez; bu
-        yuzden pencere --force ile acilir (kilit kapisi asla gecmez). Metin ajanin
-        oldugu icin duzeltmeler yalnizca makineye ait alanlardadir.
-        """
-        m = self.month
-        # Konsolidasyon notu ikiye bolmustu, yani ay sonunda tavanin altinda: gercek
-        # bir refresh adayi yok. Insan notu buyutdukce duzensizlesir; oyle bir not
-        # uretip pencereyi onun uzerinde kosturuyoruz.
-        note = m.vault / 'notes/ozet-notu.md'
-        original_note = note.read_text(encoding='utf-8')
-        self.addCleanup(self._undo_q15, note, original_note)
-        grown = original_note
-        grown += '\n## Gun 29 ek notu  \n\n\n\n' + ''.join(
-            f'- madde {i}: ay sonu derlemesi, kirpilmamis icerik.\n\n' for i in range(1, 320))
-        note.write_text(grown, encoding='utf-8')
-        m.cli('sync')
-        self.assertGreater(len(grown), 12000, 'not tavanin altinda kaldi')
-        before = {path: digest for path, digest in snapshot(m.vault).items()
-                  if not path.startswith('archive/')}
-
-        applied = m.cli('dream', '--apply', '--force')
-        self.assertEqual(applied.get('phase'), 2, applied)
-        self.assertTrue(applied['wrote'], applied)
-        self.assertFalse(applied['model_calls'])
-        self.assertFalse(applied['network'])
-        self.assertIn('--restore', applied['restore_command'])
-        # Once yazildi: buyuk not artik tek basina duzeltilebilir durumda degil.
-        self.assertTrue(applied['applied'], applied)
-        # Pencere gununu duvar saatiyle yeniden hesaplmiyoruz: urun raporun hangi gune
-        # yazacagini kendisi bildiriyor (`report_path`), ve yazdigi gune bakmak dogru
-        # iddiadır. Once `dt.date.today()` ile karsilastirmak, yerel ve UTC gunleri
-        # arisip iki testi de saat 00:00-03:00 araliginda kirmiziya dusuruyordu.
-        report = m.vault / applied['report_path']
-        self.assertTrue(report.is_file(), f'rapor beklenen yolda degil: {applied["report_path"]}')
-        self.assertTrue((report.parent / 'manifest.json').is_file())
-        # Arsiv, not agaclarinin disinda: kendi aday listesine giremez.
-        self.assertTrue(all(entry['archive'].startswith('archive/auto-dream/')
-                            for entry in applied['snapshot']['files']))
-        # Prizma tekilligi: onceden uygun olan notun baytlari degismedi.
-        self.assertEqual(applied['prose_dates'], [], applied)
-
-        # Geri alma gunu de urunun kendi bildirdigi yoldan: duvar saati degil.
-        window_day = report.parent.name
-        self.assertEqual(window_day,
-                         json.loads((report.parent / 'manifest.json').read_text(encoding='utf-8'))['window'],
-                         'rapor yazildigi gun, manifestin ilan ettigi pencere degil')
-        restored = m.cli('dream', '--restore', window_day)
-        self.assertIn('notes/ozet-notu.md', restored['restored'], restored)
-        after = {path: digest for path, digest in snapshot(m.vault).items()
-                 if not path.startswith('archive/')}
-        self.assertEqual(after, before, 'geri alma vault"u bayt bayt ayni yapmadi')
-        # Kurutma setinin kendisi durur: kurtarma kiti silinmez.
-        self.assertTrue((report.parent / 'manifest.json').is_file(),
-                        'kurtarma kiti silinmemis olmali')
-        # Ikinci rapor yine salt-okunur ve hicbir sey yazmaz.
-        self.assertFalse(m.cli('dream')['wrote'])
-
-    def _undo_q15(self, note, original_text):
-        """Bu test ayni ay durumunu paylasan diger sorulari bozmamali.
-
-        q15 alfabetik sirada q8'den once kostugu icin, birakilan iz (buyutulmus
-        not, ilerletilmis filigran, arsiv) sonraki sorunun aramalarini degistirirdi.
-        """
-        import shutil
-        self.month.set_dream_last_run(None)
-        note.write_text(original_text, encoding='utf-8')
-        shutil.rmtree(self.month.vault / 'archive', ignore_errors=True)
-        self.month.cli('sync')
-
-    def test_q16_merged_pair_stops_being_proposed_once_resolved(self):
-        """BULGU 8 gerçek kurulumda kapanıyor: işaretçi bırakılınca aday kaybolmalı.
-
-        Ay sürücüsü iki ödeme notunu zaten üretiyor (odeme-yontemi.md ve
-        odeme-yontemi-ek.md). Önce aday olarak görünmeleri, sonra ajanın
-        birleştirip **aynı başlığı taşıyan bir işaretçi** bırakması ve adayın
-        düşmesi ölçülür. Önceki kodda işaretçi kalıcı olarak öneriliyordu.
-        """
-        m = self.month
-        first = 'knowledge/concepts/odeme-yontemi.md'
-        second = 'knowledge/concepts/odeme-yontemi-ek.md'
-        self.addCleanup(self._undo_q16, first, second)
-
-        # Ay sonunda ikinci not elle birleştirilip silinmişti; adayı yeniden üretmek
-        # için aynı hatayı yeni bir notla tekrarlıyoruz.
-        m.note('g16-odeme-tekrar', second,
-               'Ödeme Yöntemi (ek)\n\nStripe Checkout kullanılacak, webhook idempotency anahtarı ile '
-               'korunacak. Panelden aylık rapor alınacak. Sürdürme notu: retry politikası webhook '
-               'notunda.', 29)
-        m.cli('sync')
-        before = m.cli('dream')['candidates']['merge']
-        self.assertIn(second, json.dumps(before, ensure_ascii=False),
-                      f'birleştirilmiş çift aday olmadı: {before}')
-
-        # Ajan birleştirir: hedef not kendi gerçek içeriğini korur ve yinelenen metni
-        # içine alır, diğer not tek cümlelik bir işaretçiye çevrilir.
-        main = m.vault / first
-        main.write_text(main.read_text(encoding='utf-8').rstrip() + (
-            '\n\n2026-09-25 birleştirme: ödeme tekrar notu bu nota alındı; Stripe Checkout ve '
-            'idempotency ayrıntısı yukarıda güncel.\n'), encoding='utf-8')
-        (m.vault / second).write_text(
-            f'# Ödeme Yöntemi (ek)\n\nBirleştirildi, güncel not: {first}\n', encoding='utf-8')
-        m.cli('sync')
-
-        after = m.cli('dream')['candidates']['merge']
-        self.assertEqual(after, [], f'işaretçi bırakıldıktan sonra çift hâlâ öneriliyor: {after}')
-        # Ajan işini gerçekten yaptı: not duruyor ve metin korundu.
-        self.assertIn('idempotency', (m.vault / first).read_text(encoding='utf-8'))
-
-    def _undo_q16(self, first, second):
-        """Bu test diğer soruların gördüğü ay durumunu değiştirmemeli."""
-        second_path = self.month.vault / second
-        second_path.unlink(missing_ok=True)
-        self.month.cli('sync')
 
     def test_q17_handoff_cards_accumulate_and_the_newest_reaches_the_session(self):
         """Devir karti oturum basina bir karttir: yeni kart eskisini ezmez, baglam en yeniyi alir."""

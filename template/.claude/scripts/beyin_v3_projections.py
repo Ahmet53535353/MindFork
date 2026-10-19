@@ -852,8 +852,7 @@ def _receipt_view_contents(engine, db, warnings=None):
         if source in historical or not event.get('created_at'):
             continue
         # The machine's day, not the stamp's: daily/ also holds the human daily log, which is
-        # named locally, and both answer "what happened today". The consolidation window in
-        # beyin_v3_dream stays UTC deliberately -- that is a batch boundary, not a human day.
+        # named locally, and both answer "what happened today".
         day = receipt_day(event['created_at'], zone)
         if day is None:
             # Never invent a day from the raw text (2026-13-45); the receipt stays in recap's undated count.

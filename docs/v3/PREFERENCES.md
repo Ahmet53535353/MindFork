@@ -257,80 +257,18 @@ Yönetilen blok dışında `AGENTS.md` ya da `CLAUDE.md` içinde `knowledge/` kl
 
 Bu ayar da hijyen opt-in'leri gibi makineye özeldir ve `.beyin-preferences.json` şemasına girmez: eski bir sürüme dönüldüğünde tanımadığı bir tercih alanı, hook'un durmasına yol açardı. Seçim runtime klasöründeki `daily-log.json` dosyasında durur. Hareketten önce kaydedilmiş bir `.beyin-preferences.json` içindeki `daily_log` değeri okunmaya devam eder ve bir sonraki tercih kaydında duruma taşınır — yoksa anahtar düşerken kasıtlı bir kapatma kendiliğinden açılırdı.
 
-## Konsolidasyon penceresi (`dream`)
+## Boyut envanteri (doctor oversize)
 
-`python3 beyin.py dream` yalnız **raporlar**, hiçbir şey yazmaz: pencere kapıları
-(son çalışmadan ≥24 saat ve ≥5 yeni receipt, ayrıca `state/dream.lock` kilidi
-serbest mi), boyut envanteri, alıntı ısısı (not başına receipt referansı) ve
-aday listeleri (Prune: `status: draft` + 90 gün + alıntı 0; Merge: yalnız
-alıntılı, başlıkları örtüşen notlar; Refresh: 12k karakteri aşan el yazımı
-notlar). Aday silmez; konsolidasyonu oturumdaki ajan ve insan yapar.
+`beyin.py doctor` tüm vault'ta tavanı aşan dosyaları `oversize` alanında raporlar:
+not ağaçlarındaki (`knowledge`, `notes`) dosyaların yanında üretilmiş projeksiyonlar
+(`generated: true` işaretli). Ölçüm salt okunurdur; dosya hiçbir yerde yeniden yazılmaz.
+Yeni ayar yoktur; not tavanı 12.000 karakter, `Last-Session`/`Threads` için companion
+bütçeleri yetkili kalır. Ayrıca uyguladaki `dream` alt-komutu kaldırılmıştır: pencere
+raporu, aday listeleri ve snapshot/restore yüzeyi kapsamı dışındadır — aşırı büyüyen
+notun ajan tarafından elle birleştirilip bölünmesi yolu kalır (makale temeli:
+"Beyond the Session: Memory Engineering for Agent Teams", AutoDream fazları erken
+sayılmıştır).
 
-Aynı ölçüm `doctor` çıktısında `oversize` alanı olarak da görünür: tüm vault'ta
-tavanı aşan dosyalar, üretilen projeksiyonlar `generated` olarak işaretli. Yeni
-ayar yoktur; `Last-Session`/`Threads` için companion bütçeleri yetkili kalır.
-
-### Pencereyi açmak ve geri almak
-
-`python3 beyin.py dream --apply` pencereyi **açar**: kapıları uygular (yalnız
-bildirmez), kilidi alır, dokunacağı her dosyanın ön-image'ını
-`archive/auto-dream/<tarih>/files/` altına kopyalar, `manifest.json` (sha256)
-yazar, Refresh'i uygular, `archive/auto-dream/<tarih>/report.md` üretir, dizini
-yeniden kurar ve filigranı ilerletir. `wrote` yalnız gerçekten bir şey
-değiştiyse `true` olur — hiçbir şey değişmezse filigran **kıpırdamaz** (haftalık
-ölçüm kendi penceresini kapatmasın diye).
-
-`--force` yalnız 24 saat ve receipt kapılarını atlar; **kilidi asla** atlamaz.
-`--restore` bir onarım yoludur: kapı almaz, kilit almaz, çünkü onardığı şey tam
-olarak yarım kalmış bir pencerenin bıraktığı durumdur. Hash tutmuyorsa sessizce
-bozuk geri yükleme yapmaz, reddeder.
-
-### Refresh neyi yazar, neyi yazmaz
-
-Yazan (deterministik, idempotent): başlık/ayraç normalizasyonu ve **makineye ait**
-frontmatter tarih alanları — bir tarih yalnız notun kendi `updated`/`created`
-tarihi çözülebilirse mutlaklaştırılır, bugünün saatine göre tahmin edilmez.
-Gövdesi değişmeyen notun `updated` alanına dokunulmaz; her pencere eski notları
-sıralamada öne atmasın diye.
-
-Yazmayan: gövdedeki "dün", "geçen hafta" gibi bağıl tarihler. Bunlar
-`prose_dates` olarak **raporlanır** ve metne dokunulmaz — insan cümlesi ajanın
-işidir. Kelime sınırı ile taranır: "dünya", "dünleyici" eşleşmez.
-
-### Merge önerileri ve dismiss
-
-Pencere, birleştirilebilir not **çiftlerini** önerir: başlıkları iç içe geçen ya da
-gövdeleri belirgin örtüşen (en az 3 ortak sözcük ve küçük kümenin en az yarısı) ve
-**ikisi de alıntılanmış** notlar. Aday gerekçesini `matched: title|body` ile bildirir.
-Gövde karşılaştırması arama ile aynı gövdelemeyi kullanır, çünkü aramanın bulamadığı
-bir aday bakım penceresine görünmemelidir.
-
-Bir aday **iki tür kararla kapanır**, ikisi de vault'ta saklanır
-(`archive/auto-dream/dismissed.json`):
-
-- **Kendiliğinden:** notlardan biri diğerinin yolunu anıyorsa ve hedefin
-  karakterinin en fazla %40'ı kadarsa o not artık bir **işaretçidir**; birleştirme
-  yapılmış demektir ve çift bir daha önerilmez. (Kısalık şartı şu: gerçek bir not
-  komşusunu uzun bir cümlede anabilir.)
-- **Sizin kararınızla:** `python3 beyin.py dream --dismiss <yol-a> <yol-b>` o çifti,
-  `dream --dismiss <yol>` ise o notu içeren tüm çiftleri susturur. Karar vault'ta
-  tutulur, reinstall'da kaybolmaz.
-
-`dream --apply` merge önerisinde **gövdeleri değiştirmez**: çiftleri snapshot'lar ve
-`archive/auto-dream/<tarih>/merge-plan.md` yazar (hangi notun kalacağı, ortak
-sözcükler, ajana talimat). Birleşen metni oturumdaki ajan yazar — hangi başlığın
-geçerli olduğu ve iki metnin nasıl birleşeceği muhakeme ister. Dosya başlıkları
-farklı ya da gövde ilişkisizse çift önerilmez; bir not asla bir **görevle**
-eşleştirilmez.
-
-Kullanılamayan bir dismiss dosyası pencereyi durdurmaz: adaylar susturulmaz ve
-`dismiss_notice` ile bildirilir.
-
-Model çağrısı ve ağ yoktur (her iki bayrak da çıktıda `false`). Tasarım:
-`docs/specs/2026-09-26-autodream-lite-roadmap.md`; faz-2 uygulama planı ve
-gerekçesi `docs/specs/2026-09-26-autodream-phase2-snapshot-refresh-plan.md`.
-
-## Tur başı bağlam: pasaj düzeyinde strict arama
 
 Her mesajda hook'un eklediği bağlam (`context_mode: turn`) strict aramadan gelir. Bu arama notun tamamını tek bir kelime kümesi olarak puanlamaz; notu Markdown bloklarına böler ve her kaynaktan soruyla en iyi eşleşen bloğu, başlık yoluyla birlikte teslim eder (#83). Cevap uzun bir notun ortasındaysa notun ilk karakterleri değil cevabı taşıyan blok gelir; neredeyse her kelimeyi içeren uzun bir oturum arşivi de her soruda öne çıkamaz. Model çağrısı ve yeni bağımlılık yoktur.
 

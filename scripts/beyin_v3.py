@@ -258,11 +258,6 @@ def load_engine():
     return module
 
 
-def dream_cap():
-    import beyin_v3_dream
-    return beyin_v3_dream.NOTE_CAP_CHARS
-
-
 def hygiene_scope(state, vault):
     """Companion budgets as vault-relative paths, plus the handoff files to measure.
 
@@ -290,11 +285,6 @@ def hygiene_scope(state, vault):
         extra.append(f'{directory.relative_to(vault).as_posix()}/Journal.md')
     return limits, extra
 
-
-def dream_inventory(vault, state):
-    import beyin_v3_dream
-    limits, extra = hygiene_scope(state, vault)
-    return beyin_v3_dream.inventory(vault, limits=limits, extra=extra)
 
 
 def _ensure_scripts_path():
@@ -912,17 +902,6 @@ def parser():
     history.add_argument("record_id")
     sablon = sub.add_parser("sablon", help="List the agent's templates, or print one named out loud; writes nothing")
     sablon.add_argument("name", nargs="?", help="Template name; omitted lists what exists")
-    dream = sub.add_parser("dream", help="Report consolidation window gates, size inventory, citation heat and candidates; writes nothing")
-    dream.add_argument("--apply", action="store_true",
-                       help="Open the window: enforce the gates, snapshot every file it touches, "
-                            "apply Refresh, then record the window. Restorable with --restore.")
-    dream.add_argument("--restore", metavar="YYYY-MM-DD",
-                       help="Put a window's pre-images back from its snapshot and rebuild the index")
-    dream.add_argument("--force", action="store_true",
-                       help="Open the window despite the 24 hour and receipt gates; never bypasses the lock")
-    dream.add_argument("--dismiss", nargs="+", metavar="SOURCE",
-                       help="Stop proposing a merge: two sources dismiss that pair, one source "
-                            "dismisses every pair it is in. The decision is stored in the vault.")
     pscope = sub.add_parser("project-scope", help="Manage folder project scopes in .beyin-projects.json")
     pscope.add_argument("action", choices=["list", "add", "remove", "prune"], nargs="?", default="list",
                         help="Action to perform: list, add, remove, prune")
@@ -1220,11 +1199,13 @@ def main(argv=None, return_result=False):
                 result['companion_hygiene'] = companion.hygiene(vault, state)
                 # One size field for the whole vault: companion budgets where they exist,
                 # the shared note cap elsewhere. Reported, never rewritten.
-                sizes = dream_inventory(vault, state)
+                import beyin_v3_sizes
+                limits, extra = hygiene_scope(state, vault)
+                sizes = beyin_v3_sizes.inventory(vault, limits=limits, extra=extra)
                 result['oversize'] = {'files': sizes['oversize'],
                                        'notes_over_cap': sum(1 for entry in sizes['oversize']
                                                              if not entry['generated']),
-                                       'cap': dream_cap()}
+                                       'cap': beyin_v3_sizes.NOTE_CAP_CHARS}
             except Exception as exc:  # a size report must never hide the rest of doctor
                 result['companion_hygiene'] = {'status': 'unavailable', 'error': type(exc).__name__}
             # Information only (#374): how much of Kurallar.md the Claude Code opening shows whole.
@@ -1426,34 +1407,6 @@ def main(argv=None, return_result=False):
             load_sync()                     # also puts the runtime modules on the path
             import beyin_v3_sablon
             result = beyin_v3_sablon.run(vault, args.name)
-        elif args.command == "dream":
-            SyncEngine = load_sync()          # also puts the runtime modules on the path
-            import beyin_v3_dream
-            if args.dismiss:
-                # A decision, not a window: no gates, no lock, no snapshot. It has to work
-                # exactly when a window cannot run.
-                if args.apply or args.force or args.restore:
-                    raise ValueError("dream --dismiss takes no --apply/--force/--restore")
-                state, notice = beyin_v3_dream.dismiss(vault, args.dismiss)
-                result = {'dismissed': state, 'model_calls': False, 'network': False}
-                if notice:
-                    result['notice'] = notice
-            elif args.restore:
-                # A restore is a repair path, not a window: it takes no gates and no lock,
-                # because the thing it repairs is exactly the state a failed window left.
-                if args.apply or args.force:
-                    raise ValueError("dream --restore takes no --apply/--force")
-                result = beyin_v3_dream.restore(vault, args.restore)
-                SyncEngine(vault, state).sync()      # the index must match the restored notes
-            else:
-                limits, extra = hygiene_scope(state, vault)
-                if args.apply or args.force:
-                    result = beyin_v3_dream.window(vault, state, store, limits=limits,
-                                                   extra=extra, force=args.force)
-                    if result['wrote']:
-                        SyncEngine(vault, state).sync()   # re-index what the window changed
-                else:
-                    result = beyin_v3_dream.report(vault, state, store, limits=limits, extra=extra)
         elif args.command == "skill-import":
             result = load_skills().import_skill(vault, state, args.source, name=args.name)
         elif args.command == "project-scope":

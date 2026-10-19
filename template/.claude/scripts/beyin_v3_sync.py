@@ -280,9 +280,9 @@ EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md',
 EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
 # User-chosen directory names (<state>/index.json) are pruned on top of these; see beyin_v3_index.
 # Nothing else is skipped by name: "vendor" or "external" is also an ordinary notes folder.
-# The engine's own recovery kits are registered there by the module that creates them
-# (beyin_v3_dream -> "archive", beyin_v3_compact -> "Arşiv"), never hardcoded here: a name
-# this list holds is skipped in every vault, including one whose "archive" is ordinary notes.
+# The engine's own recovery kits are registered there by the module that creates them,
+# never hardcoded here: a name this list holds is skipped in every vault, including one
+# whose "archive" is ordinary notes.
 COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
 TASK_STATUSES = ('inbox', 'active', 'waiting', 'blocked', 'done', 'cancelled')
 

@@ -238,7 +238,6 @@ class HygieneCliTest(unittest.TestCase):
         self.assertFalse(by_path['knowledge/concepts/buyuk.md']['generated'])
         self.assertEqual(report['notes_over_cap'], 2)
         self.assertEqual(report['cap'], 12000)
-        self.assertEqual(self.run_cli('dream')['inventory']['oversize'], report['files'])
 
     def test_doctor_oversize_is_empty_for_a_small_vault(self):
         self.write('Journal.md', '# Journal\n## 2026-09-20\nkisa gözlem\n')
