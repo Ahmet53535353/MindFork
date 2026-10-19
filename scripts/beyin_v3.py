@@ -910,6 +910,8 @@ def parser():
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
     history.add_argument("record_id")
+    sablon = sub.add_parser("sablon", help="List the agent's templates, or print one named out loud; writes nothing")
+    sablon.add_argument("name", nargs="?", help="Template name; omitted lists what exists")
     dream = sub.add_parser("dream", help="Report consolidation window gates, size inventory, citation heat and candidates; writes nothing")
     dream.add_argument("--apply", action="store_true",
                        help="Open the window: enforce the gates, snapshot every file it touches, "
@@ -1418,6 +1420,12 @@ def main(argv=None, return_result=False):
             return code
         elif args.command == "skill-sync":
             result = load_skills().sync_skills(vault, state)
+        elif args.command == "sablon":
+            # Name-addressed, not retrieved: a template is an instruction to follow, so a
+            # wrong name must stop the agent rather than open whatever resembles it.
+            load_sync()                     # also puts the runtime modules on the path
+            import beyin_v3_sablon
+            result = beyin_v3_sablon.run(vault, args.name)
         elif args.command == "dream":
             SyncEngine = load_sync()          # also puts the runtime modules on the path
             import beyin_v3_dream
